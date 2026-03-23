@@ -1,5 +1,5 @@
 {
-  "name": "DirectsDigestAgent",
+  "name": "EnvoyAgent",
   "description": "Generate AI-powered email digests for your direct reports",
   "version": "1.0.0",
   "capabilities": [
@@ -45,8 +45,8 @@
       "args": []
     },
     "teamsnap-mcp": {
-      "command": "teamsnap-mcp",
-      "args": []
+      "command": "node",
+      "args": ["~/TeamSnapMCP/dist/wrapper.js"]
     }
   },
   "runtime": {

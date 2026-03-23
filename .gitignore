@@ -6,3 +6,4 @@ __pycache__/
 *.md.backup
 venv/
 .venv/
+.mwinit_last

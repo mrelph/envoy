@@ -1,15 +1,15 @@
-"""Attaché init — interactive setup that builds personality.md, soul.md, and attache.md."""
+"""Envoy init — interactive setup that builds personality.md, soul.md, and envoy.md."""
 import os
 import json
 from pathlib import Path
 from rich.console import Console
 from rich.panel import Panel
-from service import AttacheService
+from service import EnvoyService
 
-CONFIG_DIR = Path.home() / ".attache"
+CONFIG_DIR = Path.home() / ".envoy"
 PERSONALITY_FILE = CONFIG_DIR / "personality.md"
 SOUL_FILE = CONFIG_DIR / "soul.md"
-ATTACHE_FILE = CONFIG_DIR / "attache.md"
+ENVOY_FILE = CONFIG_DIR / "envoy.md"
 
 console = Console()
 
@@ -51,7 +51,7 @@ def run_settings():
         run_init()
         return
 
-    console.print(Panel("⚙️  Attaché Settings", style="bold cyan"))
+    console.print(Panel("⚙️  Envoy Settings", style="bold cyan"))
 
     fields = [
         (PERSONALITY_FILE, "Name",       "Name"),
@@ -59,8 +59,8 @@ def run_settings():
         (PERSONALITY_FILE, "Manager",    "Manager"),
         (PERSONALITY_FILE, "Agent name", "Agent name"),
         (PERSONALITY_FILE, "Signature",  "Signature"),
-        (ATTACHE_FILE,     "ea_alias",   "EA alias"),
-        (ATTACHE_FILE,     "ea_name",    "EA name"),
+        (ENVOY_FILE,     "ea_alias",   "EA alias"),
+        (ENVOY_FILE,     "ea_name",    "EA name"),
     ]
 
     from rich.table import Table
@@ -78,7 +78,7 @@ def run_settings():
     console.print(table)
 
     console.print(f"\n[dim]  Config dir: {CONFIG_DIR}[/dim]")
-    console.print("[dim]  personality.md = about you  |  soul.md = agent personality  |  attache.md = preferences[/dim]\n")
+    console.print("[dim]  personality.md = about you  |  soul.md = agent personality  |  envoy.md = preferences[/dim]\n")
 
     pick = _ask("Enter # to edit, 'soul' to regenerate soul.md, 'all' to re-run setup, or Enter to go back", "")
     if not pick:
@@ -137,7 +137,7 @@ Make it feel like a real character description, not a boring config file. Be cre
 
     console.print("[dim]Generating with AI...[/dim]")
     try:
-        svc = AttacheService()
+        svc = EnvoyService()
         soul_content = svc._invoke_ai(prompt, max_tokens=2000, tier="medium")
         console.print()
         console.print(Panel(soul_content, title="[bold magenta]Generated Soul[/bold magenta]", border_style="magenta"))
@@ -165,7 +165,7 @@ def run_init():
         old_guidance.rename(SOUL_FILE)
         console.print(f"[dim]Migrated guidance.md → soul.md[/dim]")
 
-    console.print(Panel("🔏 Attaché Setup", style="bold cyan"))
+    console.print(Panel("🔏 Envoy Setup", style="bold cyan"))
     console.print("Let me learn about you so I can be a better assistant.\n")
 
     alias = _ask("Your alias", os.environ.get("USER", ""))
@@ -174,7 +174,7 @@ def run_init():
     name, title, manager, directs = "", "", "", []
     try:
         console.print(f"[dim]Looking you up in Phonetool...[/dim]")
-        svc = AttacheService()
+        svc = EnvoyService()
         import asyncio
         from mcp import ClientSession
         from mcp.client.stdio import stdio_client
@@ -216,12 +216,12 @@ def run_init():
     name = _ask("Your name", name or alias)
     title = _ask("Your role/title", title)
     manager = _ask("Your manager", manager)
-    agent_name = _ask("Name for your agent (or Enter to keep 'Attaché')", "")
+    agent_name = _ask("Name for your agent (or Enter to keep 'Envoy')", "")
     agent_sig = _ask("Signature for agent-sent emails/Slack (or Enter for none)", "")
     priorities = _ask("Top 3 priorities right now (comma-separated)", "")
     vips = _ask("People whose emails should always be flagged high priority", "")
 
-    # --- Preferences (attache.md) ---
+    # --- Preferences (envoy.md) ---
     console.print()
     console.print("[bold]Preferences[/bold]")
     ignore = _ask("Types of email to always ignore", "vendor marketing, cold outreach")
@@ -281,20 +281,20 @@ def run_init():
     PERSONALITY_FILE.write_text(personality)
     console.print(f"\n[green]✓ Saved {PERSONALITY_FILE}[/green]")
 
-    # --- Write attache.md ---
-    attache = "# Preferences\n"
-    attache += f"\n## Email\n- Ignore: {ignore}\n- KEEP by default — when in doubt, keep it\n"
+    # --- Write envoy.md ---
+    prefs = "# Preferences\n"
+    prefs += f"\n## Email\n- Ignore: {ignore}\n- KEEP by default — when in doubt, keep it\n"
     if vips:
-        attache += f"- Always flag emails from: {vips}\n"
+        prefs += f"- Always flag emails from: {vips}\n"
     if fav_channels:
-        attache += f"\n## Slack\n- Favorite channels: {fav_channels}\n"
+        prefs += f"\n## Slack\n- Favorite channels: {fav_channels}\n"
     if calendar_prefs:
-        attache += f"\n## Calendar\n- {calendar_prefs}\n"
+        prefs += f"\n## Calendar\n- {calendar_prefs}\n"
     if ea_alias:
-        attache += f"\n## Executive Assistant\n- ea_alias: {ea_alias}\n- ea_name: {ea_name}\n"
+        prefs += f"\n## Executive Assistant\n- ea_alias: {ea_alias}\n- ea_name: {ea_name}\n"
 
-    ATTACHE_FILE.write_text(attache)
-    console.print(f"[green]✓ Saved {ATTACHE_FILE}[/green]")
+    ENVOY_FILE.write_text(prefs)
+    console.print(f"[green]✓ Saved {ENVOY_FILE}[/green]")
 
     # --- Soul: generate with AI or write defaults ---
     console.print()
@@ -316,7 +316,7 @@ I am your AI chief of staff — sharp, proactive, and always one step ahead.
 # Behavioral Rules
 - Always confirm before deleting emails or sending messages
 - Be proactive with recommendations based on what you find
-- When corrected, update soul.md or attache.md to remember
+- When corrected, update soul.md or envoy.md to remember
 """
         SOUL_FILE.write_text(soul)
         console.print(f"[green]✓ Saved {SOUL_FILE}[/green]")

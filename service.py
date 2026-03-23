@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-class AttacheService:
+class EnvoyService:
     def __init__(self):
         self.builder_mcp_params = StdioServerParameters(
             command="builder-mcp",
@@ -24,7 +24,70 @@ class AttacheService:
             command="ai-community-slack-mcp",
             args=[]
         )
+        teamsnap_dir = os.path.join(os.path.expanduser("~"), "TeamSnapMCP")
+        teamsnap_env = {**os.environ}
+        teamsnap_dotenv = os.path.join(teamsnap_dir, ".env")
+        if os.path.exists(teamsnap_dotenv):
+            with open(teamsnap_dotenv) as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        teamsnap_env[k.strip()] = v.strip()
+        self.teamsnap_mcp_params = StdioServerParameters(
+            command="node",
+            args=[os.path.join(teamsnap_dir, "dist", "wrapper.js")],
+            env=teamsnap_env
+        )
         self.todo_mcp_params = self.outlook_mcp_params
+
+        # Map of MCP server names to their params for connection testing
+        self._mcp_servers = {
+            "Outlook":    self.outlook_mcp_params,
+            "Phonetool":  self.builder_mcp_params,
+            "Slack":      self.slack_mcp_params,
+            "TeamSnap":   self.teamsnap_mcp_params,
+        }
+
+    def check_mcp_connections(self) -> Dict[str, bool]:
+        """Test actual MCP connections (initialize handshake). Returns {name: ok}."""
+        import asyncio
+
+        async def _test_one(name, params):
+            try:
+                async with stdio_client(params) as (r, w):
+                    async with ClientSession(r, w) as s:
+                        await asyncio.wait_for(s.initialize(), timeout=10)
+                        return name, True
+            except Exception:
+                return name, False
+
+        async def _test_all():
+            tasks = [_test_one(n, p) for n, p in self._mcp_servers.items()]
+            # Also check Bedrock
+            tasks.append(_test_bedrock())
+            return dict(await asyncio.gather(*tasks))
+
+        async def _test_bedrock():
+            try:
+                import boto3
+                client = boto3.client('bedrock-runtime', region_name='us-west-2')
+                client.meta.endpoint_url  # validates config
+                return "Bedrock", True
+            except Exception:
+                return "Bedrock", False
+
+        return asyncio.run(_test_all())
+
+    # --- Generic MCP passthrough ---
+
+    def outlook_tool(self, tool_name: str, arguments: dict) -> str:
+        """Call any Outlook MCP tool directly."""
+        async def _call():
+            async with self._outlook() as session:
+                result = await session.call_tool(tool_name, arguments)
+                return result.content[0].text if result.content else "No result."
+        return asyncio.run(_call())
 
     # --- Session helpers (reuse one connection per server within an async context) ---
 
@@ -55,19 +118,19 @@ class AttacheService:
 
     @staticmethod
     def agent_name() -> str:
-        """Return configured agent name or default 'Attaché'."""
-        p = os.path.expanduser("~/.attache/personality.md")
+        """Return configured agent name or default 'Envoy'."""
+        p = os.path.expanduser("~/.envoy/personality.md")
         if os.path.exists(p):
             for line in open(p):
                 if line.strip().startswith("- Agent name:"):
                     val = line.split(":", 1)[1].strip()
                     if val:
                         return val
-        return "Attaché"
+        return "Envoy"
 
     # --- Sent message tracking ---
 
-    SENT_LOG = os.path.expanduser("~/.attache/sent.json")
+    SENT_LOG = os.path.expanduser("~/.envoy/sent.json")
     TAG_PREFIX = "⚡att:"
 
     @classmethod
@@ -104,7 +167,7 @@ class AttacheService:
                 pass
         return []
 
-    MODELS_FILE = os.path.expanduser("~/.attache/models.json")
+    MODELS_FILE = os.path.expanduser("~/.envoy/models.json")
     DEFAULT_MODELS = {
         "agent":  "us.anthropic.claude-opus-4-6-v1",
         "heavy":  "us.anthropic.claude-opus-4-6-v1",
@@ -900,6 +963,18 @@ Messages:
 
     # --- Calendar Review ---
 
+    def calendar_events(self, start_date: str = "", days: int = 1, search: str = "") -> str:
+        """Raw calendar events with exact times. Optional keyword filter."""
+        raw, _ = asyncio.run(self._review_calendar_raw(
+            view="week" if days > 1 else "day",
+            start_date=start_date,
+            days_ahead=days,
+        ))
+        if search and not raw.startswith("No calendar"):
+            lines = [l for l in raw.splitlines() if search.lower() in l.lower()]
+            return "\n".join(lines) if lines else f"No events matching '{search}'."
+        return raw
+
     def review_calendar(self, view: str = "day", start_date: str = "", days_ahead: int = 1) -> str:
         """Fetch calendar events and AI-analyze for prep needs, cross-referencing email/Slack."""
         return asyncio.run(self._review_calendar_async(view, start_date, days_ahead))
@@ -1008,10 +1083,10 @@ Events:
     async def _send_to_ea_async(self, message: str, ea_alias: str = None, category: str = "task") -> str:
         ea_name = None
         if not ea_alias:
-            # Try to read from attache.md
-            attache_path = os.path.expanduser("~/.attache/attache.md")
-            if os.path.exists(attache_path):
-                for line in open(attache_path):
+            # Try to read from envoy.md
+            envoy_path = os.path.expanduser("~/.envoy/envoy.md")
+            if os.path.exists(envoy_path):
+                for line in open(envoy_path):
                     low = line.lower()
                     if "ea_alias" in low:
                         parts = line.split(":", 1)
@@ -1022,7 +1097,7 @@ Events:
                         if len(parts) == 2:
                             ea_name = parts[1].strip().strip("`").strip()
             if not ea_alias:
-                return "ERROR: No EA alias configured. Run `attache init` or tell me your EA's name and login — I'll remember it."
+                return "ERROR: No EA alias configured. Run `envoy init` or tell me your EA's name and login — I'll remember it."
 
         if not ea_name:
             ea_name = ea_alias.capitalize()
@@ -1289,6 +1364,24 @@ Events:
         except Exception as e:
             return f"Error creating draft: {e}"
 
+    # --- Send Email ---
+
+    def send_email(self, to: List[str], subject: str, body: str) -> str:
+        return asyncio.run(self._send_email_async(to, subject, body))
+
+    async def _send_email_async(self, to: List[str], subject: str, body: str) -> str:
+        track_tag = self._make_tag()
+        tagged_body = f"{body}<p style='color:#999;font-size:11px'>{track_tag}</p>"
+        try:
+            async with self._outlook() as session:
+                await session.call_tool("email_send", arguments={
+                    "to": to, "subject": subject, "body": tagged_body
+                })
+                self._log_sent(track_tag, "", ", ".join(to), "email", subject)
+                return f"✅ Email sent ({track_tag}): {subject}"
+        except Exception as e:
+            return f"Error sending email: {e}"
+
     # --- Todo Subtasks ---
 
     def add_todo_subtasks(self, list_name: str, task_title: str, subtasks: List[str]) -> str:
@@ -1551,9 +1644,165 @@ Data:
         except Exception as e:
             return f"Error generating weekly review: {e}"
 
+    # --- Response Patterns ---
+
+    RESPONSE_PATTERNS_FILE = os.path.expanduser("~/.envoy/response_patterns.jsonl")
+    MAX_PATTERNS = 200
+
+    def learn_response(self, context: str, response: str, medium: str = "email") -> str:
+        """Save a sent response as a pattern for future recommendations."""
+        os.makedirs(os.path.dirname(self.RESPONSE_PATTERNS_FILE), exist_ok=True)
+        entry = json.dumps({
+            "ts": datetime.now().isoformat(),
+            "medium": medium,
+            "context": context[:500],
+            "response": response[:1000],
+        })
+        with open(self.RESPONSE_PATTERNS_FILE, "a") as f:
+            f.write(entry + "\n")
+        # Trim to MAX_PATTERNS
+        try:
+            lines = open(self.RESPONSE_PATTERNS_FILE).readlines()
+            if len(lines) > self.MAX_PATTERNS:
+                with open(self.RESPONSE_PATTERNS_FILE, "w") as f:
+                    f.writelines(lines[-self.MAX_PATTERNS:])
+        except Exception:
+            pass
+        return "✅ Response pattern saved."
+
+    def _load_response_patterns(self) -> str:
+        """Load recent response patterns as context for AI."""
+        if not os.path.exists(self.RESPONSE_PATTERNS_FILE):
+            return ""
+        try:
+            lines = open(self.RESPONSE_PATTERNS_FILE).readlines()
+            entries = [json.loads(l) for l in lines[-50:] if l.strip()]
+            if not entries:
+                return ""
+            parts = []
+            for e in entries:
+                parts.append(f"- [{e.get('medium','?')}] Context: {e['context'][:200]}\n  Response: {e['response'][:300]}")
+            return "\n".join(parts)
+        except Exception:
+            return ""
+
+    def recommend_responses(self, alias: str = "", days: int = 3) -> str:
+        """Fetch recent DM emails and Slack DMs, generate recommended responses."""
+        alias = alias or os.environ.get("USER", "")
+        return asyncio.run(self._recommend_responses_async(alias, days))
+
+    async def _recommend_responses_async(self, alias: str, days: int) -> str:
+        messages = []
+
+        # Fetch DM emails (sent directly to user)
+        try:
+            async with self._outlook() as session:
+                start_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
+                end_date = datetime.now().strftime('%Y-%m-%d')
+                result = await session.call_tool("email_search", arguments={
+                    "query": f"to:{alias}@amazon.com", "folder": "inbox",
+                    "startDate": start_date, "endDate": end_date, "limit": 30
+                })
+                for e in self._parse_email_search_result(result):
+                    messages.append({
+                        "medium": "email",
+                        "from": e.get("from", ""),
+                        "subject": e.get("subject", ""),
+                        "preview": e.get("snippet", ""),
+                        "date": e.get("date", ""),
+                        "conversation_id": e.get("conversationId", ""),
+                    })
+        except Exception as ex:
+            messages.append({"medium": "email", "error": str(ex)})
+
+        # Fetch Slack DMs
+        try:
+            from datetime import timezone
+            oldest = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+            async with self._slack() as session:
+                for ch_type in ["dm", "group_dm"]:
+                    try:
+                        result = await session.call_tool(
+                            "list_channels",
+                            arguments={"channelTypes": [ch_type], "unreadOnly": True, "limit": 15}
+                        )
+                        ch_data = json.loads(result.content[0].text) if result.content else {}
+                        ch_ids = [c['id'] for c in ch_data.get('channels', [])]
+                        if not ch_ids:
+                            continue
+                        batch = [{"channelId": cid, "oldest": oldest, "limit": 10} for cid in ch_ids]
+                        hist = await session.call_tool("batch_get_conversation_history", arguments={"channels": batch})
+                        raw = json.loads(hist.content[0].text) if hist.content else []
+                        for item in raw:
+                            for msg in item.get('result', {}).get('messages', []):
+                                text = msg.get('text', '')
+                                if text:
+                                    messages.append({
+                                        "medium": "slack_dm" if ch_type == "dm" else "slack_group_dm",
+                                        "from": msg.get('user', '?'),
+                                        "preview": text[:500],
+                                        "channel_id": item.get('channelId', ''),
+                                        "thread_ts": msg.get('ts', ''),
+                                    })
+                    except Exception:
+                        pass
+        except Exception as ex:
+            messages.append({"medium": "slack", "error": str(ex)})
+
+        if not messages or all("error" in m for m in messages):
+            return "No direct messages found in the last {} days.".format(days)
+
+        # Build message list for AI
+        msg_text = ""
+        for i, m in enumerate(messages):
+            if "error" in m:
+                continue
+            msg_text += f"[{i}] ({m['medium']}) From: {m.get('from','')} | {m.get('subject','')}\n"
+            msg_text += f"    {m.get('preview','')[:300]}\n\n"
+
+        patterns = self._load_response_patterns()
+        patterns_section = ""
+        if patterns:
+            patterns_section = f"""
+
+## RESPONSE HISTORY (the user's past responses — match this tone and style)
+{patterns[:3000]}
+"""
+
+        prompt = f"""You are a chief of staff drafting recommended responses for {alias}@amazon.com.
+
+Below are recent messages sent directly to this person (emails and Slack DMs) from the last {days} days.
+{patterns_section}
+For each message that warrants a response, generate a recommended reply. Skip messages that are:
+- Pure FYI / no response needed
+- Automated notifications
+- Already part of a thread where the user responded
+
+For each recommendation, output:
+
+### [index] Reply to [sender] — [subject/topic]
+**Medium:** email | slack
+**Urgency:** 🔴 Today | 🟡 Soon | 🟢 When free
+**Conversation ID:** [if email, include conversationId; if slack, include channel_id]
+**Draft response:**
+[The actual recommended response text — concise, professional, matching the user's style from response history if available]
+
+---
+
+If no messages need responses, say so.
+
+Messages:
+{msg_text[:6000]}"""
+
+        try:
+            result = self._invoke_ai(prompt, max_tokens=8000, tier="medium")
+            return result
+        except Exception as e:
+            return f"Error generating recommendations: {e}"
+
     # --- Memory Persistence ---
 
-    MEMORY_DIR = os.path.expanduser("~/.attache/memory")
+    MEMORY_DIR = os.path.expanduser("~/.envoy/memory")
     MEMORY_TODAY = os.path.join(MEMORY_DIR, "today.jsonl")
     MEMORY_DAYS_DIR = os.path.join(MEMORY_DIR, "days")
     MEMORY_MONTHLY = os.path.join(MEMORY_DIR, "monthly.json")
@@ -1709,3 +1958,86 @@ Data:
                 "updated": datetime.now().isoformat(),
                 "text": summary[:self.MONTHLY_MAX],
             }, f)
+
+    def teamsnap_auth(self) -> str:
+        """Trigger TeamSnap OAuth authentication."""
+        import asyncio
+        from mcp import ClientSession
+        from mcp.client.stdio import stdio_client
+
+        async def _auth():
+            try:
+                async with stdio_client(self.teamsnap_mcp_params) as (read, write):
+                    async with ClientSession(read, write) as session:
+                        await session.initialize()
+                        result = await session.call_tool("teamsnap_auth", {})
+                        return result.content[0].text if result.content else "Auth failed."
+            except FileNotFoundError:
+                return "TeamSnap MCP wrapper not found at ~/TeamSnapMCP/dist/wrapper.js"
+
+        return asyncio.run(_auth())
+
+    def get_teamsnap_schedule(self, team_id: str = "", start_date: str = "", end_date: str = "") -> str:
+        """Fetch TeamSnap events/schedule for a team."""
+        import asyncio
+        from mcp import ClientSession
+        from mcp.client.stdio import stdio_client
+
+        async def _fetch():
+            try:
+                async with stdio_client(self.teamsnap_mcp_params) as (read, write):
+                    async with ClientSession(read, write) as session:
+                        await session.initialize()
+
+                        if not team_id:
+                            result = await session.call_tool("teamsnap_list_teams", {})
+                            return f"Available teams:\n{result.content[0].text}" if result.content else "No teams found."
+
+                        params = {"team_id": team_id}
+                        if start_date:
+                            params["start_date"] = start_date
+                        if end_date:
+                            params["end_date"] = end_date
+
+                        result = await session.call_tool("teamsnap_get_events", params)
+                        return result.content[0].text if result.content else "No events found."
+            except FileNotFoundError:
+                return "TeamSnap MCP server (teamsnap-mcp) is not installed. Install it and ensure it's in PATH."
+
+        return asyncio.run(_fetch())
+
+    def get_teamsnap_roster(self, team_id: str) -> str:
+        """Fetch TeamSnap roster for a team."""
+        import asyncio
+        from mcp import ClientSession
+        from mcp.client.stdio import stdio_client
+
+        async def _fetch():
+            try:
+                async with stdio_client(self.teamsnap_mcp_params) as (read, write):
+                    async with ClientSession(read, write) as session:
+                        await session.initialize()
+                        result = await session.call_tool("teamsnap_get_roster", {"team_id": team_id})
+                        return result.content[0].text if result.content else "No roster found."
+            except FileNotFoundError:
+                return "TeamSnap MCP server (teamsnap-mcp) is not installed. Install it and ensure it's in PATH."
+
+        return asyncio.run(_fetch())
+
+    def get_teamsnap_availability(self, event_id: str) -> str:
+        """Fetch TeamSnap availability for an event."""
+        import asyncio
+        from mcp import ClientSession
+        from mcp.client.stdio import stdio_client
+
+        async def _fetch():
+            try:
+                async with stdio_client(self.teamsnap_mcp_params) as (read, write):
+                    async with ClientSession(read, write) as session:
+                        await session.initialize()
+                        result = await session.call_tool("teamsnap_get_availability", {"event_id": event_id})
+                        return result.content[0].text if result.content else "No availability data."
+            except FileNotFoundError:
+                return "TeamSnap MCP server (teamsnap-mcp) is not installed. Install it and ensure it's in PATH."
+
+        return asyncio.run(_fetch())

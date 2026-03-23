@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""AgentCore handler for DirectsDigest agent"""
+"""AgentCore handler for Envoy agent"""
 
 import json
-from service import DirectsDigestService
+import os
+from service import EnvoyService
 
-class DirectsDigestAgent:
+class EnvoyAgent:
     def __init__(self):
-        self.service = DirectsDigestService()
+        self.service = EnvoyService()
     
     def handle_request(self, request: dict) -> dict:
         """Handle AgentCore requests"""
@@ -72,7 +73,7 @@ class DirectsDigestAgent:
 # AgentCore entry point
 def handler(event, context):
     """Lambda-style handler for AgentCore"""
-    agent = DirectsDigestAgent()
+    agent = EnvoyAgent()
     return agent.handle_request(event)
 
 if __name__ == '__main__':
@@ -80,7 +81,7 @@ if __name__ == '__main__':
     test_request = {
         'tool': 'generate_digest',
         'parameters': {
-            'manager_alias': 'markrelp',
+            'manager_alias': os.environ.get('USER', 'your-alias'),
             'days': 7,
             'include_ai_summary': True,
             'email_result': False

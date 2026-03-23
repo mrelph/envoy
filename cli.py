@@ -8,7 +8,7 @@ from rich.prompt import Prompt, Confirm
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 from rich import box
-from service import AttacheService
+from service import EnvoyService
 
 console = Console()
 
@@ -17,7 +17,7 @@ console = Console()
 @click.version_option(version='2.0.0')
 @click.pass_context
 def cli(ctx):
-    """Attaché — AI-Powered Email Management"""
+    """Envoy — AI-Powered Email Management"""
     if ctx.invoked_subcommand is None:
         from agent import run_interactive
         run_interactive()
@@ -25,14 +25,14 @@ def cli(ctx):
 
 @cli.command()
 def init():
-    """Set up Attaché — build your personality, soul, and preferences."""
+    """Set up Envoy — build your personality, soul, and preferences."""
     from init_cmd import run_init
     run_init()
 
 
 @cli.command()
 def settings():
-    """Edit Attaché personality and config."""
+    """Edit Envoy personality and config."""
     from init_cmd import run_settings
     run_settings()
 
@@ -72,7 +72,7 @@ def digest(alias, days, select, vip, output, email, slack, todo, no_display, no_
     console.print(f"[cyan]Generating {mode} digest for {alias} (last {days} days)...[/cyan]\n")
 
     try:
-        service = AttacheService()
+        service = EnvoyService()
 
         with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), console=console) as progress:
             task = progress.add_task("[cyan]Fetching emails...", total=None)
@@ -120,7 +120,7 @@ def digest(alias, days, select, vip, output, email, slack, todo, no_display, no_
 def cleanup(days, limit):
     """Scan inbox for non-critical email and facilitate deletion."""
     alias = os.environ.get('USER', '')
-    service = AttacheService()
+    service = EnvoyService()
 
     with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), console=console) as progress:
         task = progress.add_task("[cyan]Scanning inbox...", total=None)
@@ -198,7 +198,7 @@ def customers(alias, days, team, output, email, slack):
     if not alias:
         alias = os.environ.get('USER', '')
 
-    service = AttacheService()
+    service = EnvoyService()
     team_aliases = [t.strip() for t in team.split(',') if t.strip()] if team else None
 
     # Auto-fetch directs if no team specified
@@ -232,9 +232,9 @@ def customers(alias, days, team, output, email, slack):
 @click.argument('action', default='list', type=click.Choice(['list', 'add', 'remove', 'presets']))
 @click.option('--name', '-n', default='', help='Job name')
 @click.option('--schedule', '-s', default='', help='Cron expression (e.g. "0 8 * * 1-5")')
-@click.option('--command', '-c', 'cmd', default='', help='Attaché command (e.g. "digest --days 7 --email")')
+@click.option('--command', '-c', 'cmd', default='', help='Envoy command (e.g. "digest --days 7 --email")')
 def cron(action, name, schedule, cmd):
-    """Manage Attaché scheduled cron jobs."""
+    """Manage Envoy scheduled cron jobs."""
     from tools import manage_cron
     result = manage_cron(action=action, name=name, schedule=schedule, command=cmd)
     from rich.markdown import Markdown
@@ -247,7 +247,7 @@ def cron(action, name, schedule, cmd):
 @click.option('--output', '-o', default=None, help='Output file')
 def slack(days, channels, output):
     """Scan Slack channels for critical info and action items."""
-    service = AttacheService()
+    service = EnvoyService()
     ch_list = [c.strip() for c in channels.split(',') if c.strip()] if channels else None
 
     with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), console=console) as progress:
@@ -268,7 +268,7 @@ def slack(days, channels, output):
 @click.option('--output', '-o', default=None, help='Output file')
 def calendar(view, days, output):
     """Review your calendar with AI briefing and email cross-references."""
-    service = AttacheService()
+    service = EnvoyService()
 
     with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), console=console) as progress:
         task = progress.add_task("[cyan]Reviewing calendar...", total=None)

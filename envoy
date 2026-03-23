@@ -1,0 +1,47 @@
+#!/bin/bash
+# Envoy — Your AI Chief of Staff
+# Self-contained wrapper - automatically manages dependencies
+
+# Get the actual script location (resolves symlinks)
+SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
+VENV_DIR="$SCRIPT_DIR/venv"
+VENV_PYTHON="$VENV_DIR/bin/python3"
+
+# Auto-setup venv if it doesn't exist
+if [ ! -f "$VENV_PYTHON" ]; then
+    echo "First-time setup: Installing dependencies..."
+    python3 -m venv "$VENV_DIR" || exit 1
+    "$VENV_DIR/bin/pip" install -q -r "$SCRIPT_DIR/requirements.txt" || exit 1
+    echo "Setup complete!"
+    echo ""
+fi
+
+# Demo mode: envoy --demo or ENVOY_DEMO=1
+for arg in "$@"; do
+    if [ "$arg" = "--demo" ]; then
+        export ENVOY_DEMO=1
+        # Remove --demo from args before passing to CLI
+        set -- $(echo "$@" | sed 's/--demo//')
+        break
+    fi
+done
+
+# Ensure Midway auth is fresh (no more than once per hour)
+MWINIT_STAMP="$SCRIPT_DIR/.mwinit_last"
+if command -v mwinit &>/dev/null; then
+    run_mwinit=true
+    if [ -f "$MWINIT_STAMP" ]; then
+        last=$(cat "$MWINIT_STAMP" 2>/dev/null || echo 0)
+        now=$(date +%s)
+        if [ $((now - last)) -lt 3600 ]; then
+            run_mwinit=false
+        fi
+    fi
+    if $run_mwinit; then
+        mwinit -o && date +%s > "$MWINIT_STAMP" || echo "⚠  Midway auth failed — some features may not work"
+    fi
+fi
+
+# Run the CLI
+exec "$VENV_PYTHON" "$SCRIPT_DIR/cli.py" "$@"

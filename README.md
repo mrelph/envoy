@@ -1,4 +1,4 @@
-# Attaché
+# Envoy
 
 Your AI chief of staff from the command line. Summarize your team's email, clean up inbox junk, track your boss's activity, and surface customer action items — all driven by Claude via Amazon Bedrock.
 
@@ -18,17 +18,24 @@ Phonetool (builder-mcp)     Outlook (aws-outlook-mcp)     Amazon Bedrock (Claude
 ## Quick Start
 
 ```bash
-# Clone or copy the attache folder
-cd attache
+# Clone or copy the envoy folder
+cd envoy
+
+# First-time setup — configures your identity, preferences, and agent personality
+./envoy init
 
 # Run it — dependencies auto-install on first run
-./attache
+./envoy
 ```
 
-That's it. The interactive menu appears:
+`envoy init` walks you through setup: your alias, role, manager, priorities, email preferences, and optionally generates an AI-powered agent personality. Config is saved to `~/.envoy/`. You can skip this step, but the agent works best when it knows who you are.
+
+To edit settings later: `envoy settings`
+
+The interactive menu appears:
 
 ```
-╭─ ✈  Attaché ──────────────────────────────────╮
+╭─ ✈  Envoy ──────────────────────────────────╮
 │  Your AI Chief of Staff                    │
 ╰─────────────────────────────────────────────────╯
 
@@ -52,15 +59,17 @@ That's it. The interactive menu appears:
 ### Install
 
 ```bash
-git clone <repo-url> attache
-cd attache
+git clone <repo-url> envoy
+cd envoy
 
-# Option A: Run from the project directory
-./attache
+# Install — sets up dependencies and adds envoy to PATH
+./install.sh
 
-# Option B: Install globally (run from anywhere)
-sudo ln -s $(pwd)/attache /usr/local/bin/attache
-attache
+# First-time setup — configures your identity, preferences, and agent personality
+envoy init
+
+# Run it
+envoy
 ```
 
 Dependencies (mcp, click, boto3, rich, python-dotenv) auto-install into a local `venv/` on first run.
@@ -78,14 +87,14 @@ Summarize your direct reports' recent email activity with AI-powered analysis.
 
 ```bash
 # Interactive
-attache            # then choose option 1
+envoy            # then choose option 1
 
 # CLI
-attache digest --alias yourlogin --days 7
-attache digest --days 7 --email --todo
-attache digest --days 7 --slack          # send as Slack DM to yourself
-attache digest --select "alice,bob" --output digest.md
-attache digest --no-ai    # skip AI, raw listing only
+envoy digest --alias yourlogin --days 7
+envoy digest --days 7 --email --todo
+envoy digest --days 7 --slack          # send as Slack DM to yourself
+envoy digest --select "alice,bob" --output digest.md
+envoy digest --no-ai    # skip AI, raw listing only
 ```
 
 ### 🌟 Boss Tracker
@@ -98,10 +107,10 @@ Track your management chain's email activity — see what your bosses are focuse
 
 ```bash
 # Interactive
-attache            # then choose option 2
+envoy            # then choose option 2
 
 # CLI
-attache digest --vip --days 7
+envoy digest --vip --days 7
 ```
 
 ### 🧹 Inbox Cleanup
@@ -120,10 +129,10 @@ Classification targets:
 
 ```bash
 # Interactive
-attache            # then choose option 3
+envoy            # then choose option 3
 
 # CLI
-attache cleanup --days 7 --limit 200
+envoy cleanup --days 7 --limit 200
 ```
 
 ### 📬 Customer Scan
@@ -136,12 +145,12 @@ Surface external customer emails with action items across you and your team.
 
 ```bash
 # Interactive
-attache            # then choose option 4
+envoy            # then choose option 4
 
 # CLI
-attache customers --days 7
-attache customers --team "alice,bob" --email --output report.md
-attache customers --days 7 --slack       # send as Slack DM to yourself
+envoy customers --days 7
+envoy customers --team "alice,bob" --email --output report.md
+envoy customers --days 7 --slack       # send as Slack DM to yourself
 ```
 
 ### ✅ To-Do Review (Agent Tool)
@@ -159,9 +168,9 @@ AI-powered burndown plan for your Microsoft To-Do list. Available as an agent to
 
 ## CLI Reference
 
-Running `attache` with no arguments opens the interactive menu. Subcommands are available for scripting and automation.
+Running `envoy` with no arguments opens the interactive menu. Subcommands are available for scripting and automation.
 
-### `attache digest`
+### `envoy digest`
 
 | Option | Short | Default | Description |
 |---|---|---|---|
@@ -176,14 +185,14 @@ Running `attache` with no arguments opens the interactive menu. Subcommands are 
 | `--no-ai` | | off | Skip AI summary, show raw digest |
 | `--no-display` | | off | Suppress console output |
 
-### `attache cleanup`
+### `envoy cleanup`
 
 | Option | Short | Default | Description |
 |---|---|---|---|
 | `--days` | `-d` | `14` | Days to look back |
 | `--limit` | `-l` | `100` | Max emails to scan |
 
-### `attache customers`
+### `envoy customers`
 
 | Option | Short | Default | Description |
 |---|---|---|---|
@@ -226,13 +235,13 @@ The tool tries `.env` first, then falls back to the default AWS credential chain
 ```bash
 crontab -e
 # Add:
-0 8 * * 1 /usr/local/bin/attache digest --days 7 --slack --no-display
+0 8 * * 1 /usr/local/bin/envoy digest --days 7 --slack --no-display
 ```
 
 ### Cron: Daily Customer Scan (Slack)
 
 ```bash
-0 9 * * * /usr/local/bin/attache customers --days 1 --slack --output /tmp/customers-$(date +\%F).md
+0 9 * * * /usr/local/bin/envoy customers --days 1 --slack --output /tmp/customers-$(date +\%F).md
 ```
 
 > **Tip:** The built-in cron presets (`morning-briefing`, `weekly-digest`, `customer-scan`) default to `--slack`. Swap `--slack` for `--email` if you prefer email delivery.
@@ -240,7 +249,7 @@ crontab -e
 ### Shell Alias
 
 ```bash
-echo 'alias mp="attache"' >> ~/.bashrc
+echo 'alias mp="envoy"' >> ~/.bashrc
 source ~/.bashrc
 mp digest --days 7 --slack
 ```
@@ -248,8 +257,8 @@ mp digest --days 7 --slack
 ## Project Structure
 
 ```
-attache/
-├── attache              # Entrypoint script (auto-installs venv)
+envoy/
+├── envoy              # Entrypoint script (auto-installs venv)
 ├── cli.py                 # CLI commands and interactive TUI (Click + Rich)
 ├── service.py             # Core logic: MCP calls, AI, email, cleanup
 ├── agent_handler.py       # AgentCore handler for deployed agent mode
@@ -264,7 +273,7 @@ attache/
 
 ## Architecture
 
-### `service.py` — `AttachéService`
+### `service.py` — `EnvoyService`
 
 | Method | Description |
 |---|---|

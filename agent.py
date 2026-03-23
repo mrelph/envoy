@@ -1,4 +1,4 @@
-"""Attaché — Strands-based conversational EA agent."""
+"""Envoy — Strands-based conversational EA agent."""
 import os
 import json
 from pathlib import Path
@@ -8,10 +8,10 @@ from strands.session.file_session_manager import FileSessionManager
 from strands.handlers import null_callback_handler
 from tools import ALL_TOOLS
 
-CONFIG_DIR = Path.home() / ".attache"
+CONFIG_DIR = Path.home() / ".envoy"
 PERSONALITY_FILE = CONFIG_DIR / "personality.md"
 SOUL_FILE = CONFIG_DIR / "soul.md"
-ATTACHE_FILE = CONFIG_DIR / "attache.md"
+ENVOY_FILE = CONFIG_DIR / "envoy.md"
 SESSIONS_DIR = CONFIG_DIR / "sessions"
 
 
@@ -24,15 +24,15 @@ def _load_file(path: Path) -> str:
 def _build_system_prompt() -> str:
     personality = _load_file(PERSONALITY_FILE)
     soul = _load_file(SOUL_FILE)
-    attache_prefs = _load_file(ATTACHE_FILE)
+    envoy_prefs = _load_file(ENVOY_FILE)
 
-    prompt = """You are Attaché — an AI chief of staff. You manage your user's email, Slack, calendar, to-dos, tickets, and EA delegation. Your job is to keep them informed, unblocked, and ahead of everything.
+    prompt = """You are Envoy — an AI chief of staff. You manage your user's email, Slack, calendar, to-dos, tickets, and EA delegation. Your job is to keep them informed, unblocked, and ahead of everything.
 
 You are not a chatbot. You are a trusted operator with judgment. Act like a seasoned executive assistant who has worked with this person for years — you know their priorities, their people, and how they like things done.
 
 ## IDENTITY
 - Embody the personality defined in the Soul config below. This is not flavor text — it IS who you are. Commit fully.
-- If the user configured an "Agent name", use it as your name instead of "Attaché".
+- If the user configured an "Agent name", use it as your name instead of "Envoy".
 - If no personality is configured, default to sharp, professional, and slightly warm.
 
 ## HOW TO THINK
@@ -60,7 +60,8 @@ Always lead with 🔴 items. Group by priority, not by source.
 - For briefings (/briefing), call morning_briefing which orchestrates calendar + to-dos + email + Slack + tickets in one pass.
 - Chain tools when it adds value: after a scan, offer to reply, add to-dos, email a summary, or mark Slack as read.
 - Before calendar briefings, cross-reference attendees against recent email and Slack for context and prep notes.
-- When the user corrects you or states a preference: use update_soul for personality/behavior, update_attache for preferences (channels, email rules, people, calendar), update_personality for facts about them.
+- When the user corrects you or states a preference: use update_soul for personality/behavior, update_envoy for preferences (channels, email rules, people, calendar), update_personality for facts about them.
+- **Recommended responses:** Use recommend_responses to scan DM emails and Slack DMs and draft replies. After the user approves and sends a response, call learn_response with the context and response text so future recommendations match their tone and style. The more responses learned, the better the drafts get.
 
 ## GUARDRAILS
 - Always confirm before: deleting emails, sending emails/replies, sending Slack messages, or any destructive action.
@@ -91,8 +92,8 @@ Suggest 2-3 concrete next steps. Examples:
     if soul:
         prompt += f"\n## Your Soul (Personality & Behavior)\n{soul}\n"
 
-    if attache_prefs:
-        prompt += f"\n## User Preferences\n{attache_prefs}\n"
+    if envoy_prefs:
+        prompt += f"\n## User Preferences\n{envoy_prefs}\n"
 
     from datetime import datetime
     now = datetime.now().strftime('%A, %B %d %Y at %I:%M %p').replace(' 0', ' ')
@@ -100,23 +101,28 @@ Suggest 2-3 concrete next steps. Examples:
 
     # Inject persistent memory
     try:
-        from service import AttacheService
-        memory = AttacheService().recall()
+        from service import EnvoyService
+        memory = EnvoyService().recall()
         if memory:
             prompt += f"\n{memory}\n"
     except Exception:
         pass
 
+    # Mask system prompt in demo mode
+    if os.environ.get("ENVOY_DEMO", "").strip().lower() in ("1", "true", "yes"):
+        from tools import _mask_output
+        prompt = _mask_output(prompt)
+
     return prompt
 
 
 def create_agent(session_id: str = "default") -> Agent:
-    """Create a Attaché Strands agent with personality, soul, and session persistence."""
+    """Create a Envoy Strands agent with personality, soul, and session persistence."""
     CONFIG_DIR.mkdir(exist_ok=True)
     SESSIONS_DIR.mkdir(exist_ok=True)
 
-    from service import AttacheService
-    agent_model_id = AttacheService._load_models().get("agent", "us.anthropic.claude-opus-4-6-v1")
+    from service import EnvoyService
+    agent_model_id = EnvoyService._load_models().get("agent", "us.anthropic.claude-opus-4-6-v1")
 
     model = BedrockModel(
         model_id=agent_model_id,
@@ -138,26 +144,13 @@ def create_agent(session_id: str = "default") -> Agent:
 
 
 def _check_mcp_servers():
-    """Check which MCP servers are reachable."""
-    import shutil
-    servers = {
-        "Outlook":  "aws-outlook-mcp",
-        "Slack":    "ai-community-slack-mcp",
-        "Phonetool": "builder-mcp",
-        "Bedrock":  None,  # check via boto3
-    }
-    status = {}
-    for name, cmd in servers.items():
-        if cmd:
-            status[name] = shutil.which(cmd) is not None
-        else:
-            try:
-                import boto3
-                boto3.client('bedrock-runtime', region_name='us-west-2')
-                status[name] = True
-            except Exception:
-                status[name] = False
-    return status
+    """Check which MCP servers are actually reachable (live connection test)."""
+    from service import EnvoyService
+    try:
+        svc = EnvoyService()
+        return svc.check_mcp_connections()
+    except Exception:
+        return {}
 
 
 def _render_status_bar(console, mcp_status=None):
@@ -179,8 +172,8 @@ def _show_models(console):
     from rich.table import Table
     from rich.prompt import Prompt
     from rich import box
-    from service import AttacheService
-    models = AttacheService._load_models()
+    from service import EnvoyService
+    models = EnvoyService._load_models()
     tiers = {"agent": "Conversational agent", "heavy": "Summaries, EOD, weekly review",
              "medium": "Classification, scans, briefings", "light": "Ticket scan, simple extraction"}
     table = Table(title="AI Model Assignments", show_header=True, box=box.SIMPLE)
@@ -197,10 +190,10 @@ def _show_models(console):
     cat.add_column("Model ID", style="green")
     cat.add_column("Name", style="bold")
     cat.add_column("Notes", style="dim")
-    for i, (mid, name, notes) in enumerate(AttacheService.MODEL_CATALOG, 1):
+    for i, (mid, name, notes) in enumerate(EnvoyService.MODEL_CATALOG, 1):
         cat.add_row(str(i), mid, name, notes)
     console.print(cat)
-    console.print(f"[dim]  Config: {AttacheService.MODELS_FILE}[/dim]")
+    console.print(f"[dim]  Config: {EnvoyService.MODELS_FILE}[/dim]")
 
     edit = Prompt.ask("[yellow]Edit a tier, or 'test' to test connections? (agent/heavy/medium/light/test/no)[/yellow]", default="no")
     if edit.lower() == "test":
@@ -211,16 +204,16 @@ def _show_models(console):
         if pick.strip():
             if pick.strip().isdigit():
                 idx = int(pick.strip()) - 1
-                if 0 <= idx < len(AttacheService.MODEL_CATALOG):
-                    new_model = AttacheService.MODEL_CATALOG[idx][0]
+                if 0 <= idx < len(EnvoyService.MODEL_CATALOG):
+                    new_model = EnvoyService.MODEL_CATALOG[idx][0]
                 else:
                     console.print("[red]Invalid number.[/red]")
                     return
             else:
                 new_model = pick.strip()
             models[edit] = new_model
-            os.makedirs(os.path.dirname(AttacheService.MODELS_FILE), exist_ok=True)
-            with open(AttacheService.MODELS_FILE, "w") as f:
+            os.makedirs(os.path.dirname(EnvoyService.MODELS_FILE), exist_ok=True)
+            with open(EnvoyService.MODELS_FILE, "w") as f:
                 json.dump(models, f, indent=2)
             console.print(f"[green]✓[/green] Saved. '{edit}' → {new_model}")
 
@@ -228,8 +221,8 @@ def _show_models(console):
 def _test_models(console):
     """Test connectivity for each configured model tier."""
     from rich.progress import Progress, SpinnerColumn, TextColumn
-    from service import AttacheService
-    svc = AttacheService()
+    from service import EnvoyService
+    svc = EnvoyService()
     models = svc._load_models()
     tested = set()
     for tier in ("agent", "heavy", "medium", "light"):
@@ -257,22 +250,27 @@ def run_interactive():
     from rich import box
     console = Console()
 
-    # Check MCP servers once at startup
-    mcp_status = _check_mcp_servers()
+    # Check MCP servers once at startup (live connection test)
+    with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), console=console, transient=True) as progress:
+        progress.add_task("[cyan]Testing MCP connections...", total=None)
+        mcp_status = _check_mcp_servers()
 
     console.print()
     LOGO = r"""[bold cyan]
-     _   _   _             _      __
-    / \ | |_| |_ __ _  ___| |__  /_/
-   / _ \| __| __/ _` |/ __| '_ \ ___
-  / ___ \ |_| || (_| | (__| | | / _ \
- /_/   \_\__|\__\__,_|\___|_| |_\___/[/bold cyan]
-[dim]  Your AI Chief of Staff[/dim]
-[dim italic]  Remember to mwinit -o before use[/dim italic]"""
+  _____
+ | ____|_ ____   _____ _   _
+ |  _| | '_ \ \ / / _ \ | | |
+ | |___| | | \ V / (_) | |_| |
+ |_____|_| |_|\_/ \___/ \__, |
+                        |___/ [/bold cyan]
+[dim]  Your AI Chief of Staff[/dim]"""
     console.print(Panel.fit(LOGO, border_style="cyan", padding=(0, 2)))
 
+    if os.environ.get("ENVOY_DEMO", "").strip().lower() in ("1", "true", "yes"):
+        console.print("\n[bold yellow on red]  🎭 DEMO MODE — all names, emails, and IDs are masked  [/bold yellow on red]")
+
     if not PERSONALITY_FILE.exists():
-        console.print("\n[yellow]  💡 Run [bold]attache init[/bold] to personalize me, or just start chatting.[/yellow]")
+        console.print("\n[yellow]  💡 Run [bold]envoy init[/bold] to personalize me, or just start chatting.[/yellow]")
 
     console.print()
     agent = create_agent()
@@ -298,7 +296,7 @@ def run_interactive():
         "/cron":      ("Manage scheduled jobs",             lambda: agent("Show my cron jobs and available presets")),
         "/help":      ("Show available commands",           None),
         "/status":    ("Refresh MCP server status",         None),
-        "/exit":      ("Exit Attaché",                    None),
+        "/exit":      ("Exit Envoy",                    None),
         "/models":    ("Show/edit AI model assignments",    None),
         "/settings":  ("Edit personality and config",        None),
     }
@@ -402,7 +400,7 @@ def run_interactive():
         console.print()
         console.print(Panel(
             Markdown(str(response)),
-            title="[bold cyan]🔏 Attaché[/bold cyan]",
+            title="[bold cyan]🔏 Envoy[/bold cyan]",
             border_style="cyan",
             padding=(1, 2),
         ))

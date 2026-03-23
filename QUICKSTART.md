@@ -1,24 +1,28 @@
-# Attaché — Quick Start
+# Envoy — Quick Start
 
 ## Install
 
 ```bash
-cd attache
+cd envoy
 
-# Option A: Run locally
-./attache
+# Install — sets up dependencies and adds envoy to PATH
+./install.sh
 
-# Option B: Install globally
-sudo ln -s $(pwd)/attache /usr/local/bin/attache
-attache
+# First-time setup — configures your identity, preferences, and agent personality
+envoy init
+
+# Run it
+envoy
 ```
+
+`envoy init` walks you through setup: your alias, role, manager, priorities, and email preferences. Config is saved to `~/.envoy/`. You can skip this, but the agent works best when it knows who you are. Edit later with `envoy settings`.
 
 Dependencies auto-install on first run. You need `builder-mcp` and `aws-outlook-mcp` in your PATH, plus AWS credentials for AI features (`aws login` or `.env` file).
 
 ## Interactive Mode (default)
 
 ```bash
-attache
+envoy
 ```
 
 Pick from the menu:
@@ -32,48 +36,48 @@ Pick from the menu:
 
 ```bash
 # Team digest
-attache digest --days 7 --email
+envoy digest --days 7 --email
 
 # Boss tracker
-attache digest --vip --days 7
+envoy digest --vip --days 7
 
 # Inbox cleanup
-attache cleanup --days 7 --limit 200
+envoy cleanup --days 7 --limit 200
 
 # Customer scan
-attache customers --days 7 --email
+envoy customers --days 7 --email
 
 # Skip AI (faster, no AWS creds needed)
-attache digest --no-ai
+envoy digest --no-ai
 ```
 
 ## Common Recipes
 
 ```bash
 # Weekly digest emailed to you
-attache digest --days 7 --email --no-display
+envoy digest --days 7 --email --no-display
 
 # Save customer report to file
-attache customers --days 14 --output report.md
+envoy customers --days 14 --output report.md
 
 # Specific team members only
-attache digest --select "alice,bob" --days 7
+envoy digest --select "alice,bob" --days 7
 
 # Action items to Microsoft To-Do
-attache digest --days 7 --todo
+envoy digest --days 7 --todo
 ```
 
 ## Automation
 
 ```bash
 # Weekly Monday digest (cron)
-0 8 * * 1 /usr/local/bin/attache digest --days 7 --email --no-display
+0 8 * * 1 /usr/local/bin/envoy digest --days 7 --email --no-display
 
 # Daily customer scan (cron)
-0 9 * * * /usr/local/bin/attache customers --days 1 --email
+0 9 * * * /usr/local/bin/envoy customers --days 1 --email
 
 # Shell alias
-echo 'alias mp="attache"' >> ~/.bashrc && source ~/.bashrc
+echo 'alias mp="envoy"' >> ~/.bashrc && source ~/.bashrc
 mp digest --days 7
 ```
 
