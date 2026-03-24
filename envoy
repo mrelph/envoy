@@ -43,5 +43,41 @@ if command -v mwinit &>/dev/null; then
     fi
 fi
 
+# Check for new published releases (at most once every 4 hours)
+UPDATE_STAMP="$SCRIPT_DIR/.update_last_check"
+CURRENT_VERSION="1.2.0"
+if [ -d "$SCRIPT_DIR/.git" ]; then
+    run_check=true
+    if [ -f "$UPDATE_STAMP" ]; then
+        last=$(cat "$UPDATE_STAMP" 2>/dev/null || echo 0)
+        now=$(date +%s)
+        if [ $((now - last)) -lt 14400 ]; then
+            run_check=false
+        fi
+    fi
+    if $run_check; then
+        date +%s > "$UPDATE_STAMP"
+        # Fetch tags and compare against current version
+        (
+            git -C "$SCRIPT_DIR" fetch --tags --quiet 2>/dev/null
+            LATEST_TAG=$(git -C "$SCRIPT_DIR" tag -l 'v*' --sort=-version:refname 2>/dev/null | head -1)
+            if [ -n "$LATEST_TAG" ]; then
+                LATEST_VER="${LATEST_TAG#v}"
+                if [ "$LATEST_VER" != "$CURRENT_VERSION" ]; then
+                    # Compare versions numerically
+                    printf '%s\n%s\n' "$CURRENT_VERSION" "$LATEST_VER" | sort -t. -k1,1n -k2,2n -k3,3n | tail -1 | grep -qx "$LATEST_VER"
+                    if [ $? -eq 0 ] && [ "$LATEST_VER" != "$CURRENT_VERSION" ]; then
+                        echo ""
+                        echo "  ⬆  Envoy $LATEST_TAG available (you have v$CURRENT_VERSION). Run 'envoy update' to upgrade."
+                        echo ""
+                    fi
+                fi
+            fi
+        ) &
+        UPDATE_PID=$!
+        wait $UPDATE_PID 2>/dev/null || true
+    fi
+fi
+
 # Run the CLI
 exec "$VENV_PYTHON" "$SCRIPT_DIR/cli.py" "$@"

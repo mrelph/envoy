@@ -7,3 +7,4 @@ __pycache__/
 venv/
 .venv/
 .mwinit_last
+.update_last_check

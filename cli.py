@@ -13,8 +13,11 @@ from service import EnvoyService
 console = Console()
 
 
+VERSION = '1.2.0'
+
+
 @click.group(invoke_without_command=True)
-@click.version_option(version='2.0.0')
+@click.version_option(version=VERSION)
 @click.pass_context
 def cli(ctx):
     """Envoy — AI-Powered Email Management"""
@@ -41,6 +44,110 @@ def settings():
 def menu():
     """Launch the classic menu-driven TUI."""
     _main_menu()
+
+
+def _get_latest_tag(script_dir):
+    """Fetch tags and return the latest semver tag (e.g. 'v2.1.0'), or None."""
+    import subprocess
+    subprocess.run(
+        ['git', '-C', script_dir, 'fetch', '--tags', '--quiet'],
+        capture_output=True
+    )
+    result = subprocess.run(
+        ['git', '-C', script_dir, 'tag', '-l', 'v*', '--sort=-version:refname'],
+        capture_output=True, text=True
+    )
+    tags = result.stdout.strip().splitlines()
+    return tags[0] if tags else None
+
+
+def _parse_version(tag):
+    """Parse 'v1.2.3' into (1, 2, 3) tuple for comparison."""
+    import re
+    m = re.match(r'v?(\d+)\.(\d+)\.(\d+)', tag)
+    if not m:
+        return (0, 0, 0)
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3)))
+
+
+@cli.command()
+@click.option('--force', '-f', is_flag=True, help='Force update even if already up to date')
+def update(force):
+    """Update to the latest published release."""
+    import subprocess
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+
+    if not os.path.isdir(os.path.join(script_dir, '.git')):
+        console.print("[red]Error:[/red] Not a git repository. Update requires a git clone install.")
+        raise click.Abort()
+
+    console.print("[cyan]Checking for published releases...[/cyan]")
+    latest_tag = _get_latest_tag(script_dir)
+
+    if not latest_tag:
+        console.print("[yellow]No published releases found.[/yellow]")
+        return
+
+    current = _parse_version(VERSION)
+    latest = _parse_version(latest_tag)
+
+    console.print(f"  Current version: [bold]v{VERSION}[/bold]")
+    console.print(f"  Latest release:  [bold]{latest_tag}[/bold]")
+
+    if current >= latest and not force:
+        console.print("\n[green]Already on the latest release.[/green]")
+        return
+
+    # Show changelog between current and latest tag
+    current_tag = f'v{VERSION}'
+    log = subprocess.run(
+        ['git', '-C', script_dir, 'log', '--oneline', f'{current_tag}..{latest_tag}'],
+        capture_output=True, text=True
+    ).stdout.strip()
+    if log:
+        console.print(f"\n[bold]Changes in {latest_tag}:[/bold]")
+        for line in log.splitlines():
+            console.print(f"  [dim]•[/dim] {line}")
+        console.print()
+
+    # Check for local changes that would block checkout
+    status = subprocess.run(
+        ['git', '-C', script_dir, 'status', '--porcelain'],
+        capture_output=True, text=True
+    ).stdout.strip()
+    if status:
+        console.print("[red]Error:[/red] You have local changes. Stash or commit them first.")
+        console.print(f"[dim]{status}[/dim]")
+        raise click.Abort()
+
+    # Checkout the release tag
+    console.print(f"[cyan]Updating to {latest_tag}...[/cyan]")
+    result = subprocess.run(
+        ['git', '-C', script_dir, 'checkout', latest_tag],
+        capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        console.print(f"[red]Error:[/red] Failed to checkout {latest_tag}:\n{result.stderr}")
+        raise click.Abort()
+    console.print(f"[green]✓[/green] Checked out {latest_tag}")
+
+    # Reinstall deps if requirements.txt changed between versions
+    req_changed = subprocess.run(
+        ['git', '-C', script_dir, 'diff', f'{current_tag}..{latest_tag}', '--name-only', '--', 'requirements.txt'],
+        capture_output=True, text=True
+    ).stdout.strip()
+    if req_changed or force:
+        console.print("[cyan]Reinstalling dependencies...[/cyan]")
+        venv_pip = os.path.join(script_dir, 'venv', 'bin', 'pip')
+        req_file = os.path.join(script_dir, 'requirements.txt')
+        if os.path.isfile(venv_pip):
+            subprocess.run([venv_pip, 'install', '-q', '-r', req_file], check=True)
+            console.print("[green]✓[/green] Dependencies updated")
+        else:
+            console.print("[yellow]Warning:[/yellow] venv not found. Run envoy once to set up, then retry.")
+
+    console.print(f"\n[bold green]Updated to {latest_tag}![/bold green]")
 
 
 def _main_menu():
