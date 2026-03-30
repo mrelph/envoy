@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.pyo
+*.log
+.env
+*.md.backup
+venv/
+.venv/
+.mwinit_last
+.update_last_check
+
+# Personal config — real files live at ~/.envoy/, but ignore if copied here
+soul.md
+envoy.md
+*.bak
