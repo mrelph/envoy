@@ -83,6 +83,20 @@ def settings():
 
 
 @cli.command()
+@click.option("--restore", "-r", default=None, help="Restore from a named backup")
+@click.option("--list", "-l", "list_", is_flag=True, help="List available backups")
+def backup(restore, list_):
+    """Back up or restore Envoy config, memory, and state."""
+    from backup import run_backup, list_backups, restore_backup
+    if list_:
+        list_backups()
+    elif restore:
+        restore_backup(restore)
+    else:
+        run_backup()
+
+
+@cli.command()
 def menu():
     """Launch the interactive REPL."""
     from repl import run_interactive

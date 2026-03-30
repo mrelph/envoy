@@ -84,6 +84,7 @@ def run_interactive():
         "/status":    ("Refresh MCP server status",            None),
         "/models":    ("Show/edit AI model assignments",       None),
         "/settings":  ("Edit personality and config",          None),
+        "/backup":    ("Back up config, memory, and state",    None),
         "/exit":      ("Exit Envoy",                           None),
     }
 
@@ -99,7 +100,7 @@ def run_interactive():
             ("Prep", ["/prep-1on1", "/prep-meeting"]),
             ("Actions", ["/reply", "/ea", "/book", "/findtime", "/search", "/sharepoint"]),
             ("Reviews", ["/eod", "/weekly", "/cron"]),
-            ("System", ["/status", "/models", "/settings", "/help", "/exit"]),
+            ("System", ["/status", "/models", "/settings", "/backup", "/help", "/exit"]),
         ]
 
         tables = []
@@ -188,6 +189,11 @@ def run_interactive():
             from init_cmd import run_settings
             run_settings()
             agent = create_agent()  # reload personality
+            continue
+
+        if stripped.lower() == "/backup":
+            from backup import run_backup
+            run_backup()
             continue
 
         # --- Parse slash command + optional args (e.g. "/digest 7") ---
