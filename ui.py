@@ -186,31 +186,54 @@ def _toast(console, lines):
 
 
 def _render_response(console, response_text):
-    """Render agent response with color-coded priority sections."""
+    """Render agent response with gradient fade bands top and bottom."""
     import re
-    from rich.panel import Panel
     from rich.markdown import Markdown
+    from rich.text import Text
     from agents.base import agent_name as _agent_name
 
     name = _agent_name()
+    width = console.width
 
-    # Check if response contains priority markers
+    def _gradient_bar(color, label=""):
+        """Build a full-width thin gradient bar."""
+        t = Text()
+        if label:
+            tag = f" 🔏 {label} "
+            fill_w = max(0, width - 6 - len(tag))
+            left_fill = fill_w // 2
+            right_fill = fill_w - left_fill
+            t.append("░▒▓", style=f"dim {color}")
+            t.append("▓" * left_fill, style=f"{color}")
+            t.append(tag, style=f"bold {color}")
+            t.append("▓" * right_fill, style=f"{color}")
+            t.append("▓▒░", style=f"dim {color}")
+        else:
+            fill_w = max(0, width - 6)
+            t.append("░▒▓", style=f"dim {color}")
+            t.append("▓" * fill_w, style=f"{color}")
+            t.append("▓▒░", style=f"dim {color}")
+        return t
+
+    def _print_section(text, color="cyan", label=""):
+        console.print()
+        console.print(_gradient_bar(color, label))
+        console.print()
+        console.print(Markdown(text), width=width - 4)
+        console.print()
+        console.print(_gradient_bar(color))
+        console.print()
+
+    # Check for priority markers
     priority_pattern = re.compile(r'^(.*?)(🔴|🟡|🟢)\s*', re.MULTILINE)
     has_priorities = bool(priority_pattern.search(response_text))
 
     if not has_priorities:
-        console.print(Panel(
-            Markdown(response_text),
-            title=f"[bold cyan]🔏 {name}[/bold cyan]",
-            border_style="cyan",
-            padding=(1, 2),
-        ))
+        _print_section(response_text, "cyan", name)
         return
 
-    # Split into sections by priority emoji at the start of lines
     section_pattern = re.compile(r'(?=^[#\s]*(?:🔴|🟡|🟢))', re.MULTILINE)
     parts = section_pattern.split(response_text)
-
     color_map = {"🔴": "red", "🟡": "yellow", "🟢": "green"}
 
     first = True
@@ -218,18 +241,10 @@ def _render_response(console, response_text):
         part = part.strip()
         if not part:
             continue
-
-        border = "cyan"
-        label = f"🔏 {name}" if first else ""
-        for emoji, color in color_map.items():
+        color = "cyan"
+        for emoji, c in color_map.items():
             if emoji in part[:80]:
-                border = color
+                color = c
                 break
-
-        console.print(Panel(
-            Markdown(part),
-            title=f"[bold {border}]{label}[/bold {border}]" if label else "",
-            border_style=border,
-            padding=(1, 2),
-        ))
+        _print_section(part, color, name if first else "")
         first = False
