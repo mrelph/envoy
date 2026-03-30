@@ -13,7 +13,8 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from envoy_logger import get_logger
 
-load_dotenv()
+load_dotenv(os.path.expanduser("~/.envoy/.env"))
+load_dotenv()  # fallback to project-dir .env
 
 # Suppress MCP server stderr noise (Node warnings, internal errors)
 _devnull = open(os.devnull, "w")
