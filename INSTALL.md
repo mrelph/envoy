@@ -1,4 +1,4 @@
-# Envoy — Quick Install Guide
+# Envoy — Install Guide
 
 ## Prerequisites
 
@@ -11,41 +11,21 @@
   - `amazon-sharepoint-mcp` — SharePoint/OneDrive (optional)
 - **Midway auth** — `mwinit` (auto-refreshed on each run)
 
-## Option 1: One-Line Install (git)
+## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/mrelph/envoy/main/get-envoy.sh | bash
-```
-
-This clones to `~/.envoy/`, installs dependencies, and links `envoy` to your PATH.
-
-## Option 2: Tarball Install
-
-```bash
-# Download and extract
-tar xzf envoy-v3.0.0.tar.gz
+# 1. Extract the tarball
+tar xzf envoy.tar.gz
 cd envoy
 
-# Install — sets up venv, skills, and adds to PATH
+# 2. Run the installer (creates venv, installs deps, links to PATH)
 ./install.sh
-```
 
-## Option 3: Git Clone
-
-```bash
-git clone https://github.com/mrelph/envoy.git
-cd envoy
-./install.sh
-```
-
-## First-Time Setup
-
-```bash
-# Configure your identity, preferences, and agent personality
+# 3. Configure your identity and agent personality
 envoy init
 ```
 
-This walks you through:
+That's it. `envoy init` walks you through:
 1. Your alias (auto-detected from `$USER`)
 2. Phonetool lookup (role, manager, directs)
 3. Email preferences and signature
@@ -56,21 +36,24 @@ Config is saved to `~/.envoy/`.
 
 ## AWS Credentials
 
-Required for all AI features. The tool uses Amazon Bedrock (Claude) in `us-west-2`.
+Required for all AI features. Uses Amazon Bedrock (Claude) in `us-west-2`.
 
-**Option A: `.env` file (recommended)**
-```bash
-cp .env.example .env
-# Edit with your credentials:
-#   AWS_ACCESS_KEY_ID=your_key
-#   AWS_SECRET_ACCESS_KEY=your_secret
-#   AWS_REGION=us-west-2
-```
-
-**Option B: AWS CLI**
+**Option A: AWS CLI (recommended)**
 ```bash
 aws login
 ```
+
+**Option B: `.env` file**
+```bash
+# Create at ~/.envoy/.env (outside the project, won't be overwritten)
+cat > ~/.envoy/.env << 'EOF'
+AWS_ACCESS_KEY_ID=your_key
+AWS_SECRET_ACCESS_KEY=your_secret
+AWS_REGION=us-west-2
+EOF
+```
+
+A project-local `.env` also works (copy `.env.example`), but `~/.envoy/.env` is preferred — it survives reinstalls.
 
 ## Run It
 
@@ -84,66 +67,26 @@ envoy cleanup
 envoy --help
 ```
 
-## What's Included
-
-### Core Commands (built-in)
-| Command | Description |
-|---|---|
-| `envoy digest` | Team email digest |
-| `envoy cleanup` | Inbox junk cleanup |
-| `envoy customers` | Customer email scan |
-| `envoy catchup` | PTO catch-up report |
-| `envoy yesterbox` | Yesterday's DMs, prioritized |
-
-### Agent Skills (extensible)
-8 bundled skills installed to `~/.envoy/skills/`:
-
-| Skill | Description |
-|---|---|
-| `prep-1on1` | 1:1 meeting prep brief |
-| `prep-meeting` | Any meeting prep brief |
-| `commitment-tracker` | Track promises you made |
-| `response-times` | Email response patterns |
-| `followup-nagger` | Unanswered sent emails |
-| `calendar-audit` | Meeting load & focus time |
-| `slack-catchup` | Slack catch-up |
-| `teamsnap` | Kids' sports schedules |
-
-Add your own skills by dropping a folder with a `SKILL.md` into `~/.envoy/skills/`.
-See [agentskills.io](https://agentskills.io) for the format spec.
-
-## Interactive Commands
-
-In the REPL, type `/help` to see all slash commands:
-
-```
-/briefing          Full briefing (calendar+email+slack)
-/digest 7          Team digest (last 7 days)
-/cleanup           Inbox cleanup
-/customers         Customer scan
-/followup 7        Unanswered sent emails
-/commitments       Promises tracker
-/prep-1on1 alias   1:1 prep brief
-/sharepoint        SharePoint/OneDrive search
-/help              All commands
-```
-
-Most commands accept a number of days as an argument (e.g., `/digest 7`, `/catchup 3`).
+Type `/help` in the REPL to see all slash commands.
 
 ## Updating
 
+Get the latest `envoy.tar.gz`, then:
+
 ```bash
-envoy update
+tar xzf envoy.tar.gz
+cd envoy
+./install.sh
 ```
 
-Or re-run the one-liner to pull the latest.
+Your config in `~/.envoy/` (credentials, personality, memory) is preserved across updates.
 
 ## Troubleshooting
 
 | Problem | Solution |
 |---|---|
-| `MCP server not found` | Install `builder-mcp` and `aws-outlook-mcp` and ensure they're in PATH |
-| `AWS credentials not configured` | Set up `.env` or run `aws login` |
-| `No direct reports found` | Verify alias is correct and you have Phonetool access |
-| `Import errors` | Delete `venv/` and re-run — dependencies will reinstall |
-| `Midway expired` | Run `mwinit` — Envoy auto-refreshes hourly but manual refresh may be needed |
+| `MCP server not found` | Install required MCP servers and ensure they're in PATH |
+| `AWS credentials not configured` | Run `aws login` or create `~/.envoy/.env` |
+| `No direct reports found` | Verify alias and Phonetool access |
+| `Import errors` | Delete `venv/` and re-run `./install.sh` |
+| `Midway expired` | Run `mwinit` (auto-refreshed hourly) |
