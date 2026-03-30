@@ -26,7 +26,11 @@ done
 # Install Python venv + dependencies
 if [ ! -f "$SCRIPT_DIR/venv/bin/python3" ]; then
     echo "  Setting up Python environment..."
-    python3 -m venv "$SCRIPT_DIR/venv"
+    if ! python3 -m venv "$SCRIPT_DIR/venv" 2>/dev/null; then
+        echo "  ⚠  python3-venv not found — installing it..."
+        sudo apt install -y python3-venv || { echo "  ✗ Failed to install python3-venv"; exit 1; }
+        python3 -m venv "$SCRIPT_DIR/venv"
+    fi
     "$SCRIPT_DIR/venv/bin/pip" install -q -r "$SCRIPT_DIR/requirements.txt"
     echo "  ✓ Dependencies installed"
 else
