@@ -73,7 +73,7 @@ Skills are loaded on demand via the [Agent Skills](https://agentskills.io) open 
 | `prep-meeting` | `/prep-meeting` | Any meeting prep brief |
 | `commitment-tracker` | `/commitments` | Track promises you made |
 | `response-times` | `/response-times` | Email response patterns |
-| `followup-nagger` | `/followup` | Unanswered sent emails |
+| `followup-tracker` | `/followup` | Unanswered sent emails |
 | `calendar-audit` | `/cal-audit` | Meeting load & focus time |
 | `slack-catchup` | `/slack-catchup` | Focused Slack catch-up |
 | `teamsnap` | — | Kids' sports schedules |

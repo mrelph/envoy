@@ -487,7 +487,7 @@ def response_time_tracker(days: int = 7) -> str:
 
 
 @tool
-def follow_up_nagger(days: int = 7) -> str:
+def follow_up_tracker(days: int = 7) -> str:
     """Scan your sent emails for unanswered threads — things you sent that never got a reply.
     Surfaces them ranked by urgency with suggested follow-up actions.
     Use when the user asks "what's pending?", "any unanswered emails?", or "what fell through the cracks?".
@@ -495,7 +495,7 @@ def follow_up_nagger(days: int = 7) -> str:
     Args:
         days: Number of days to look back (default 7)
     """
-    return wf.follow_up_nagger(_USER, days)
+    return wf.follow_up_tracker(_USER, days)
 
 
 @tool
@@ -734,7 +734,7 @@ _ALL_TOOLS_RAW = [
     yesterbox,
     calendar_audit,
     response_time_tracker,
-    follow_up_nagger,
+    follow_up_tracker,
     one_on_one_prep,
     commitment_tracker,
     meeting_prep,

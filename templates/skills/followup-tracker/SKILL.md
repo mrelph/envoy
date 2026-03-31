@@ -1,5 +1,5 @@
 ---
-name: followup-nagger
+name: followup-tracker
 description: Scan sent emails for unanswered threads — things you sent that never got a reply. Ranks by urgency and suggests nudge messages. Use when the user asks about follow-ups, unanswered emails, or things that need a nudge.
 metadata:
   author: envoy
@@ -7,7 +7,7 @@ metadata:
 allowed-tools: email_worker
 ---
 
-# Follow-Up Nagger
+# Follow-Up Tracker
 
 ## When to use
 Use when the user asks about unanswered emails, follow-ups needed, or wants to know what they sent that got no reply.

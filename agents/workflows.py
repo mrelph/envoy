@@ -2,7 +2,7 @@
 
 digest, ai_summary, morning_briefing, eod_summary, todo_review, weekly_review,
 pto_catchup, slack_catchup, calendar_audit, response_time_tracker,
-follow_up_nagger, one_on_one_prep, commitment_tracker, meeting_prep,
+follow_up_tracker, one_on_one_prep, commitment_tracker, meeting_prep,
 yesterbox, send_to_ea, recommend_responses, learn_response
 """
 
@@ -183,12 +183,12 @@ Data:
         return f"Error: {e}"
 
 
-def follow_up_nagger(alias: str = "", days: int = 7) -> str:
+def follow_up_tracker(alias: str = "", days: int = 7) -> str:
     alias = alias or _USER
-    return asyncio.run(_follow_up_nagger_async(alias, days))
+    return asyncio.run(_follow_up_tracker_async(alias, days))
 
 
-async def _follow_up_nagger_async(alias: str, days: int) -> str:
+async def _follow_up_tracker_async(alias: str, days: int) -> str:
     start_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
     end_date = datetime.now().strftime('%Y-%m-%d')
     async with outlook() as session:
@@ -224,7 +224,7 @@ async def _follow_up_nagger_async(alias: str, days: int) -> str:
     prompt = f"""Scan {alias}'s sent emails for unanswered threads.
 Compare sent subjects/recipients against inbox replies.
 
-# Follow-Up Nagger
+# Follow-Up Tracker
 ## 🔴 Follow Up Now (no reply, time-sensitive)
 ## 🟡 Gentle Reminder (no reply, not urgent)
 ## 🟢 No Action Needed
