@@ -456,5 +456,35 @@ def prep_meeting(meeting):
     _run_agent_command(_build_prompt(_cmds()['prep-meeting'], meeting=meeting))
 
 
+@cli.command()
+@click.option('--quiet', '-q', is_flag=True, help='Suppress console output')
+@click.option('--notify', '-n', default='slack', type=click.Choice(['slack', 'email', 'none']), help='Notification method')
+def patrol(quiet, notify):
+    """Autonomous patrol — check standing orders and alert on important items."""
+    from agents.patrol import run_patrol
+    run_patrol(quiet=quiet, notify=notify if notify != 'none' else None)
+
+
+@cli.command()
+@click.argument('action', default='list', type=click.Choice(['list', 'add', 'remove', 'suggest']))
+@click.option('--order', '-o', default='', help='Standing order text (for add/remove)')
+def watch(action, order):
+    """Manage patrol standing orders."""
+    from agents.patrol import get_standing_orders, add_order, remove_order, suggest_orders
+    from rich.markdown import Markdown
+    if action == 'list':
+        console.print(Markdown(get_standing_orders()))
+    elif action == 'add':
+        if not order:
+            order = click.prompt("Standing order")
+        console.print(add_order(order))
+    elif action == 'remove':
+        if not order:
+            order = click.prompt("Text to match")
+        console.print(remove_order(order))
+    elif action == 'suggest':
+        console.print(Markdown(suggest_orders()))
+
+
 if __name__ == '__main__':
     cli()
