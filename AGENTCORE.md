@@ -14,10 +14,13 @@ agentcore deploy --config agent_config.json --package envoy-agent.zip
 ## Agent Configuration
 
 See `agent_config.json` for the full configuration. The agent exposes tools for:
-- Team email digest generation
-- Inbox cleanup classification
+- Team email digest generation (reads full thread bodies)
+- Inbox cleanup classification (reads full bodies for accurate triage)
 - Customer email scanning
 - PTO catch-up reports
+- Slack scanning (with user resolution and thread context)
+- Calendar management (recurring meetings, shared calendars)
+- To-do management (full CRUD with due dates and importance)
 
 ### Example Request
 

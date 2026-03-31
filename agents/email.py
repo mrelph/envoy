@@ -1,4 +1,4 @@
-"""Email agent — Outlook fetch, search, read, send, reply, classify, delete."""
+"""Email agent — Outlook fetch, search, read, send, reply, classify, delete, flag, attachments."""
 
 import json
 import os
@@ -10,6 +10,84 @@ from agents.base import (
     outlook, invoke_ai, agent_name, make_tag, log_sent,
     parse_email_search_result,
 )
+
+
+async def read_full_thread(conversation_id: str, session=None) -> str:
+    """Read full email thread body as markdown text."""
+    async def _read(s):
+        result = await s.call_tool("email_read", arguments={
+            "conversationId": conversation_id, "format": "markdown"
+        })
+        return str(result.content[0].text) if result.content else ""
+    if session:
+        return await _read(session)
+    async with outlook() as s:
+        return await _read(s)
+
+
+async def get_attachments(item_id: str, session=None) -> str:
+    """Download and return attachment metadata for an email item."""
+    async def _fetch(s):
+        result = await s.call_tool("email_attachments", arguments={"attachmentId": item_id})
+        return str(result.content[0].text) if result.content else ""
+    try:
+        if session:
+            return await _fetch(session)
+        async with outlook() as s:
+            return await _fetch(s)
+    except Exception:
+        return ""
+
+
+async def flag_email(item_id: str, item_change_key: str, status: str = "Flagged",
+                     due_date: str = "", categories: List[str] = None,
+                     importance: str = "", session=None) -> str:
+    """Flag, categorize, or set importance on an email."""
+    async def _update(s):
+        args = {"itemId": item_id, "itemChangeKey": item_change_key}
+        if status:
+            flag_args = {"status": status}
+            if due_date:
+                flag_args["dueDate"] = due_date
+            args["flag"] = flag_args
+        if categories is not None:
+            args["categories"] = categories
+        if importance:
+            args["importance"] = importance
+        result = await s.call_tool("email_update", arguments=args)
+        return str(result.content[0].text) if result.content else "Updated."
+    try:
+        if session:
+            return await _update(session)
+        async with outlook() as s:
+            return await _update(s)
+    except Exception as e:
+        return f"Error updating email: {e}"
+
+
+async def get_contacts(query: str = "", limit: int = 20) -> str:
+    """Search email contacts."""
+    try:
+        async with outlook() as session:
+            args = {}
+            if query:
+                args["query"] = query
+            if limit:
+                args["limit"] = limit
+            result = await session.call_tool("email_contacts", arguments=args)
+            return str(result.content[0].text) if result.content else "No contacts found."
+    except Exception as e:
+        return f"Error fetching contacts: {e}"
+
+
+async def get_categories() -> List[str]:
+    """Get available email categories."""
+    try:
+        async with outlook() as session:
+            result = await session.call_tool("email_categories", arguments={})
+            return json.loads(result.content[0].text) if result.content else []
+    except Exception:
+        return []
 
 
 async def get_recent_emails(alias: str, days: int = 14, session=None) -> List[Dict]:
@@ -44,12 +122,29 @@ def classify_emails(emails: List[Dict], user_alias: str) -> List[Dict]:
     if not emails:
         return []
     try:
+        # Read full bodies for emails where preview is ambiguous (batch up to 20)
+        import asyncio
+        async def _enrich():
+            async with outlook() as session:
+                for e in emails[:20]:
+                    if e.get('conversationId') and len(e.get('snippet', '')) < 100:
+                        try:
+                            body = await read_full_thread(e['conversationId'], session)
+                            if body:
+                                e['full_body'] = body[:1000]
+                        except Exception:
+                            pass
+        try:
+            asyncio.run(_enrich())
+        except Exception:
+            pass
+
         email_list = ""
         for i, e in enumerate(emails):
-            snippet = e.get('snippet', '')[:150]
+            body_text = e.get('full_body', e.get('snippet', ''))[:500]
             email_list += (
                 f"[{i}] From: {e['from']} | To: {e['to']} | Subject: {e['subject']} | Date: {e['date']}\n"
-                f"    Preview: {snippet}\n\n"
+                f"    Body: {body_text}\n\n"
             )
         prompt = f"""You are a conservative email triage assistant. The user is {user_alias}@amazon.com.
 
@@ -109,28 +204,36 @@ async def delete_emails(conversation_ids: List[str]) -> Dict[str, int]:
     return results
 
 
-async def send_email(to: List[str], subject: str, body: str) -> str:
+async def send_email(to: List[str], subject: str, body: str,
+                     cc: List[str] = None, bcc: List[str] = None) -> str:
     track_tag = make_tag()
     tagged_body = f"{body}<p style='color:#999;font-size:11px'>{track_tag}</p>"
     try:
         async with outlook() as session:
-            await session.call_tool("email_send", arguments={
-                "to": to, "subject": subject, "body": tagged_body
-            })
+            args = {"to": to, "subject": subject, "body": tagged_body}
+            if cc:
+                args["cc"] = cc
+            if bcc:
+                args["bcc"] = bcc
+            await session.call_tool("email_send", arguments=args)
             log_sent(track_tag, "", to[0] if to else "", "email", body[:200])
             return f"✅ Email sent ({track_tag})."
     except Exception as e:
         return f"Error sending email: {e}"
 
 
-async def draft_email(to: List[str], subject: str, body: str) -> str:
+async def draft_email(to: List[str], subject: str, body: str,
+                      cc: List[str] = None, bcc: List[str] = None) -> str:
     track_tag = make_tag()
     tagged_body = f"{body}<p style='color:#999;font-size:11px'>{track_tag}</p>"
     try:
         async with outlook() as session:
-            await session.call_tool("email_draft", arguments={
-                "operation": "create", "to": to, "subject": subject, "body": tagged_body
-            })
+            args = {"operation": "create", "to": to, "subject": subject, "body": tagged_body}
+            if cc:
+                args["cc"] = cc
+            if bcc:
+                args["bcc"] = bcc
+            await session.call_tool("email_draft", arguments=args)
             log_sent(track_tag, "", to[0] if to else "", "email_draft", body[:200])
             return f"✅ Draft created ({track_tag})."
     except Exception as e:

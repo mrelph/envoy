@@ -284,9 +284,20 @@ def invoke_ai(prompt: str, max_tokens: int = 10000, tier: str = "heavy") -> str:
         )
         result_text = None
         for block in response['output']['message']['content']:
-            if 'text' in block:
+            if 'text' in block and isinstance(block['text'], str):
                 result_text = block['text']
                 break
+        if result_text is None:
+            # Thinking models may only return reasoningContent blocks
+            for block in response['output']['message']['content']:
+                rc = block.get('reasoningContent') or {}
+                rt = rc.get('reasoningText')
+                if isinstance(rt, str):
+                    result_text = rt
+                    break
+                elif isinstance(rt, dict) and isinstance(rt.get('text'), str):
+                    result_text = rt['text']
+                    break
         if result_text is None:
             raise ValueError(f"No text block in {model_id} response")
         try:

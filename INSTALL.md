@@ -69,6 +69,17 @@ envoy --help
 
 Type `/help` in the REPL to see all slash commands.
 
+## What's Available
+
+Once installed, Envoy provides full access to:
+
+- **Email** — read full threads, send (with CC/BCC), reply, forward, draft, flag/categorize, attachments, contacts, cleanup
+- **Slack** — scan with user name resolution and thread context, send to DMs/channels/threads, reactions, drafts, file downloads, Slack Lists
+- **Calendar** — view, create (recurring, optional attendees, room resources, reminders), shared calendars, find times, book rooms
+- **To-Do** — list, add (with due dates/importance/reminders), complete, update, delete, subtasks
+- **SharePoint** — search, browse, read, write, lists
+- **Research** — Phonetool, Kingpin, Wiki, Taskei, Broadcast
+
 ## Updating
 
 Get the latest `envoy.tar.gz`, then:

@@ -1,16 +1,119 @@
-"""Slack agent — scan, search, DM, mark read."""
+"""Slack agent — scan, search, DM, channel post, threads, mark read, reactions, drafts, files."""
 
 import json
 from datetime import datetime, timedelta
-from typing import List
+from typing import List, Dict
 
 from agents.base import (
     slack, MCPConnectionError, invoke_ai, make_tag, log_sent, load_sent,
 )
 
 
+async def resolve_user_ids(user_ids: List[str], session=None) -> Dict[str, str]:
+    """Resolve Slack user IDs to display names. Returns {id: name} map."""
+    if not user_ids:
+        return {}
+    unique = list(set(user_ids))[:50]
+    try:
+        async def _resolve(s):
+            result = await s.call_tool("batch_get_user_info", arguments={"users": unique})
+            data = json.loads(result.content[0].text) if result.content else []
+            mapping = {}
+            for item in data:
+                uid = item.get('userId', '')
+                info = item.get('result', {})
+                name = info.get('real_name') or info.get('display_name') or info.get('name') or uid
+                mapping[uid] = name
+            return mapping
+        if session:
+            return await _resolve(session)
+        async with slack() as s:
+            return await _resolve(s)
+    except Exception:
+        return {uid: uid for uid in unique}
+
+
+async def get_thread_replies(channel_id: str, thread_ts: str, session=None) -> List[Dict]:
+    """Fetch replies in a thread."""
+    try:
+        async def _fetch(s):
+            result = await s.call_tool("batch_get_thread_replies", arguments={
+                "threads": [{"channelId": channel_id, "threadTs": thread_ts}]
+            })
+            data = json.loads(result.content[0].text) if result.content else []
+            if data and 'result' in data[0]:
+                return data[0]['result'].get('messages', [])
+            return []
+        if session:
+            return await _fetch(session)
+        async with slack() as s:
+            return await _fetch(s)
+    except Exception:
+        return []
+
+
+async def download_file(file_id: str) -> str:
+    """Download a Slack file/canvas and return its content."""
+    try:
+        async with slack() as session:
+            result = await session.call_tool("download_file_content", arguments={"file": file_id})
+            return str(result.content[0].text) if result.content else "No content."
+    except Exception as e:
+        return f"Error downloading file: {e}"
+
+
+async def get_sections() -> str:
+    """Get channel sidebar sections for prioritization."""
+    try:
+        async with slack() as session:
+            result = await session.call_tool("get_channel_sections", arguments={})
+            return str(result.content[0].text) if result.content else "No sections."
+    except Exception as e:
+        return f"Error fetching sections: {e}"
+
+
+async def add_reaction(channel_id: str = "", timestamp: str = "",
+                       emoji: str = "eyes", slack_url: str = "") -> str:
+    """Add an emoji reaction to a message."""
+    try:
+        async with slack() as session:
+            args = {"operation": "add", "emoji": emoji}
+            if slack_url:
+                args["slackUrl"] = slack_url
+            else:
+                args["channelId"] = channel_id
+                args["timestamp"] = timestamp
+            result = await session.call_tool("reaction_tool", arguments=args)
+            return str(result.content[0].text) if result.content else f"✅ Reacted with :{emoji}:"
+    except Exception as e:
+        return f"Error adding reaction: {e}"
+
+
+async def create_slack_draft(channel_id: str, text: str, thread_ts: str = "") -> str:
+    """Create a draft message in a channel."""
+    try:
+        async with slack() as session:
+            args = {"channelId": channel_id, "text": text}
+            if thread_ts:
+                args["threadTs"] = thread_ts
+            result = await session.call_tool("create_draft", arguments=args)
+            return str(result.content[0].text) if result.content else "✅ Draft created."
+    except Exception as e:
+        return f"Error creating draft: {e}"
+
+
+async def list_slack_drafts() -> str:
+    """List all active draft messages."""
+    try:
+        async with slack() as session:
+            result = await session.call_tool("list_drafts", arguments={})
+            return str(result.content[0].text) if result.content else "No drafts."
+    except Exception as e:
+        return f"Error listing drafts: {e}"
+
+
 async def scan_raw(channels: List[str] = None, days: int = 7) -> str:
-    """Fetch raw Slack messages — DMs first (priority), then channels."""
+    """Fetch raw Slack messages — DMs first (priority), then channels. Resolves user IDs and fetches thread replies."""
     from datetime import timezone
     oldest = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
 
@@ -61,17 +164,73 @@ async def scan_raw(channels: List[str] = None, days: int = 7) -> str:
         for cid, name, kind in channel_ids:
             lookup[cid] = (name_map.get(cid, name), kind)
 
-        lines = []
+        # Collect all user IDs for batch resolution
+        all_user_ids = set()
+        all_messages = []
+        threaded_msgs = []  # (channel_id, thread_ts) for messages with replies
         for item in raw:
             ch_id = item.get('channelId', '')
+            for msg in item.get('result', {}).get('messages', []):
+                uid = msg.get('user', '')
+                if uid:
+                    all_user_ids.add(uid)
+                all_messages.append((ch_id, msg))
+                # Track messages with thread replies
+                if msg.get('reply_count', 0) > 0 and msg.get('ts'):
+                    threaded_msgs.append((ch_id, msg['ts']))
+
+        # Resolve user IDs to names
+        user_names = {}
+        if all_user_ids:
+            try:
+                async with slack() as session:
+                    user_names = await resolve_user_ids(list(all_user_ids), session)
+            except Exception:
+                pass
+
+        # Fetch thread replies for messages with threads (up to 10)
+        thread_lines = {}
+        if threaded_msgs:
+            try:
+                async with slack() as session:
+                    thread_batch = [{"channelId": cid, "threadTs": ts} for cid, ts in threaded_msgs[:10]]
+                    result = await session.call_tool("batch_get_thread_replies", arguments={"threads": thread_batch})
+                    thread_data = json.loads(result.content[0].text) if result.content else []
+                    for i, item in enumerate(thread_data):
+                        if i < len(threaded_msgs):
+                            cid, ts = threaded_msgs[i]
+                            replies = item.get('result', {}).get('messages', [])
+                            # Skip first message (parent), take replies
+                            reply_texts = []
+                            for r in replies[1:5]:  # up to 4 replies
+                                r_uid = r.get('user', '?')
+                                r_name = user_names.get(r_uid, r_uid)
+                                r_text = r.get('text', '')[:300]
+                                if r_text:
+                                    reply_texts.append(f"    ↳ {r_name}: {r_text}")
+                                    if r_uid not in user_names:
+                                        all_user_ids.add(r_uid)
+                            if reply_texts:
+                                thread_lines[(cid, ts)] = "\n".join(reply_texts)
+            except Exception:
+                pass
+
+        lines = []
+        for ch_id, msg in all_messages:
             display, kind = lookup.get(ch_id, (ch_id, "channel"))
             prefix = "🔴 DM" if kind == "dm" else ("🟡 GroupDM" if kind == "group_dm" else f"#{display}")
-            for msg in item.get('result', {}).get('messages', []):
-                text = msg.get('text', '')[:500]
-                if text:
-                    lines.append(f"[{prefix}] {msg.get('user', '?')}: {text}")
+            text = msg.get('text', '')[:500]
+            uid = msg.get('user', '?')
+            name = user_names.get(uid, uid)
+            if text:
+                lines.append(f"[{prefix}] {name}: {text}")
+                # Append thread replies if available
+                ts = msg.get('ts', '')
+                thread_key = (ch_id, ts)
+                if thread_key in thread_lines:
+                    lines.append(thread_lines[thread_key])
 
-        return "\n".join(lines[:200]) if lines else "No Slack messages found in the specified period."
+        return "\n".join(lines[:300]) if lines else "No Slack messages found in the specified period."
     except MCPConnectionError:
         raise
     except Exception as e:
@@ -113,21 +272,30 @@ Messages:
         return f"# Slack Scan Report\n\n**Error:** {e}\n"
 
 
-async def send_dm(recipient: str, message: str) -> str:
+async def send_dm(recipient: str, message: str, thread_ts: str = "") -> str:
+    """Send a Slack message to a person, group, or channel. Supports threaded replies."""
     track_tag = make_tag()
     tagged_msg = f"{message}\n\n`{track_tag}`"
     try:
         async with slack() as session:
-            dm_result = await session.call_tool("open_conversation", arguments={"users": [recipient]})
-            dm_data = json.loads(dm_result.content[0].text) if dm_result.content else {}
-            channel_id = dm_data.get("channelId") or dm_data.get("channel", {}).get("id")
+            # Support channel IDs (group DM or channel) directly
+            if recipient.startswith(("C", "G", "D")):
+                channel_id = recipient
+            else:
+                users = [u.strip() for u in recipient.split(",") if u.strip()]
+                dm_result = await session.call_tool("open_conversation", arguments={"users": users})
+                dm_data = json.loads(dm_result.content[0].text) if dm_result.content else {}
+                channel_id = dm_data.get("channelId") or dm_data.get("channel", {}).get("id")
             if not channel_id:
                 raise Exception("Could not open DM channel")
-            await session.call_tool("post_message", arguments={"channelId": channel_id, "text": tagged_msg})
+            args = {"channelId": channel_id, "text": tagged_msg}
+            if thread_ts:
+                args["threadTs"] = thread_ts
+            await session.call_tool("post_message", arguments=args)
             log_sent(track_tag, channel_id, recipient, "slack", message)
-            return f"✅ Sent DM to {recipient} ({track_tag}):\n\n> {message}"
+            return f"✅ Sent to {recipient} ({track_tag}):\n\n> {message}"
     except Exception as e:
-        return f"❌ Failed to DM {recipient}: {e}"
+        return f"❌ Failed to message {recipient}: {e}"
 
 
 async def mark_read(channel_ids: List[str] = None) -> str:
@@ -180,3 +348,28 @@ async def check_slack_replies() -> str:
     except Exception:
         pass
     return "\n".join(results)
+
+
+async def get_slack_list_items(list_id: str, limit: int = 50) -> str:
+    """Fetch items from a Slack List."""
+    try:
+        async with slack() as session:
+            args = {"list_id": list_id}
+            if limit:
+                args["limit"] = limit
+            result = await session.call_tool("lists_items_list", arguments=args)
+            return str(result.content[0].text) if result.content else "No items found."
+    except Exception as e:
+        return f"Error fetching Slack List: {e}"
+
+
+async def get_slack_list_item(list_id: str, item_id: str) -> str:
+    """Get details of a specific Slack List item."""
+    try:
+        async with slack() as session:
+            result = await session.call_tool("lists_items_info", arguments={
+                "list_id": list_id, "item_id": item_id
+            })
+            return str(result.content[0].text) if result.content else "No item found."
+    except Exception as e:
+        return f"Error fetching Slack List item: {e}"

@@ -33,10 +33,10 @@ envoy/
 │   ├── workers.py           # Domain-specific Strands worker agents (6 workers)
 │   ├── skills.py            # Agent Skills loader (agentskills.io)
 │   ├── workflows.py         # Compound commands (digest, catchup, etc.)
-│   ├── email.py             # Email domain agent
-│   ├── slack_agent.py       # Slack domain agent
-│   ├── calendar.py          # Calendar domain agent
-│   ├── todo.py              # To-Do domain agent
+│   ├── email.py             # Email: send/reply/draft (CC/BCC), read full threads, classify, flag, attachments, contacts
+│   ├── slack_agent.py       # Slack: scan (user resolution + threads), send (DM/channel/threaded), reactions, drafts, files, Lists
+│   ├── calendar.py          # Calendar: view, create (recurring/optional attendees/resources), shared calendars
+│   ├── todo.py              # To-Do: list, add (due dates/importance/reminders), complete, update, delete
 │   ├── people.py            # Phonetool domain agent
 │   ├── sharepoint_agent.py  # SharePoint/OneDrive domain agent
 │   ├── tickets.py           # Tickets domain agent
@@ -62,10 +62,10 @@ envoy/
 
 | Worker | Model Tier | Tools | Domain |
 |---|---|---|---|
-| Email | Medium | inbox, search, send, reply, cleanup, digest | Email operations |
-| Comms | Medium | Slack scan, DM, channel history, mark read | Slack messaging |
-| Calendar | Light | view, create, find times, book rooms | Calendar management |
-| Productivity | Medium | to-dos, tickets, memory, cron, briefings | Task management |
+| Email | Medium | inbox, read full threads, search, send (CC/BCC), reply, forward, draft, move, flag/categorize/importance, cleanup, digest, contacts, attachments | Email operations |
+| Comms | Medium | Slack scan (user ID resolution + thread replies), send (DM/channel/threaded), search, mark read, reactions, drafts, file downloads, Slack Lists, EA delegation | Slack messaging |
+| Calendar | Light | view, create (recurring, optional attendees, room resources, reminders, showAs, all-day), find times, book rooms, shared calendars | Calendar management |
+| Productivity | Medium | to-dos (list, add with due dates/importance/reminders, complete, update, delete), tickets, memory, cron, briefings | Task management |
 | Research | Light | Phonetool, Kingpin, Wiki, Taskei, Broadcast | Internal lookups |
 | SharePoint | Medium | search, files, read, write, lists, analyze | SharePoint/OneDrive |
 
@@ -86,6 +86,52 @@ async with outlook() as session:
 | `aws-outlook-mcp` | `outlook()` | Email, calendar, to-do |
 | `ai-community-slack-mcp` | `slack()` | Slack channels, DMs |
 | `amazon-sharepoint-mcp` | `sharepoint()` | SharePoint/OneDrive |
+
+### MCP Capability Coverage
+
+Each domain agent fully utilizes its MCP server's capabilities:
+
+**Email (aws-outlook-mcp)**
+- `email_send` — with CC/BCC support
+- `email_reply` / `email_forward` — full thread context
+- `email_draft` — with CC/BCC
+- `email_read` — full thread bodies (used in classify, yesterbox, commitments, follow-up, response drafting)
+- `email_search` — with folder and date filtering
+- `email_inbox` / `email_folders` / `email_list_folders` — folder browsing with query
+- `email_move` — move/delete
+- `email_update` — flag (with due dates), categorize, set importance
+- `email_attachments` — download and inspect attachments
+- `email_contacts` — contact lookup
+- `email_categories` — available categories
+
+**Slack (ai-community-slack-mcp)**
+- `list_channels` — DMs, group DMs, public/private channels
+- `batch_get_conversation_history` — channel messages
+- `batch_get_thread_replies` — threaded conversation context
+- `batch_get_user_info` — resolve user IDs to real names
+- `batch_get_channel_info` — channel metadata
+- `post_message` — DMs, channels, and threaded replies (via threadTs)
+- `open_conversation` — open DMs (single or group)
+- `search` — message search
+- `batch_set_last_read` — mark channels read
+- `reaction_tool` — add/remove emoji reactions
+- `create_draft` / `list_drafts` — draft management
+- `download_file_content` — file and canvas downloads
+- `get_channel_sections` — sidebar section awareness
+- `lists_items_list` / `lists_items_info` — Slack Lists
+
+**Calendar (aws-outlook-mcp)**
+- `calendar_view` — day/week view, shared calendars
+- `calendar_meeting` — create/read/update/delete with recurrence, optional attendees, room resources, reminders, showAs, isAllDay
+- `calendar_availability` — multi-user availability check
+- `calendar_room_booking` — room search
+- `calendar_search` — event search
+- `calendar_shared_list` — list shared calendars
+
+**To-Do (aws-outlook-mcp)**
+- `todo_lists` — list, create, update, delete lists
+- `todo_tasks` — list, create (with due dates/importance/reminders), get, update, delete, complete
+- `todo_checklist` — subtask management
 
 ### Agent Skills
 
@@ -154,3 +200,5 @@ Bundled skills live in `templates/skills/` and are copied to `~/.envoy/skills/` 
 - MCP connections use `async with` context managers (not persistent)
 - Worker agents use `callback_handler=None` to suppress streaming output
 - Error handling returns graceful messages, never crashes the REPL
+- Analytical workflows read full email bodies (not just previews) before AI classification
+- Slack scans resolve user IDs to names and include thread replies for full context

@@ -197,6 +197,18 @@ async def _follow_up_nagger_async(alias: str, days: int) -> str:
             "endDate": end_date, "limit": 50
         })
         sent = parse_email_search_result(sent_result)
+        # Read full bodies for sent emails to understand what was asked
+        for e in sent[:15]:
+            if e.get('conversationId'):
+                try:
+                    read_result = await session.call_tool("email_read", arguments={
+                        "conversationId": e['conversationId'], "format": "text"
+                    })
+                    body_text = str(read_result.content[0].text) if read_result.content else ""
+                    if body_text:
+                        e['full_body'] = body_text[:1000]
+                except Exception:
+                    pass
         inbox_result = await session.call_tool("email_search", arguments={
             "query": f"to:{alias}@amazon.com", "startDate": start_date,
             "endDate": end_date, "limit": 100
@@ -206,7 +218,7 @@ async def _follow_up_nagger_async(alias: str, days: int) -> str:
     if not sent:
         return "No sent emails found."
 
-    sent_text = "\n".join(f"- To: {e['to']} | {e['subject']} | {e['date']}" for e in sent[:30])
+    sent_text = "\n".join(f"- To: {e['to']} | {e['subject']} | {e['date']} | {e.get('full_body', e['snippet'])[:400]}" for e in sent[:30])
     inbox_text = "\n".join(f"- From: {e['from']} | {e['subject']} | {e['date']}" for e in inbox[:50])
 
     prompt = f"""Scan {alias}'s sent emails for unanswered threads.
@@ -319,8 +331,20 @@ async def _commitment_tracker_async(alias: str, days: int) -> str:
             })
             sent = parse_email_search_result(result)
             if sent:
+                # Read full bodies for commitment detection (up to 15)
+                for e in sent[:15]:
+                    if e.get('conversationId'):
+                        try:
+                            read_result = await session.call_tool("email_read", arguments={
+                                "conversationId": e['conversationId'], "format": "text"
+                            })
+                            body_text = str(read_result.content[0].text) if read_result.content else ""
+                            if body_text:
+                                e['full_body'] = body_text[:1000]
+                        except Exception:
+                            pass
                 sections.append("SENT EMAILS:\n" + "\n".join(
-                    f"- To: {e['to']} | {e['subject']} | {e['date']} | {e['snippet'][:200]}" for e in sent[:30]))
+                    f"- To: {e['to']} | {e['subject']} | {e['date']} | {e.get('full_body', e['snippet'])[:500]}" for e in sent[:30]))
     except Exception:
         pass
     try:
@@ -434,7 +458,7 @@ def yesterbox(alias: str = "", days: int = 1) -> str:
 
 
 async def _yesterbox_async(alias: str, days: int) -> str:
-    """Yesterbox: process yesterday's emails with AI triage."""
+    """Yesterbox: process yesterday's emails with AI triage — reads full bodies."""
     start_date = (datetime.now() - timedelta(days=days+1)).strftime('%Y-%m-%d')
     end_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
     async with outlook() as session:
@@ -444,11 +468,24 @@ async def _yesterbox_async(alias: str, days: int) -> str:
         })
         emails = parse_email_search_result(result)
 
+        # Read full bodies for top emails (up to 15) for better triage
+        for e in emails[:15]:
+            if e.get('conversationId'):
+                try:
+                    read_result = await session.call_tool("email_read", arguments={
+                        "conversationId": e['conversationId'], "format": "text"
+                    })
+                    body_text = str(read_result.content[0].text) if read_result.content else ""
+                    if body_text:
+                        e['full_body'] = body_text[:1500]
+                except Exception:
+                    pass
+
     if not emails:
         return "No emails from yesterday to process."
 
     email_list = "\n".join(
-        f"[{i}] From: {e['from']} | Subject: {e['subject']} | Date: {e['date']} | Preview: {e['snippet'][:200]}"
+        f"[{i}] From: {e['from']} | Subject: {e['subject']} | Date: {e['date']}\nBody: {e.get('full_body', e['snippet'])[:800]}"
         for i, e in enumerate(emails))
 
     prompt = f"""Yesterbox triage for {alias} — emails from {start_date} to {end_date}.
@@ -533,9 +570,21 @@ async def _recommend_responses_async(alias: str, days: int) -> str:
                 "startDate": start_date, "endDate": end_date, "limit": 30
             })
             for e in parse_email_search_result(result):
-                messages.append({"medium": "email", "from": e.get("from", ""),
+                msg = {"medium": "email", "from": e.get("from", ""),
                     "subject": e.get("subject", ""), "preview": e.get("snippet", ""),
-                    "date": e.get("date", ""), "conversation_id": e.get("conversationId", "")})
+                    "date": e.get("date", ""), "conversation_id": e.get("conversationId", "")}
+                # Read full body for better response drafting (up to 10)
+                if len(messages) < 10 and e.get("conversationId"):
+                    try:
+                        read_result = await session.call_tool("email_read", arguments={
+                            "conversationId": e['conversationId'], "format": "text"
+                        })
+                        body_text = str(read_result.content[0].text) if read_result.content else ""
+                        if body_text:
+                            msg["preview"] = body_text[:1000]
+                    except Exception:
+                        pass
+                messages.append(msg)
     except Exception as ex:
         messages.append({"medium": "email", "error": str(ex)})
 

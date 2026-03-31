@@ -43,36 +43,64 @@ def _create_email_worker():
     @tool
     def email_operation(operation: str, conversation_id: str = "", query: str = "",
                         to: str = "", subject: str = "", body: str = "",
+                        cc: str = "", bcc: str = "",
                         folder: str = "", limit: int = 25,
                         item_id: str = "", item_change_key: str = "",
-                        reply_all: bool = False, target_folder: str = "") -> str:
-        """Full email control — read, search, send, reply, forward, draft, move.
+                        reply_all: bool = False, target_folder: str = "",
+                        flag_status: str = "", flag_due_date: str = "",
+                        categories: str = "", importance: str = "") -> str:
+        """Full email control — read, search, send, reply, forward, draft, move, flag, categories, contacts, attachments.
         Args:
-            operation: inbox, read, search, send, reply, forward, draft, move, folders
+            operation: inbox, read, search, send, reply, forward, draft, move, folders, flag, contacts, attachments
             conversation_id: For read/move
-            query: For search
+            query: For search/contacts
             to: Comma-separated emails (send/reply/forward/draft)
             subject: Email subject (send/draft)
             body: Email body (send/reply/forward/draft)
+            cc: Comma-separated CC emails (send/draft)
+            bcc: Comma-separated BCC emails (send/draft)
             folder: Folder name (folders)
             limit: Max results
-            item_id: Item ID (reply/forward)
-            item_change_key: Change key (reply/forward)
+            item_id: Item ID (reply/forward/flag/attachments)
+            item_change_key: Change key (reply/forward/flag)
             reply_all: Reply to all (reply)
             target_folder: Target folder (move)
+            flag_status: Flagged, Complete, or NotFlagged (flag)
+            flag_due_date: Due date YYYY-MM-DD (flag)
+            categories: Comma-separated category names (flag)
+            importance: Low, Normal, or High (flag)
         """
         from tools import _outlook_tool
         def _emails(s): return [e.strip() for e in s.split(",") if e.strip()]
+        def _send_args():
+            args = {"to": _emails(to), "subject": subject, "body": body}
+            if cc: args["cc"] = _emails(cc)
+            if bcc: args["bcc"] = _emails(bcc)
+            return args
+        def _draft_args():
+            args = {"operation": "create", "to": _emails(to), "subject": subject, "body": body}
+            if cc: args["cc"] = _emails(cc)
+            if bcc: args["bcc"] = _emails(bcc)
+            return args
+        def _flag_args():
+            args = {"itemId": item_id, "itemChangeKey": item_change_key}
+            if flag_status: args["flag"] = {"status": flag_status, **({"dueDate": flag_due_date} if flag_due_date else {})}
+            if categories: args["categories"] = _emails(categories)
+            if importance: args["importance"] = importance
+            return args
         ops = {
             "inbox": lambda: _outlook_tool("email_inbox", {"limit": limit}),
             "read": lambda: _outlook_tool("email_read", {"conversationId": conversation_id}),
             "search": lambda: _outlook_tool("email_search", {"query": query, "limit": limit, **({"folder": folder} if folder else {})}),
-            "send": lambda: _outlook_tool("email_send", {"to": _emails(to), "subject": subject, "body": body}),
+            "send": lambda: _outlook_tool("email_send", _send_args()),
             "reply": lambda: _outlook_tool("email_reply", {"itemId": item_id, "itemChangeKey": item_change_key, "body": body, "replyAll": reply_all}),
             "forward": lambda: _outlook_tool("email_forward", {"itemId": item_id, "itemChangeKey": item_change_key, "to": _emails(to), **({"body": body} if body else {})}),
-            "draft": lambda: _outlook_tool("email_draft", {"operation": "create", "to": _emails(to), "subject": subject, "body": body}),
+            "draft": lambda: _outlook_tool("email_draft", _draft_args()),
             "move": lambda: _outlook_tool("email_move", {"conversationId": conversation_id, "targetFolder": target_folder}),
-            "folders": lambda: _outlook_tool("email_folders", {"folder": folder, "limit": limit}) if folder else _outlook_tool("email_list_folders", {}),
+            "folders": lambda: _outlook_tool("email_folders", {"folder": folder, "limit": limit, **({"query": query} if query else {})}) if folder else _outlook_tool("email_list_folders", {}),
+            "flag": lambda: _outlook_tool("email_update", _flag_args()),
+            "contacts": lambda: _outlook_tool("email_contacts", {"query": query, "limit": limit}),
+            "attachments": lambda: _outlook_tool("email_attachments", {"attachmentId": item_id}),
         }
         fn = ops.get(operation)
         return fn() if fn else f"Unknown operation: {operation}"
@@ -155,7 +183,7 @@ def _create_comms_worker():
 
     @tool
     def scan_channels(channels: str = "", days: int = 7) -> str:
-        """Scan Slack channels for activity and action items.
+        """Scan Slack channels for activity and action items. Resolves user names and includes thread replies.
         Args:
             channels: Comma-separated channel IDs (empty = auto-detect)
             days: Days to look back
@@ -164,13 +192,14 @@ def _create_comms_worker():
         return asyncio.run(slack_mod.scan(ch_list, days))
 
     @tool
-    def send_dm(recipient: str, message: str) -> str:
-        """Send a Slack DM by alias.
+    def send_message(recipient: str, message: str, thread_ts: str = "") -> str:
+        """Send a Slack message to a person, group, or channel. Supports threaded replies.
         Args:
-            recipient: Amazon login alias
+            recipient: Single alias, comma-separated aliases for group DM, or channel ID (C/G/D prefix)
             message: Message text
+            thread_ts: Parent message timestamp for threaded reply (optional)
         """
-        return asyncio.run(slack_mod.send_dm(recipient, message))
+        return asyncio.run(slack_mod.send_dm(recipient, message, thread_ts))
 
     @tool
     def mark_read(channel_ids: str = "") -> str:
@@ -199,10 +228,41 @@ def _create_comms_worker():
         """
         return wf.send_to_ea(message, ea_alias=ea_alias or None, category=category)
 
+    @tool
+    def slack_extras(operation: str, channel_id: str = "", timestamp: str = "",
+                     emoji: str = "eyes", text: str = "", thread_ts: str = "",
+                     file_id: str = "", slack_url: str = "",
+                     list_id: str = "", item_id: str = "", limit: int = 50) -> str:
+        """Additional Slack operations — reactions, drafts, file downloads, channel sections, Slack Lists.
+        Args:
+            operation: react, draft, list_drafts, download_file, sections, list_items, list_item_detail
+            channel_id: Channel ID (for react, draft)
+            timestamp: Message timestamp (for react)
+            emoji: Emoji name without colons (for react, default: eyes)
+            text: Draft message text (for draft)
+            thread_ts: Thread timestamp (for draft threaded reply)
+            file_id: Slack file/canvas ID (for download_file)
+            slack_url: Slack message URL (alternative to channel_id+timestamp for react)
+            list_id: Slack List ID (for list_items, list_item_detail)
+            item_id: Slack List item ID (for list_item_detail)
+            limit: Max items (for list_items)
+        """
+        ops = {
+            "react": lambda: asyncio.run(slack_mod.add_reaction(channel_id, timestamp, emoji, slack_url)),
+            "draft": lambda: asyncio.run(slack_mod.create_slack_draft(channel_id, text, thread_ts)),
+            "list_drafts": lambda: asyncio.run(slack_mod.list_slack_drafts()),
+            "download_file": lambda: asyncio.run(slack_mod.download_file(file_id)),
+            "sections": lambda: asyncio.run(slack_mod.get_sections()),
+            "list_items": lambda: asyncio.run(slack_mod.get_slack_list_items(list_id, limit)),
+            "list_item_detail": lambda: asyncio.run(slack_mod.get_slack_list_item(list_id, item_id)),
+        }
+        fn = ops.get(operation)
+        return fn() if fn else f"Unknown operation: {operation}"
+
     return Agent(
             model=_model("medium"),
-            system_prompt="You are a Slack and communications specialist. You scan channels, send DMs, search messages, and delegate to EAs. Be concise.",
-            tools=[scan_channels, send_dm, mark_read, search_messages, send_to_ea],
+            system_prompt="You are a Slack and communications specialist. You scan channels (with user name resolution and thread context), send messages (DMs, channels, threaded replies), search, add reactions, manage drafts, download files, and delegate to EAs. Be concise.",
+            tools=[scan_channels, send_message, mark_read, search_messages, send_to_ea, slack_extras],
             callback_handler=None,
         )
 
@@ -226,26 +286,41 @@ def _create_calendar_worker():
 
     @tool
     def calendar_operation(operation: str, subject: str = "", start: str = "", end: str = "",
-                           attendees: str = "", location: str = "", body: str = "",
+                           attendees: str = "", optional_attendees: str = "",
+                           resources: str = "", location: str = "", body: str = "",
                            meeting_id: str = "", meeting_change_key: str = "",
                            building: str = "", duration: int = 30, days_ahead: int = 5,
-                           start_date: str = "", end_date: str = "") -> str:
-        """Full calendar control — create, read, update, delete, search, find_time, find_room.
+                           start_date: str = "", end_date: str = "",
+                           recurrence_pattern: str = "", recurrence_interval: int = 1,
+                           recurrence_days: str = "", recurrence_end_date: str = "",
+                           reminder_minutes: int = -1, show_as: str = "",
+                           is_all_day: bool = False, calendar_id: str = "") -> str:
+        """Full calendar control — create, read, update, delete, search, find_time, find_room, shared_calendars.
         Args:
-            operation: create, read, update, delete, search, find_time, find_room
+            operation: create, read, update, delete, search, find_time, find_room, shared_calendars, view_shared
             subject: Meeting subject
             start: Start ISO datetime
             end: End ISO datetime
-            attendees: Comma-separated emails
+            attendees: Comma-separated required attendee emails/aliases
+            optional_attendees: Comma-separated optional attendee emails/aliases
+            resources: Comma-separated room resource emails
             location: Meeting location
             body: Meeting description
             meeting_id: Meeting ID (read/update/delete)
             meeting_change_key: Change key (update/delete)
             building: Building code for find_room
             duration: Minutes for find_time
-            days_ahead: Days ahead for find_time
+            days_ahead: Days ahead for find_time/view_shared
             start_date: Start date MM-DD-YYYY
             end_date: End date MM-DD-YYYY
+            recurrence_pattern: daily, weekly, or monthly (for recurring meetings)
+            recurrence_interval: Interval between occurrences (default 1)
+            recurrence_days: Comma-separated days for weekly (e.g. Monday,Wednesday)
+            recurrence_end_date: End date for recurrence YYYY-MM-DD
+            reminder_minutes: Reminder before meeting in minutes (-1 = default, 0 = none)
+            show_as: free, busy, tentative, or away
+            is_all_day: Whether this is an all-day event
+            calendar_id: Shared calendar ID (for view_shared)
         """
         from tools import _outlook_tool
         if operation == "find_time":
@@ -255,15 +330,34 @@ def _create_calendar_worker():
             return asyncio.run(cal_mod.book_room(building, start, end))
         if operation == "search":
             return _outlook_tool("calendar_search", {"query": subject, "limit": 25})
+        if operation == "shared_calendars":
+            return asyncio.run(cal_mod.list_shared_calendars())
+        if operation == "view_shared":
+            return asyncio.run(cal_mod.view_shared_calendar(calendar_id, start_date, days_ahead))
         args = {"operation": operation}
         if subject: args["subject"] = subject
         if start: args["start"] = start
         if end: args["end"] = end
-        if attendees: args["attendees"] = [a.strip() for a in attendees.split(",")]
+        if attendees:
+            args["attendees"] = [f"{a.strip()}@amazon.com" if "@" not in a.strip() else a.strip() for a in attendees.split(",")]
+        if optional_attendees:
+            args["optionalAttendees"] = [f"{a.strip()}@amazon.com" if "@" not in a.strip() else a.strip() for a in optional_attendees.split(",")]
+        if resources:
+            args["resources"] = [r.strip() for r in resources.split(",")]
         if location: args["location"] = location
         if body: args["body"] = body
         if meeting_id: args["meetingId"] = meeting_id
         if meeting_change_key: args["meetingChangeKey"] = meeting_change_key
+        if is_all_day: args["isAllDay"] = True
+        if show_as: args["showAs"] = show_as
+        if reminder_minutes >= 0: args["reminderMinutes"] = reminder_minutes
+        if recurrence_pattern:
+            rec = {"pattern": recurrence_pattern, "interval": recurrence_interval}
+            if recurrence_days:
+                rec["daysOfWeek"] = [d.strip() for d in recurrence_days.split(",")]
+            if recurrence_end_date:
+                rec["endDate"] = recurrence_end_date
+            args["recurrence"] = rec
         return _outlook_tool("calendar_meeting", args)
 
     @tool
@@ -279,7 +373,7 @@ def _create_calendar_worker():
 
     return Agent(
             model=_model("light"),
-            system_prompt="You are a calendar specialist. You view schedules, create meetings, find available times, and book rooms. Use Outlook for calendar operations and meetings.amazon.com only for finding meeting rooms. Return structured data.",
+            system_prompt="You are a calendar specialist. You view schedules, create meetings (including recurring with optional attendees and room resources), find available times, book rooms, and access shared calendars. Use Outlook for calendar operations and meetings.amazon.com only for finding meeting rooms. Return structured data.",
             tools=[view, calendar_operation, find_meeting_room],
             callback_handler=None,
         )
@@ -296,23 +390,48 @@ def _create_productivity_worker():
 
     @tool
     def todo_items(operation: str = "list", items: str = "", list_name: str = "",
-                   task_title: str = "", subtasks: str = "") -> str:
-        """Manage To-Do items — list, add, or add subtasks.
+                   task_title: str = "", subtasks: str = "",
+                   due_date: str = "", importance: str = "", new_title: str = "",
+                   status: str = "", body: str = "") -> str:
+        """Manage To-Do items — list, add, complete, update, delete, or add subtasks.
         Args:
-            operation: list, add, subtasks, review
-            items: Newline-separated items to add
-            list_name: To-Do list name (for subtasks)
-            task_title: Task title (for subtasks)
+            operation: list, add, complete, update, delete, subtasks, review
+            items: Newline-separated items to add (for add)
+            list_name: To-Do list name
+            task_title: Task title (for complete/update/delete/subtasks)
             subtasks: Newline-separated subtask items
+            due_date: Due date ISO format (for add/update)
+            importance: low, normal, or high (for add/update)
+            new_title: New title (for update)
+            status: notStarted, inProgress, completed, waitingOnOthers, deferred (for update)
+            body: Task body/notes (for add/update)
         """
         if operation == "review":
             return wf.todo_review(_USER)
         if operation == "add":
-            action_items = [{"title": l.strip()} for l in items.split("\n") if l.strip()]
+            action_items = []
+            for l in items.split("\n"):
+                l = l.strip()
+                if not l:
+                    continue
+                item = {"title": l}
+                if due_date: item["due_date"] = due_date
+                if importance: item["importance"] = importance
+                if body: item["body"] = body
+                action_items.append(item)
             if not action_items:
                 return "No items provided."
-            ok = asyncio.run(todo_mod.add_tasks(action_items))
+            ok = asyncio.run(todo_mod.add_tasks(action_items, list_name or None))
             return f"Added {len(action_items)} items." if ok else "Failed to add items."
+        if operation == "complete":
+            return asyncio.run(todo_mod.complete_task(list_name or "Envoy Action Items", task_title))
+        if operation == "update":
+            return asyncio.run(todo_mod.update_task(
+                list_name or "Envoy Action Items", task_title,
+                new_title=new_title, due_date=due_date, importance=importance,
+                status=status, body=body))
+        if operation == "delete":
+            return asyncio.run(todo_mod.delete_task(list_name or "Envoy Action Items", task_title))
         if operation == "subtasks":
             sub_list = [s.strip() for s in subtasks.split("\n") if s.strip()]
             return asyncio.run(todo_mod.add_subtasks(list_name, task_title, sub_list))
@@ -359,7 +478,7 @@ def _create_productivity_worker():
 
     return Agent(
             model=_model("medium"),
-            system_prompt="You are a productivity specialist. You manage to-dos, scan tickets, maintain memory, run briefings, and manage cron jobs. Be action-oriented.",
+            system_prompt="You are a productivity specialist. You manage to-dos (list, add with due dates/importance, complete, update, delete), scan tickets, maintain memory, run briefings, and manage cron jobs. Be action-oriented.",
             tools=[todo_items, tickets, remember_item, cron_jobs, briefing_report],
             callback_handler=None,
         )

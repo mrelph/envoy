@@ -117,17 +117,57 @@ async def book_room(building: str, start_time: str, end_time: str) -> str:
 
 
 async def create_meeting(subject: str, start: str, end: str,
-                         attendees: List[str] = None, location: str = "", body: str = "") -> str:
+                         attendees: List[str] = None, location: str = "", body: str = "",
+                         optional_attendees: List[str] = None, resources: List[str] = None,
+                         recurrence: dict = None, reminder_minutes: int = None,
+                         show_as: str = "", is_all_day: bool = False) -> str:
     try:
         async with outlook() as session:
             args = {"operation": "create", "subject": subject, "start": start, "end": end}
             if attendees:
-                args["attendees"] = [f"{a}@amazon.com" for a in attendees]
+                args["attendees"] = [f"{a}@amazon.com" if "@" not in a else a for a in attendees]
+            if optional_attendees:
+                args["optionalAttendees"] = [f"{a}@amazon.com" if "@" not in a else a for a in optional_attendees]
+            if resources:
+                args["resources"] = resources
             if location:
                 args["location"] = location
             if body:
                 args["body"] = body
+            if recurrence:
+                args["recurrence"] = recurrence
+            if reminder_minutes is not None:
+                args["reminderMinutes"] = reminder_minutes
+            if show_as:
+                args["showAs"] = show_as
+            if is_all_day:
+                args["isAllDay"] = True
             result = await session.call_tool("calendar_meeting", arguments=args)
             return str(result.content[0].text) if result.content else "Meeting created."
     except Exception as e:
         return f"Error creating meeting: {e}"
+
+
+async def list_shared_calendars() -> str:
+    """List shared calendars accessible to the current user."""
+    try:
+        async with outlook() as session:
+            result = await session.call_tool("calendar_shared_list", arguments={})
+            return str(result.content[0].text) if result.content else "No shared calendars found."
+    except Exception as e:
+        return f"Error listing shared calendars: {e}"
+
+
+async def view_shared_calendar(calendar_id: str, start_date: str = "", days: int = 1) -> str:
+    """View events from a shared calendar."""
+    if not start_date:
+        start_date = datetime.now().strftime('%m-%d-%Y')
+    try:
+        async with outlook() as session:
+            args = {"view": "week" if days > 1 else "day", "start_date": start_date, "calendar_id": calendar_id}
+            if days > 1:
+                args["end_date"] = (datetime.now() + timedelta(days=days)).strftime('%m-%d-%Y')
+            result = await session.call_tool("calendar_view", arguments=args)
+            return str(result.content[0].text) if result.content else "No events found."
+    except Exception as e:
+        return f"Error viewing shared calendar: {e}"

@@ -201,40 +201,6 @@ cp .env.example .env
 
 The tool tries `.env` first, then falls back to the default AWS credential chain.
 
-## Project Structure
-
-```
-envoy/
-├── envoy                    # Entrypoint (auto-installs venv)
-├── cli.py                   # CLI commands → agent prompts
-├── agent.py                 # Strands agent factory + system prompt
-├── repl.py                  # Interactive REPL with slash commands
-├── ui.py                    # Rich console rendering
-├── tools.py                 # Strands @tool definitions + worker routing
-├── supervisor.py            # Parallel data gathering
-├── templates/
-│   ├── commands.md          # Core command prompts
-│   ├── skills/              # Bundled Agent Skills (8 skills)
-│   └── soul.md / envoy.md / process.md
-├── agents/
-│   ├── base.py              # MCP connections, Bedrock client, AI invocation
-│   ├── workers.py           # Domain-specific Strands worker agents
-│   ├── skills.py            # Agent Skills loader (agentskills.io)
-│   ├── workflows.py         # Compound commands (digest, catchup, etc.)
-│   ├── email.py             # Email domain agent
-│   ├── slack_agent.py       # Slack domain agent
-│   ├── calendar.py          # Calendar domain agent
-│   ├── todo.py              # To-Do domain agent
-│   ├── people.py            # Phonetool domain agent
-│   ├── sharepoint_agent.py  # SharePoint/OneDrive domain agent
-│   ├── tickets.py           # Tickets domain agent
-│   ├── memory.py / memory2.py  # Persistent memory (with size limits)
-│   ├── observer.py          # Observer/learning agent
-│   ├── internal.py          # Internal websites (Kingpin, Wiki, Taskei)
-│   ├── export.py            # Word/PowerPoint export
-│   └── teamsnap_agent.py    # TeamSnap integration
-```
-
 ## Architecture
 
 ### Worker Agents
@@ -243,10 +209,10 @@ The supervisor agent routes requests to specialized workers, each with focused t
 
 | Worker | Tier | Tools | Domain |
 |---|---|---|---|
-| Email | Medium | inbox, search, send, reply, cleanup, digest | Email operations |
-| Comms | Medium | Slack scan, DM, channel history, mark read | Slack messaging |
-| Calendar | Light | view, create, find times, book rooms | Calendar management |
-| Productivity | Medium | to-dos, tickets, memory, cron, briefings | Task management |
+| Email | Medium | inbox, read, search, send (with CC/BCC), reply, forward, draft, move, flag/categorize, cleanup, digest, contacts, attachments | Email operations |
+| Comms | Medium | Slack scan (with user resolution + thread context), send messages (DMs, channels, threaded replies), search, mark read, reactions, drafts, file downloads, Slack Lists, EA delegation | Slack messaging |
+| Calendar | Light | view, create (recurring, optional attendees, room resources), find times, book rooms, shared calendars | Calendar management |
+| Productivity | Medium | to-dos (list, add with due dates/importance, complete, update, delete), tickets, memory, cron, briefings | Task management |
 | Research | Light | Phonetool, Kingpin, Wiki, Taskei, Broadcast | Internal lookups |
 | SharePoint | Medium | search, files, read, write, lists, analyze | SharePoint/OneDrive |
 
@@ -287,6 +253,40 @@ Skills follow the [Agent Skills](https://agentskills.io) open standard:
 - MCP server stderr suppressed to prevent information leakage
 - Demo mode masks all PII (names, emails, aliases)
 
+## Project Structure
+
+```
+envoy/
+├── envoy                    # Entrypoint (auto-installs venv)
+├── cli.py                   # CLI commands → agent prompts
+├── agent.py                 # Strands agent factory + system prompt
+├── repl.py                  # Interactive REPL with slash commands
+├── ui.py                    # Rich console rendering
+├── tools.py                 # Strands @tool definitions + worker routing
+├── supervisor.py            # Parallel data gathering
+├── templates/
+│   ├── commands.md          # Core command prompts
+│   ├── skills/              # Bundled Agent Skills (8 skills)
+│   └── soul.md / envoy.md / process.md
+├── agents/
+│   ├── base.py              # MCP connections, Bedrock client, AI invocation
+│   ├── workers.py           # Domain-specific Strands worker agents
+│   ├── skills.py            # Agent Skills loader (agentskills.io)
+│   ├── workflows.py         # Compound commands (digest, catchup, etc.)
+│   ├── email.py             # Email: send/reply/draft (CC/BCC), read full threads, classify, flag, attachments, contacts
+│   ├── slack_agent.py       # Slack: scan (user resolution + threads), send (DM/channel/threaded), reactions, drafts, files, Lists
+│   ├── calendar.py          # Calendar: view, create (recurring/optional attendees/resources), shared calendars
+│   ├── todo.py              # To-Do: list, add (due dates/importance/reminders), complete, update, delete
+│   ├── people.py            # Phonetool domain agent
+│   ├── sharepoint_agent.py  # SharePoint/OneDrive domain agent
+│   ├── tickets.py           # Tickets domain agent
+│   ├── memory.py / memory2.py  # Persistent memory (with size limits)
+│   ├── observer.py          # Observer/learning agent
+│   ├── internal.py          # Internal websites (Kingpin, Wiki, Taskei)
+│   ├── export.py            # Word/PowerPoint export
+│   └── teamsnap_agent.py    # TeamSnap integration
+```
+
 ## Additional Docs
 
 - [INSTALL.md](INSTALL.md) — Detailed installation guide
@@ -304,4 +304,4 @@ Skills follow the [Agent Skills](https://agentskills.io) open standard:
 | `Import errors` | Delete `venv/` and re-run — dependencies reinstall |
 | `Midway expired` | Run `mwinit` (auto-refreshed hourly) |
 | `Token limit exceeded` | Document too large for model context — content is auto-truncated |
-| `Cleanup too aggressive` | Classifier is conservative; only true junk flagged DELETE |
+| `Cleanup too aggressive` | Classifier reads full email bodies and is conservative; only true junk flagged DELETE |

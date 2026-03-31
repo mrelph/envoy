@@ -67,7 +67,7 @@ async def fetch_todos_full() -> str:
 
 
 async def add_tasks(action_items: List[Dict[str, str]], list_name: str = None) -> bool:
-    """Add action items as tasks to Microsoft To-Do."""
+    """Add action items as tasks to Microsoft To-Do with due dates and importance."""
     list_name = list_name or "Envoy Action Items"
     try:
         async with outlook() as session:
@@ -87,14 +87,100 @@ async def add_tasks(action_items: List[Dict[str, str]], list_name: str = None) -
             if not list_id:
                 return False
             for item in action_items:
-                await session.call_tool("todo_tasks", arguments={
+                args = {
                     "operation": "create", "listId": list_id,
                     "title": item.get("title", "Action item"),
-                    "body": item.get("owner", ""),
-                })
+                }
+                if item.get("body") or item.get("owner"):
+                    args["body"] = item.get("body") or item.get("owner", "")
+                if item.get("due_date"):
+                    args["dueDateTime"] = item["due_date"]
+                if item.get("importance"):
+                    args["importance"] = item["importance"]
+                if item.get("reminder"):
+                    args["isReminderOn"] = True
+                    args["reminderDateTime"] = item["reminder"]
+                await session.call_tool("todo_tasks", arguments=args)
             return True
     except Exception:
         return False
+
+
+async def complete_task(list_name: str, task_title: str) -> str:
+    """Mark a task as completed."""
+    try:
+        async with outlook() as session:
+            list_id, task_id = await _find_task(session, list_name, task_title)
+            if not task_id:
+                return list_id  # error message
+            await session.call_tool("todo_tasks", arguments={
+                "operation": "complete", "listId": list_id, "taskId": task_id
+            })
+            return f"✅ Completed '{task_title}'."
+    except Exception as e:
+        return f"Error completing task: {e}"
+
+
+async def update_task(list_name: str, task_title: str, new_title: str = "",
+                      due_date: str = "", importance: str = "", status: str = "",
+                      body: str = "") -> str:
+    """Update a task's properties."""
+    try:
+        async with outlook() as session:
+            list_id, task_id = await _find_task(session, list_name, task_title)
+            if not task_id:
+                return list_id  # error message
+            args = {"operation": "update", "listId": list_id, "taskId": task_id}
+            if new_title:
+                args["title"] = new_title
+            if due_date:
+                args["dueDateTime"] = due_date
+            if importance:
+                args["importance"] = importance
+            if status:
+                args["status"] = status
+            if body:
+                args["body"] = body
+            await session.call_tool("todo_tasks", arguments=args)
+            return f"✅ Updated '{task_title}'."
+    except Exception as e:
+        return f"Error updating task: {e}"
+
+
+async def delete_task(list_name: str, task_title: str) -> str:
+    """Delete a task."""
+    try:
+        async with outlook() as session:
+            list_id, task_id = await _find_task(session, list_name, task_title)
+            if not task_id:
+                return list_id  # error message
+            await session.call_tool("todo_tasks", arguments={
+                "operation": "delete", "listId": list_id, "taskId": task_id
+            })
+            return f"✅ Deleted '{task_title}'."
+    except Exception as e:
+        return f"Error deleting task: {e}"
+
+
+async def _find_task(session, list_name: str, task_title: str) -> tuple:
+    """Helper to find a task by list name and title. Returns (list_id, task_id) or (error_msg, None)."""
+    lists_result = await session.call_tool("todo_lists", arguments={"operation": "list"})
+    lists_data = parse_todo_response(lists_result)
+    list_id = None
+    for lst in lists_data.get("value", []):
+        if lst["displayName"].lower() == list_name.lower():
+            list_id = lst["id"]
+            break
+    if not list_id:
+        return (f"List '{list_name}' not found.", None)
+    tasks_result = await session.call_tool("todo_tasks", arguments={
+        "operation": "list", "listId": list_id
+    })
+    tasks_data = parse_todo_response(tasks_result)
+    for t in tasks_data.get("value", []):
+        if task_title.lower() in t.get("title", "").lower():
+            return (list_id, t["id"])
+    return (f"Task '{task_title}' not found in '{list_name}'.", None)
 
 
 async def add_subtasks(list_name: str, task_title: str, subtasks: List[str]) -> str:
