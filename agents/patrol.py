@@ -129,13 +129,18 @@ async def _gather_context(days: int = 1) -> str:
 
 def run_patrol(quiet: bool = False, notify: str = "slack") -> str:
     """Main patrol entry point. Called by cron or CLI."""
+    return asyncio.run(_run_patrol_async(quiet, notify))
+
+
+async def _run_patrol_async(quiet: bool = False, notify: str = "slack") -> str:
+    """Async patrol — single event loop avoids MCP process cleanup races."""
     _ensure_files()
     orders = get_standing_orders()
     state = _prune_old_alerts(_load_state())
     recent_memory = memory.recall("", limit=10)
 
     # Gather fresh data
-    context = asyncio.run(_gather_context())
+    context = await _gather_context()
 
     # Build recent alerts summary for dedup
     already_reported = "\n".join(
@@ -193,9 +198,9 @@ Respond with ONLY the alerts or ALL_CLEAR. No preamble."""
     message = f"{header}\n\n{result}"
 
     if notify == "slack":
-        asyncio.run(slack_agent.send_dm(_USER, message))
+        await slack_agent.send_dm(_USER, message)
     elif notify == "email":
-        asyncio.run(email.email_digest(message, _USER, 0))
+        await email.email_digest(message, _USER, 0)
 
     if not quiet:
         print(message)
