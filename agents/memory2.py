@@ -379,6 +379,34 @@ def migrate_old_memory():
                 pass
         os.rename(old_observations, old_observations + ".migrated")
 
+    # Migrate daily summaries from days/ directory
+    if os.path.exists(old_days) and os.path.isdir(old_days):
+        for fname in sorted(os.listdir(old_days)):
+            if not fname.endswith(".json"):
+                continue
+            fpath = os.path.join(old_days, fname)
+            try:
+                data = json.loads(open(fpath).read())
+                date_str = data.get("date", fname.replace(".json", ""))
+                text = data.get("text", "")
+                if text:
+                    entry_id = date_str.replace("-", "") + "235900"
+                    entry = {
+                        "id": entry_id,
+                        "ts": f"{date_str}T23:59:00",
+                        "type": "context",
+                        "text": text[:MAX_ENTRY_LEN],
+                        "entities": _extract_entities(text),
+                    }
+                    _ensure_dir()
+                    with open(ENTRIES_FILE, "a") as f:
+                        f.write(json.dumps(entry) + "\n")
+                    _index_entry(entry_id, entry["entities"])
+                    migrated += 1
+            except Exception:
+                pass
+        os.rename(old_days, old_days + ".migrated")
+
     # Migrate monthly summary
     if os.path.exists(old_monthly):
         try:
@@ -391,3 +419,12 @@ def migrate_old_memory():
         os.rename(old_monthly, old_monthly + ".migrated")
 
     return f"Migrated {migrated} entries from old format." if migrated else "Nothing to migrate."
+
+
+# Auto-migrate old format on first import (idempotent — renames files after migration)
+_old_days = os.path.join(MEMORY_DIR, "days")
+if os.path.exists(_old_days) and os.path.isdir(_old_days):
+    try:
+        migrate_old_memory()
+    except Exception:
+        pass

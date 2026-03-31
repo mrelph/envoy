@@ -619,12 +619,13 @@ def recall_memory(query: str = "", limit: int = 20) -> str:
 def _delegate(worker_name: str, request: str) -> str:
     """Route to a worker agent and auto-observe the interaction."""
     result = get_worker(worker_name)(request)
-    response = result.message if hasattr(result, 'message') else str(result)
+    response = str(result.message) if hasattr(result, 'message') else str(result)
     try:
         outcome = response[:200] if response else "empty"
         memory.remember(f"[{worker_name}] {request[:200]} → {outcome}", entry_type="observation")
-    except Exception:
-        pass
+    except Exception as e:
+        import sys
+        print(f"[memory] write failed: {e}", file=sys.stderr)
     return response
 
 

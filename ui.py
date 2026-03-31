@@ -193,10 +193,10 @@ def _render_response(console, response_text):
     from agents.base import agent_name as _agent_name
 
     name = _agent_name()
-    width = console.width
+    width = min(console.width, 80)
 
     def _gradient_bar(color, label=""):
-        """Build a full-width thin gradient bar."""
+        """Build a thin gradient bar."""
         t = Text()
         if label:
             tag = f" 🔏 {label} "
@@ -220,8 +220,6 @@ def _render_response(console, response_text):
         console.print(_gradient_bar(color, label))
         console.print()
         console.print(Markdown(text), width=width - 4)
-        console.print()
-        console.print(_gradient_bar(color))
         console.print()
 
     # Check for priority markers

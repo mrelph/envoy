@@ -98,7 +98,7 @@ async def _gather_async(sources: list, days: int, alias: str) -> dict:
                 # emails or people
                 if 'subject' in result[0]:
                     results[name] = "\n".join(
-                        f"- {e['from']}: {e['subject']} ({e['date']})" for e in result[:30])
+                        f"- {e['from']}: {e['subject']} ({e['date']}) [id:{e.get('conversationId','')}]" for e in result[:30])
                 else:
                     results[name] = "\n".join(
                         f"- {p.get('name', p.get('alias', '?'))} ({p.get('alias', '')})" for p in result)
