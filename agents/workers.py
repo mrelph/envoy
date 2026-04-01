@@ -39,7 +39,7 @@ def _create_email_worker():
 
     @tool
     def inbox(days: int = 1, limit: int = 30) -> str:
-        """Fetch recent inbox emails.
+        """Fetch recent inbox emails. Results are numbered — use the number to reference specific emails.
         Args:
             days: Days to look back
             limit: Max emails to return
@@ -47,7 +47,10 @@ def _create_email_worker():
         emails = asyncio.run(email_mod.fetch_inbox(days, limit))
         if not emails:
             return "No emails found."
-        return "\n".join(f"- {e['from']}: {e['subject']} ({e['date']})" for e in emails[:limit])
+        return "\n".join(
+            f"[{i+1}] {e['from']}: {e['subject']} ({e['date']}) [id:{e.get('conversationId','')}]"
+            for i, e in enumerate(emails[:limit])
+        )
 
     @tool
     def read_email(conversation_id: str) -> str:

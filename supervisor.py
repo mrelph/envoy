@@ -145,7 +145,8 @@ async def _gather_async(sources: list, days: int, alias: str) -> dict:
                     # Store raw email list for follow-up drill-downs
                     set_context("last_emails", result[:30])
                     results[name] = "\n".join(
-                        f"- {e['from']}: {e['subject']} ({e['date']}) [id:{e.get('conversationId','')}]" for e in result[:30])
+                        f"[{i+1}] {e['from']}: {e['subject']} ({e['date']}) [id:{e.get('conversationId','')}]"
+                        for i, e in enumerate(result[:30]))
                 else:
                     results[name] = "\n".join(
                         f"- {p.get('name', p.get('alias', '?'))} ({p.get('alias', '')})" for p in result)
