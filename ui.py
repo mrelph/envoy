@@ -97,6 +97,28 @@ def _render_status_bar(console, mcp_status=None):
     console.print(f"[dim]─── {bar}  │  🕐 {now} ───[/dim]")
 
 
+def _fetch_model_catalog():
+    """Fetch available models from Bedrock API, fall back to static list."""
+    import boto3
+    try:
+        aws_config = {'region_name': os.getenv('AWS_REGION', 'us-west-2')}
+        if os.getenv('AWS_ACCESS_KEY_ID'):
+            aws_config['aws_access_key_id'] = os.getenv('AWS_ACCESS_KEY_ID')
+            aws_config['aws_secret_access_key'] = os.getenv('AWS_SECRET_ACCESS_KEY')
+            if os.getenv('AWS_SESSION_TOKEN'):
+                aws_config['aws_session_token'] = os.getenv('AWS_SESSION_TOKEN')
+        client = boto3.client('bedrock', **aws_config)
+        models = client.list_foundation_models()['modelSummaries']
+        results = []
+        for m in sorted(models, key=lambda x: (x.get('providerName', ''), x['modelId'])):
+            if 'ON_DEMAND' not in m.get('inferenceTypesSupported', []):
+                continue
+            results.append((m['modelId'], m.get('modelName', ''), m.get('providerName', '')))
+        return results if results else MODEL_CATALOG
+    except Exception:
+        return MODEL_CATALOG
+
+
 def _show_models(console):
     """Show current model assignments and offer to edit."""
     from rich.table import Table
@@ -115,13 +137,14 @@ def _show_models(console):
     console.print(table)
 
     # Show available models
+    catalog = _fetch_model_catalog()
     cat = Table(title="Available Models", show_header=True, box=box.SIMPLE)
     cat.add_column("#", style="cyan", width=3)
     cat.add_column("Model ID", style="green")
     cat.add_column("Name", style="bold")
-    cat.add_column("Notes", style="dim")
-    for i, (mid, name, notes) in enumerate(MODEL_CATALOG, 1):
-        cat.add_row(str(i), mid, name, notes)
+    cat.add_column("Provider", style="dim")
+    for i, (mid, name, provider) in enumerate(catalog, 1):
+        cat.add_row(str(i), mid, name, provider)
     console.print(cat)
     console.print(f"[dim]  Config: {MODELS_FILE}[/dim]")
 
@@ -134,8 +157,8 @@ def _show_models(console):
         if pick.strip():
             if pick.strip().isdigit():
                 idx = int(pick.strip()) - 1
-                if 0 <= idx < len(MODEL_CATALOG):
-                    new_model = MODEL_CATALOG[idx][0]
+                if 0 <= idx < len(catalog):
+                    new_model = catalog[idx][0]
                 else:
                     console.print("[red]Invalid number.[/red]")
                     return
