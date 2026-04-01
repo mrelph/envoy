@@ -62,7 +62,7 @@ def analyze_patterns(days: int = 7) -> str:
         f"that could be added to a process doc (sections: Email, Meetings, Cleanup, Slack, Calendar, General).\n"
         f"Format: one pattern per line as '- [Section] rule text'\n\n{log}"
     )
-    result = invoke_ai(prompt, max_tokens=600, tier="medium")
+    result = invoke_ai(prompt, max_tokens=600, tier="light")
     return f"## Pattern Analysis ({len(entries)} observations, {days}d)\n\n{result}"
 
 

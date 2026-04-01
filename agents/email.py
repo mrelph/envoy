@@ -160,7 +160,7 @@ For each email, output EXACTLY one line:
 
 Emails:
 {email_list}"""
-        ai_text = invoke_ai(prompt, max_tokens=8000, tier="medium")
+        ai_text = invoke_ai(prompt, max_tokens=8000, tier="light")
         for line in ai_text.strip().split('\n'):
             line = line.strip()
             if not line or not line.startswith('['):
@@ -364,7 +364,7 @@ Skip empty sections. Flag time-sensitive items. Only include emails from last {d
 Emails:
 {email_list}"""
     try:
-        return invoke_ai(prompt, tier="medium")
+        return invoke_ai(prompt, tier="heavy")
     except Exception as e:
         return f"# Customer Email Report\n\n**Error:** {e}\n"
 

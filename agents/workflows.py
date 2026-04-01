@@ -105,7 +105,7 @@ async def _slack_catchup_async(alias: str, days: int) -> str:
 Messages:
 {raw[:10000]}"""
     try:
-        return invoke_ai(prompt, max_tokens=8000, tier="medium")
+        return invoke_ai(prompt, max_tokens=8000, tier="heavy")
     except Exception as e:
         return f"# Slack Catch-Up\n\n**Error:** {e}\n"
 
@@ -131,7 +131,7 @@ async def _calendar_audit_async(alias: str, days: int) -> str:
 Events:
 {raw[:10000]}"""
     try:
-        return invoke_ai(prompt, max_tokens=8000, tier="medium")
+        return invoke_ai(prompt, max_tokens=8000, tier="heavy")
     except Exception as e:
         return f"# Calendar Audit\n\n**Error:** {e}\n"
 
@@ -178,7 +178,7 @@ async def _response_time_async(alias: str, days: int) -> str:
 Data:
 {combined[:10000]}"""
     try:
-        return invoke_ai(prompt, max_tokens=8000, tier="medium")
+        return invoke_ai(prompt, max_tokens=8000, tier="heavy")
     except Exception as e:
         return f"Error: {e}"
 
@@ -236,7 +236,7 @@ SENT:
 INBOX (for cross-reference):
 {inbox_text}"""
     try:
-        return invoke_ai(prompt, max_tokens=8000, tier="medium")
+        return invoke_ai(prompt, max_tokens=8000, tier="heavy")
     except Exception as e:
         return f"Error: {e}"
 
@@ -309,7 +309,7 @@ async def _one_on_one_prep_async(person_alias: str, alias: str) -> str:
 Data:
 {combined[:10000]}"""
     try:
-        return invoke_ai(prompt, max_tokens=8000, tier="medium")
+        return invoke_ai(prompt, max_tokens=8000, tier="heavy")
     except Exception as e:
         return f"Error: {e}"
 
@@ -371,7 +371,7 @@ Look for: "I'll send", "by Friday", "action on me", "will follow up", deadlines,
 Data:
 {combined[:10000]}"""
     try:
-        return invoke_ai(prompt, max_tokens=8000, tier="medium")
+        return invoke_ai(prompt, max_tokens=8000, tier="heavy")
     except Exception as e:
         return f"Error: {e}"
 
@@ -447,7 +447,7 @@ async def _meeting_prep_async(meeting_subject: str, alias: str) -> str:
 Data:
 {combined[:8000]}"""
     try:
-        return invoke_ai(prompt, max_tokens=8000, tier="medium")
+        return invoke_ai(prompt, max_tokens=8000, tier="heavy")
     except Exception as e:
         return f"Error: {e}"
 
@@ -510,7 +510,7 @@ Total: {len(emails)} | Estimated processing time: [X minutes]
 Emails:
 {email_list[:10000]}"""
     try:
-        return invoke_ai(prompt, max_tokens=10000, tier="medium")
+        return invoke_ai(prompt, max_tokens=10000, tier="heavy")
     except Exception as e:
         return f"Error: {e}"
 
@@ -641,7 +641,7 @@ For each message needing a response:
 Messages:
 {msg_text[:6000]}"""
     try:
-        return invoke_ai(prompt, max_tokens=8000, tier="medium")
+        return invoke_ai(prompt, max_tokens=8000, tier="heavy")
     except Exception as e:
         return f"Error: {e}"
 

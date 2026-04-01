@@ -74,7 +74,7 @@ Events:
 {raw}
 {f"Cross-reference from email:{xref}" if xref else ""}"""
     try:
-        return invoke_ai(prompt, max_tokens=8000, tier="medium")
+        return invoke_ai(prompt, max_tokens=8000, tier="heavy")
     except Exception as e:
         return f"# Calendar Briefing\n\n**Error:** {e}\n"
 

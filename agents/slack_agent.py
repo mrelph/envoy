@@ -267,7 +267,7 @@ Skip empty sections. DMs always outrank channel noise. Only last {days} days.
 Messages:
 {raw[:8000]}"""
     try:
-        return invoke_ai(prompt, max_tokens=8000, tier="medium")
+        return invoke_ai(prompt, max_tokens=8000, tier="heavy")
     except Exception as e:
         return f"# Slack Scan Report\n\n**Error:** {e}\n"
 

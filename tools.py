@@ -598,7 +598,7 @@ def analyze_patterns(days: int = 7) -> str:
         f"Analyze these {len(observations)} observations. Identify recurring patterns. "
         f"For each, suggest a rule for process.md (sections: Email, Meetings, Cleanup, Slack, Calendar, General).\n"
         f"Format: one per line as '- [Section] rule'\n\n{log}",
-        max_tokens=600, tier="medium"
+        max_tokens=600, tier="light"
     )
 
 
