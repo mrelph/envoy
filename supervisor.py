@@ -17,6 +17,7 @@ from envoy_logger import get_logger
 
 _context = {
     "last_emails": [],       # emails from last fetch
+    "last_email_bodies": {},  # conversation_id → full thread body
     "last_slack": "",        # raw slack from last scan
     "last_calendar": "",     # raw calendar from last view
     "last_todos": "",        # raw todos from last fetch
@@ -55,10 +56,54 @@ def gather(sources: str = "email,slack,calendar,todos", days: int = 1, alias: st
     # Build combined output
     sections = []
     for key, value in results.items():
-        if value and not str(value).startswith("Error") and not str(value).startswith("No "):
+        if value and not str(value).startswith("Error") and not str(value).startswith("⚠️"):
             sections.append(f"## {key.upper()}\n{value}")
 
+    # Cross-reference: find entities that appear in multiple sources
+    xref = _cross_reference(results)
+    if xref:
+        sections.append(f"## CROSS-REFERENCES\n{xref}")
+
     return "\n\n---\n\n".join(sections) if sections else "No data gathered from any source."
+
+
+def _cross_reference(results: dict) -> str:
+    """Find people, projects, and topics that appear across multiple sources."""
+    from agents.memory2 import _extract_entities
+
+    # Extract entities per source
+    source_entities = {}
+    for source, data in results.items():
+        text = str(data) if data else ""
+        if not text or text.startswith("Error") or text.startswith("⚠️"):
+            continue
+        entities = _extract_entities(text)
+        if entities:
+            source_entities[source] = set(entities)
+
+    if len(source_entities) < 2:
+        return ""
+
+    # Find entities appearing in 2+ sources
+    all_sources = list(source_entities.keys())
+    overlaps = {}
+    for entity in set().union(*source_entities.values()):
+        appearing_in = [s for s in all_sources if entity in source_entities[s]]
+        if len(appearing_in) >= 2:
+            key = entity
+            overlaps[key] = appearing_in
+
+    if not overlaps:
+        return ""
+
+    # Format: group by entity, show which sources mention it
+    lines = []
+    # Sort by number of sources (most connected first), cap at 15
+    for entity, sources in sorted(overlaps.items(), key=lambda x: -len(x[1]))[:15]:
+        source_names = " + ".join(sources)
+        lines.append(f"- **{entity}** → mentioned in {source_names}")
+
+    return "These people/topics appear across multiple sources — likely connected threads:\n" + "\n".join(lines)
 
 
 async def _gather_async(sources: list, days: int, alias: str) -> dict:
@@ -89,7 +134,7 @@ async def _gather_async(sources: list, days: int, alias: str) -> dict:
     )
     for name, result in gathered:
         if isinstance(result, Exception):
-            results[name] = f"Error: {result}"
+            results[name] = f"⚠️ {name} unavailable: {result}"
         elif isinstance(result, tuple):
             # calendar returns (raw, xref)
             results[name] = result[0]
@@ -97,6 +142,8 @@ async def _gather_async(sources: list, days: int, alias: str) -> dict:
             if result and isinstance(result[0], dict):
                 # emails or people
                 if 'subject' in result[0]:
+                    # Store raw email list for follow-up drill-downs
+                    set_context("last_emails", result[:30])
                     results[name] = "\n".join(
                         f"- {e['from']}: {e['subject']} ({e['date']}) [id:{e.get('conversationId','')}]" for e in result[:30])
                 else:
@@ -132,6 +179,12 @@ def read_email_thread(conversation_id: str) -> str:
     Args:
         conversation_id: The conversation ID from a previous email listing
     """
+    # Return cached body if we already fetched it
+    cached = _context.get("last_email_bodies", {}).get(conversation_id)
+    if cached:
+        set_context("last_email_thread", cached)
+        return cached
+
     from agents.base import outlook as _outlook
     async def _call():
         async with _outlook() as session:
@@ -141,6 +194,14 @@ def read_email_thread(conversation_id: str) -> str:
             return str(result.content[0].text) if result.content else "No result."
     result = asyncio.run(_call())
     set_context("last_email_thread", result)
+    # Cache for follow-up questions
+    bodies = _context.get("last_email_bodies", {})
+    bodies[conversation_id] = result
+    # Keep cache bounded
+    if len(bodies) > 50:
+        oldest = list(bodies.keys())[0]
+        del bodies[oldest]
+    set_context("last_email_bodies", bodies)
     return result
 
 
@@ -194,6 +255,25 @@ def search_emails(query: str, days: int = 14) -> str:
 
 
 @tool
+def get_attachment(item_id: str, filename: str = "") -> str:
+    """Download and preview an email attachment. Use when the user asks about
+    a file attached to an email. Get the item_id from reading the email thread first.
+
+    Args:
+        item_id: The attachment ID or email item ID
+        filename: Optional filename hint for context
+    """
+    from agents.base import outlook as _outlook
+    async def _call():
+        async with _outlook() as session:
+            result = await session.call_tool("email_attachments", {"attachmentId": item_id})
+            return str(result.content[0].text) if result.content else "No attachment data."
+    result = asyncio.run(_call())
+    set_context("last_attachment", result)
+    return result
+
+
+@tool
 def show_context(key: str = "") -> str:
     """Show what data is currently in the conversation context.
     Use this to check what's available before answering follow-up questions.
@@ -220,6 +300,7 @@ def show_context(key: str = "") -> str:
 SUPERVISOR_TOOLS = [
     gather,
     read_email_thread,
+    get_attachment,
     lookup_person,
     search_emails,
     show_context,

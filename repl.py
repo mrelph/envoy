@@ -79,11 +79,11 @@ def run_interactive():
         "/eod":       ("End-of-day summary",                   lambda: agent("Generate my end-of-day summary")),
         "/weekly":    ("Weekly review",                        lambda: agent("Generate my weekly review")),
         "/cron":      ("Manage scheduled jobs",                lambda: agent("Show my cron jobs and available presets")),
-        # --- Patrol ---
-        "/watch":     ("Add a standing order",                 None),  # interactive
-        "/standing-orders": ("View standing orders",           None),
-        "/patrol":    ("Run patrol now",                       None),
-        "/suggest-orders": ("AI-suggested standing orders",    None),
+        # --- Heartbeat ---
+        "/routine":   ("Add a routine",                        None),  # interactive
+        "/routines":  ("View routines",                        None),
+        "/heartbeat": ("Run heartbeat now",                    None),
+        "/suggest-routines": ("AI-suggested routines",         None),
         # --- System ---
         "/help":      ("Show available commands",              None),
         "/status":    ("Refresh MCP server status",            None),
@@ -105,7 +105,7 @@ def run_interactive():
             ("Prep", ["/prep-1on1", "/prep-meeting"]),
             ("Actions", ["/reply", "/ea", "/book", "/findtime", "/search", "/sharepoint"]),
             ("Reviews", ["/eod", "/weekly", "/cron"]),
-            ("Patrol", ["/watch", "/standing-orders", "/patrol", "/suggest-orders"]),
+            ("Heartbeat", ["/routine", "/routines", "/heartbeat", "/suggest-routines"]),
             ("System", ["/status", "/models", "/settings", "/backup", "/help", "/exit"]),
         ]
 
@@ -256,26 +256,26 @@ def run_interactive():
         elif _cmd == "/prep-meeting":
             meeting = _arg or Prompt.ask("[bold yellow]  Meeting subject (empty = next meeting)[/bold yellow]", default="")
             stripped = f"Generate a prep brief for my meeting: {meeting}" if meeting.strip() else "Generate a prep brief for my next meeting"
-        # --- Patrol commands ---
-        elif _cmd == "/watch":
-            from agents.patrol import add_order
-            order = _arg or Prompt.ask("[bold yellow]  What should I watch for?[/bold yellow]")
+        # --- Heartbeat commands ---
+        elif _cmd == "/routine":
+            from agents.heartbeat import add_routine
+            order = _arg or Prompt.ask("[bold yellow]  What should I check for?[/bold yellow]")
             if order.strip():
-                console.print(add_order(order.strip()))
+                console.print(add_routine(order.strip()))
             continue
-        elif _cmd == "/standing-orders":
-            from agents.patrol import get_standing_orders
+        elif _cmd == "/routines":
+            from agents.heartbeat import get_routines
             from rich.markdown import Markdown as Md
-            console.print(Md(get_standing_orders()))
+            console.print(Md(get_routines()))
             continue
-        elif _cmd == "/patrol":
-            from agents.patrol import run_patrol
-            run_patrol(quiet=False, notify="none")
+        elif _cmd == "/heartbeat":
+            from agents.heartbeat import run_heartbeat
+            run_heartbeat(quiet=False, notify="none")
             continue
-        elif _cmd == "/suggest-orders":
-            from agents.patrol import suggest_orders
+        elif _cmd == "/suggest-routines":
+            from agents.heartbeat import suggest_routines
             from rich.markdown import Markdown as Md
-            console.print(Md(suggest_orders()))
+            console.print(Md(suggest_routines()))
             continue
 
         if not stripped:

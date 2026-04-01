@@ -459,31 +459,31 @@ def prep_meeting(meeting):
 @cli.command()
 @click.option('--quiet', '-q', is_flag=True, help='Suppress console output')
 @click.option('--notify', '-n', default='slack', type=click.Choice(['slack', 'email', 'none']), help='Notification method')
-def patrol(quiet, notify):
-    """Autonomous patrol — check standing orders and alert on important items."""
-    from agents.patrol import run_patrol
-    run_patrol(quiet=quiet, notify=notify if notify != 'none' else None)
+def heartbeat(quiet, notify):
+    """Autonomous heartbeat — check routines and alert on important items."""
+    from agents.heartbeat import run_heartbeat
+    run_heartbeat(quiet=quiet, notify=notify if notify != 'none' else None)
 
 
 @cli.command()
 @click.argument('action', default='list', type=click.Choice(['list', 'add', 'remove', 'suggest']))
-@click.option('--order', '-o', default='', help='Standing order text (for add/remove)')
-def watch(action, order):
-    """Manage patrol standing orders."""
-    from agents.patrol import get_standing_orders, add_order, remove_order, suggest_orders
+@click.option('--order', '-o', default='', help='Routine text (for add/remove)')
+def routine(action, order):
+    """Manage heartbeat routines."""
+    from agents.heartbeat import get_routines, add_routine, remove_routine, suggest_routines
     from rich.markdown import Markdown
     if action == 'list':
-        console.print(Markdown(get_standing_orders()))
+        console.print(Markdown(get_routines()))
     elif action == 'add':
         if not order:
-            order = click.prompt("Standing order")
-        console.print(add_order(order))
+            order = click.prompt("Routine")
+        console.print(add_routine(order))
     elif action == 'remove':
         if not order:
             order = click.prompt("Text to match")
-        console.print(remove_order(order))
+        console.print(remove_routine(order))
     elif action == 'suggest':
-        console.print(Markdown(suggest_orders()))
+        console.print(Markdown(suggest_routines()))
 
 
 if __name__ == '__main__':

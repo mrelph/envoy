@@ -115,17 +115,32 @@ def recall(query: str = "", limit: int = RECALL_DEFAULT) -> str:
 
 
 def _recall_general(limit: int) -> str:
-    """General recall: today's entries + rolling summary."""
+    """General recall: today's entries + top entity summaries."""
     sections = []
 
-    # Rolling summary
-    if os.path.exists(SUMMARY_FILE):
-        try:
-            data = json.loads(open(SUMMARY_FILE).read())
-            if data.get("text"):
-                sections.append(f"### Patterns & Context\n{data['text']}")
-        except Exception:
-            pass
+    # Per-entity summaries (top N by relevance to recent entries)
+    summaries = _load_summary()
+    if summaries:
+        # Prioritize entities that appear in recent entries
+        recent = _load_entries(days=3)
+        recent_entities = set()
+        for e in recent:
+            recent_entities.update(e.get("entities", []))
+
+        # Show entities mentioned recently first, then others
+        active = {k: v for k, v in summaries.items() if k in recent_entities and k != "_general"}
+        other = {k: v for k, v in summaries.items() if k not in recent_entities and k != "_general"}
+
+        lines = []
+        for k, v in sorted(active.items()):
+            lines.append(f"- **{k}**: {v}")
+        for k, v in sorted(other.items())[:10]:  # cap background context
+            lines.append(f"- {k}: {v}")
+        if summaries.get("_general"):
+            lines.append(f"- _general: {summaries['_general']}")
+
+        if lines:
+            sections.append("### Patterns & Context\n" + "\n".join(lines[:20]))
 
     # Recent entries (last 3 days, newest first)
     entries = _load_entries(days=3)
@@ -142,7 +157,6 @@ def _recall_general(limit: int) -> str:
             if label in grouped:
                 lines = [f"- {e['ts'][11:16]} [{e['type']}] {e['text']}" for e in grouped[label]]
                 sections.append(f"### {label}\n" + "\n".join(lines))
-        # Other days
         for label, entries_list in grouped.items():
             if label not in ("Today", "Yesterday"):
                 lines = [f"- {e['ts'][11:16]} [{e['type']}] {e['text']}" for e in entries_list]
@@ -154,42 +168,57 @@ def _recall_general(limit: int) -> str:
 
 
 def _recall_by_query(query: str, limit: int) -> str:
-    """Recall entries matching a query — checks entities and text."""
+    """Recall entries matching a query — checks entity summaries and raw entries."""
     query_lower = query.lower().strip()
-    entries = _load_entries(days=KEEP_DAYS)
 
-    # Score entries by relevance
+    # Check entity summaries first
+    summaries = _load_summary()
+    summary_hit = summaries.get(query_lower, "")
+    related_summaries = []
+    if not summary_hit:
+        # Partial match on entity names
+        for k, v in summaries.items():
+            if query_lower in k or k in query_lower:
+                related_summaries.append((k, v))
+
+    # Search raw entries
+    entries = _load_entries(days=KEEP_DAYS)
     scored = []
     for e in entries:
         score = 0
-        # Exact entity match
         if query_lower in e.get("entities", []):
             score += 10
-        # Partial entity match
         for ent in e.get("entities", []):
             if query_lower in ent or ent in query_lower:
                 score += 5
-        # Text match
         if query_lower in e.get("text", "").lower():
             score += 3
         if score > 0:
             scored.append((score, e))
 
-    scored.sort(key=lambda x: (-x[0], x[1]["ts"]), reverse=False)
     scored.sort(key=lambda x: -x[0])
     matches = [e for _, e in scored[:limit]]
 
-    if not matches:
+    parts = []
+
+    # Entity summary
+    if summary_hit:
+        parts.append(f"**{query_lower}** (summary): {summary_hit}")
+    for k, v in related_summaries[:5]:
+        parts.append(f"**{k}** (summary): {v}")
+
+    # Raw entries
+    if matches:
+        entities_found = set()
+        for e in matches:
+            entities_found.update(e.get("entities", []))
+        parts.append(f"**{len(matches)} entries** | Related: {', '.join(sorted(entities_found)[:10])}")
+        parts.extend(f"- {e['ts'][:16]} [{e['type']}] {e['text']}" for e in matches)
+
+    if not parts:
         return f"No memory entries found for '{query}'."
 
-    lines = [f"- {e['ts'][:16]} [{e['type']}] {e['text']}" for e in matches]
-    entities_found = set()
-    for e in matches:
-        entities_found.update(e.get("entities", []))
-
-    return (f"## Memory: {query}\n\n"
-            f"**{len(matches)} entries** | Related: {', '.join(sorted(entities_found)[:10])}\n\n"
-            + "\n".join(lines))
+    return f"## Memory: {query}\n\n" + "\n".join(parts)
 
 
 # --- Entity index ---
@@ -249,10 +278,10 @@ def _load_entries(days: int = KEEP_DAYS) -> list:
 # --- Compression ---
 
 def compress(force: bool = False) -> str:
-    """Compress old entries into the rolling summary. Runs automatically but can be forced."""
+    """Compress old entries into per-entity rolling summaries."""
     _ensure_dir()
     cutoff = datetime.now() - timedelta(days=COMPRESS_AFTER_DAYS)
-    all_entries = []
+    old_entries = []
     recent = []
 
     if not os.path.exists(ENTRIES_FILE):
@@ -265,19 +294,19 @@ def compress(force: bool = False) -> str:
         try:
             e = json.loads(line)
             if datetime.fromisoformat(e["ts"]) < cutoff:
-                all_entries.append(e)
+                old_entries.append(e)
             else:
                 recent.append(e)
         except Exception:
-            recent.append({"text": line})  # keep unparseable lines
+            recent.append({"text": line})
 
-    if not all_entries and not force:
+    if not old_entries and not force:
         return "Nothing old enough to compress."
 
-    # Build per-entity summaries for compression
+    # Group old entries by entity
     entity_threads = {}
     general = []
-    for e in all_entries:
+    for e in old_entries:
         entities = e.get("entities", [])
         if entities:
             for ent in entities:
@@ -285,36 +314,53 @@ def compress(force: bool = False) -> str:
         else:
             general.append(e)
 
+    # Load existing summaries
+    existing = _load_summary()
+
     # Format for AI compression
     sections = []
-    for ent, entries in sorted(entity_threads.items(), key=lambda x: -len(x[1]))[:20]:
+    for ent, entries in sorted(entity_threads.items(), key=lambda x: -len(x[1]))[:30]:
+        prev = existing.get(ent, "")
         lines = [f"  - {e['ts'][:10]} [{e['type']}] {e['text']}" for e in entries[-5:]]
-        sections.append(f"**{ent}** ({len(entries)} entries):\n" + "\n".join(lines))
+        sections.append(f"**{ent}** (prev: {prev or 'none'})\n" + "\n".join(lines))
     if general:
+        prev = existing.get("_general", "")
         lines = [f"  - {e['ts'][:10]} [{e['type']}] {e['text']}" for e in general[-10:]]
-        sections.append(f"**general** ({len(general)} entries):\n" + "\n".join(lines))
-
-    existing = ""
-    if os.path.exists(SUMMARY_FILE):
-        try:
-            existing = json.loads(open(SUMMARY_FILE).read()).get("text", "")
-        except Exception:
-            pass
+        sections.append(f"**_general** (prev: {prev or 'none'})\n" + "\n".join(lines))
 
     try:
-        summary = invoke_ai(
-            f"Update this rolling memory summary. Organize by entity/person/project. "
-            f"For each, keep: latest status, key decisions, unresolved items, user preferences. "
-            f"Drop stale items with no recent activity. Max 2500 chars, dense, structured.\n\n"
-            f"Existing summary:\n{existing or '(none)'}\n\n"
-            f"New entries to fold in:\n" + "\n\n".join(sections),
-            max_tokens=1200, tier="memory"
+        raw = invoke_ai(
+            "Compress these memory entries into per-entity summaries. "
+            "Output ONLY a JSON object where each key is the entity name and the value is a concise summary string (max 200 chars each). "
+            "Keep: latest status, key decisions, unresolved items, preferences. Drop stale resolved items.\n\n"
+            + "\n\n".join(sections),
+            max_tokens=1500, tier="memory"
         )
+        # Parse JSON from response (handle markdown fences)
+        raw = raw.strip()
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0]
+        new_summaries = json.loads(raw)
+        # Merge with existing (new overwrites old)
+        existing.update(new_summaries)
     except Exception:
-        summary = existing
+        pass  # keep existing summaries on failure
 
-    with open(SUMMARY_FILE, "w") as f:
-        json.dump({"updated": datetime.now().isoformat(), "text": summary[:SUMMARY_MAX]}, f)
+    # Cap total entities in summary
+    if len(existing) > 100:
+        # Keep most recently updated — sort by whether they appear in recent entries
+        recent_entities = set()
+        for e in recent:
+            recent_entities.update(e.get("entities", []))
+        # Keep entities that are in recent entries + top by entry count
+        keep = {k for k in existing if k in recent_entities or k == "_general"}
+        for ent in sorted(entity_threads.keys(), key=lambda x: -len(entity_threads.get(x, []))):
+            keep.add(ent)
+            if len(keep) >= 100:
+                break
+        existing = {k: v for k, v in existing.items() if k in keep}
+
+    _save_summary(existing)
 
     # Rewrite entries file with only recent entries
     with open(ENTRIES_FILE, "w") as f:
@@ -328,7 +374,29 @@ def compress(force: bool = False) -> str:
             index.setdefault(ent, []).append(e.get("id", ""))
     _save_index(index)
 
-    return f"Compressed {len(all_entries)} old entries into summary. {len(recent)} recent entries kept."
+    return f"Compressed {len(old_entries)} old entries into {len(existing)} entity summaries. {len(recent)} recent entries kept."
+
+
+def _load_summary() -> Dict[str, str]:
+    """Load entity summaries. Handles both old blob format and new dict format."""
+    if not os.path.exists(SUMMARY_FILE):
+        return {}
+    try:
+        data = json.loads(open(SUMMARY_FILE).read())
+        if isinstance(data, dict) and "text" in data and isinstance(data["text"], str):
+            # Old blob format — migrate: store as _general
+            return {"_general": data["text"]} if data["text"] else {}
+        if isinstance(data, dict):
+            # Remove metadata keys, keep only entity summaries
+            return {k: v for k, v in data.items() if isinstance(v, str) and k != "updated"}
+        return {}
+    except Exception:
+        return {}
+
+
+def _save_summary(summaries: Dict[str, str]):
+    with open(SUMMARY_FILE, "w") as f:
+        json.dump(summaries, f, indent=1)
 
 
 # --- Pruning ---

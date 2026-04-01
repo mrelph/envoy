@@ -159,7 +159,7 @@ Suggest 2-3 concrete next steps. Examples:
 
     from datetime import datetime
     now = datetime.now().strftime('%A, %B %d %Y at %I:%M %p').replace(' 0', ' ')
-    prompt += f"\n## Current Time\n{now}\n"
+    prompt += f"\n## Current Time (at session start)\n{now}\n⚠️ This timestamp is from session start and may be stale. Use the `current_time` tool for the actual current time when precision matters.\n"
 
     # Inject persistent memory
     try:

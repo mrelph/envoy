@@ -536,6 +536,20 @@ def meeting_prep(meeting_subject: str = "") -> str:
     return wf.meeting_prep(meeting_subject, _USER)
 
 
+# --- Utility tools ---
+
+@tool
+def current_time() -> str:
+    """Get the current date, time, and timezone. Use this whenever you need to know the current time,
+    especially for calendar operations, scheduling, or when the user asks about time."""
+    from datetime import datetime, timezone, timedelta
+    import time as _time
+    utc_offset = timedelta(seconds=-_time.timezone if _time.daylight == 0 else -_time.altzone)
+    now = datetime.now(timezone(utc_offset))
+    tz_name = _time.tzname[_time.daylight] if _time.daylight else _time.tzname[0]
+    return now.strftime(f'%A, %B %d %Y at %I:%M %p {tz_name} (UTC%z)')
+
+
 # --- Internal websites tools ---
 
 @tool
@@ -616,17 +630,27 @@ def recall_memory(query: str = "", limit: int = 20) -> str:
 # Worker agent routing — supervisor delegates to specialists
 # ============================================================
 
-def _delegate(worker_name: str, request: str) -> str:
-    """Route to a worker agent and auto-observe the interaction."""
-    result = get_worker(worker_name)(request)
-    response = str(result.message) if hasattr(result, 'message') else str(result)
-    try:
-        outcome = response[:200] if response else "empty"
-        memory.remember(f"[{worker_name}] {request[:200]} → {outcome}", entry_type="observation")
-    except Exception as e:
-        import sys
-        print(f"[memory] write failed: {e}", file=sys.stderr)
-    return response
+def _delegate(worker_name: str, request: str, _retries: int = 1) -> str:
+    """Route to a worker agent with retry and graceful degradation."""
+    import sys
+    last_err = None
+    for attempt in range(_retries + 1):
+        try:
+            result = get_worker(worker_name)(request)
+            response = str(result.message) if hasattr(result, 'message') else str(result)
+            try:
+                memory.remember(f"[{worker_name}] {request[:200]} → {response[:200]}", entry_type="observation")
+            except Exception:
+                pass
+            return response
+        except Exception as e:
+            last_err = e
+            print(f"[{worker_name}] attempt {attempt+1} failed: {e}", file=sys.stderr)
+            if attempt < _retries:
+                # Clear cached worker in case it's in a bad state
+                from agents.workers import _workers
+                _workers.pop(worker_name, None)
+    return f"⚠️ {worker_name} worker unavailable: {last_err}. Other sources may still have the information you need."
 
 
 @tool
@@ -676,7 +700,8 @@ def productivity_worker(request: str) -> str:
 @tool
 def research_worker(request: str) -> str:
     """Delegate research and lookup tasks: Phonetool profiles, Kingpin goals, Wiki pages,
-    Taskei tasks, Broadcast videos, tiny links. Use for ANY internal lookup request.
+    Taskei tasks, Broadcast videos, tiny links, web search. Use for ANY internal lookup
+    or external web search request.
 
     Args:
         request: Natural language description of what to look up
@@ -755,6 +780,7 @@ _ALL_TOOLS_RAW = [
     analyze_patterns,
     get_observer_insights,
     # --- Meta ---
+    current_time,
     token_usage,
     activate_skill,
     # --- TeamSnap ---

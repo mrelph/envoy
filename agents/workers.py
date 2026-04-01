@@ -28,6 +28,15 @@ def _create_email_worker():
     from agents import workflows as wf
     import asyncio
 
+    def _format_html(text: str) -> str:
+        """Convert plain text to simple HTML with paragraph breaks."""
+        if text.strip().startswith("<"):
+            return text  # already HTML
+        paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+        if not paragraphs:
+            paragraphs = [p.strip() for p in text.split("\n") if p.strip()]
+        return "".join(f"<p>{p}</p>" for p in paragraphs) if paragraphs else f"<p>{text}</p>"
+
     @tool
     def inbox(days: int = 1, limit: int = 30) -> str:
         """Fetch recent inbox emails.
@@ -41,64 +50,96 @@ def _create_email_worker():
         return "\n".join(f"- {e['from']}: {e['subject']} ({e['date']})" for e in emails[:limit])
 
     @tool
-    def email_operation(operation: str, conversation_id: str = "", query: str = "",
-                        to: str = "", subject: str = "", body: str = "",
-                        cc: str = "", bcc: str = "",
-                        folder: str = "", limit: int = 25,
-                        item_id: str = "", item_change_key: str = "",
-                        reply_all: bool = False, target_folder: str = "",
-                        flag_status: str = "", flag_due_date: str = "",
-                        categories: str = "", importance: str = "") -> str:
-        """Full email control — read, search, send, reply, forward, draft, move, flag, categories, contacts, attachments.
+    def read_email(conversation_id: str) -> str:
+        """Read the full content of an email thread.
         Args:
-            operation: inbox, read, search, send, reply, forward, draft, move, folders, flag, contacts, attachments
-            conversation_id: For read/move
-            query: For search/contacts
-            to: Comma-separated emails (send/reply/forward/draft)
-            subject: Email subject (send/draft)
-            body: Email body (send/reply/forward/draft)
-            cc: Comma-separated CC emails (send/draft)
-            bcc: Comma-separated BCC emails (send/draft)
-            folder: Folder name (folders)
+            conversation_id: Conversation ID from inbox or search results
+        """
+        from tools import _outlook_tool
+        return _outlook_tool("email_read", {"conversationId": conversation_id})
+
+    @tool
+    def search_email(query: str, folder: str = "", limit: int = 25) -> str:
+        """Search emails by keyword, sender, subject, or date.
+        Args:
+            query: Search query (e.g. "from:alice budget", "project update")
+            folder: Optional folder: inbox, sentitems, drafts, archive
             limit: Max results
-            item_id: Item ID (reply/forward/flag/attachments)
-            item_change_key: Change key (reply/forward/flag)
-            reply_all: Reply to all (reply)
-            target_folder: Target folder (move)
-            flag_status: Flagged, Complete, or NotFlagged (flag)
-            flag_due_date: Due date YYYY-MM-DD (flag)
-            categories: Comma-separated category names (flag)
-            importance: Low, Normal, or High (flag)
+        """
+        from tools import _outlook_tool
+        args = {"query": query, "limit": limit}
+        if folder:
+            args["folder"] = folder
+        return _outlook_tool("email_search", args)
+
+    @tool
+    def send_email(to: str, subject: str, body: str, cc: str = "", bcc: str = "") -> str:
+        """Send a new email.
+        Args:
+            to: Comma-separated recipient emails
+            subject: Email subject
+            body: Email body (plain text — will be formatted as HTML automatically)
+            cc: Comma-separated CC emails
+            bcc: Comma-separated BCC emails
         """
         from tools import _outlook_tool
         def _emails(s): return [e.strip() for e in s.split(",") if e.strip()]
-        def _send_args():
-            args = {"to": _emails(to), "subject": subject, "body": body}
-            if cc: args["cc"] = _emails(cc)
-            if bcc: args["bcc"] = _emails(bcc)
-            return args
-        def _draft_args():
-            args = {"operation": "create", "to": _emails(to), "subject": subject, "body": body}
-            if cc: args["cc"] = _emails(cc)
-            if bcc: args["bcc"] = _emails(bcc)
-            return args
-        def _flag_args():
-            args = {"itemId": item_id, "itemChangeKey": item_change_key}
-            if flag_status: args["flag"] = {"status": flag_status, **({"dueDate": flag_due_date} if flag_due_date else {})}
-            if categories: args["categories"] = _emails(categories)
-            if importance: args["importance"] = importance
-            return args
+        args = {"to": _emails(to), "subject": subject, "body": _format_html(body)}
+        if cc: args["cc"] = _emails(cc)
+        if bcc: args["bcc"] = _emails(bcc)
+        return _outlook_tool("email_send", args)
+
+    @tool
+    def reply_email(conversation_id: str, body: str, reply_all: bool = False) -> str:
+        """Reply to an email thread. Automatically finds the latest message and replies in-thread.
+        Args:
+            conversation_id: Conversation ID from reading or searching the email
+            body: Reply body (plain text — will be formatted as HTML automatically)
+            reply_all: Reply to all recipients
+        """
+        return asyncio.run(email_mod.reply_to_email(conversation_id, _format_html(body), reply_all))
+
+    @tool
+    def forward_email(item_id: str, item_change_key: str, to: str, body: str = "") -> str:
+        """Forward an email.
+        Args:
+            item_id: Item ID from reading the email
+            item_change_key: Change key from reading the email
+            to: Comma-separated recipient emails
+            body: Optional additional message (plain text — will be formatted as HTML)
+        """
+        from tools import _outlook_tool
+        def _emails(s): return [e.strip() for e in s.split(",") if e.strip()]
+        args = {"itemId": item_id, "itemChangeKey": item_change_key, "to": _emails(to)}
+        if body: args["body"] = _format_html(body)
+        return _outlook_tool("email_forward", args)
+
+    @tool
+    def manage_email(operation: str, conversation_id: str = "", item_id: str = "",
+                     item_change_key: str = "", target_folder: str = "",
+                     flag_status: str = "", categories: str = "",
+                     query: str = "", folder: str = "", limit: int = 25) -> str:
+        """Move, flag, categorize emails, list folders, search contacts, or get attachments.
+        Args:
+            operation: move, flag, folders, contacts, attachments, draft
+            conversation_id: For move
+            item_id: For flag/attachments
+            item_change_key: For flag
+            target_folder: For move (e.g. archive, deleteditems)
+            flag_status: Flagged, Complete, or NotFlagged
+            categories: Comma-separated category names
+            query: For contacts search
+            folder: For folder listing
+            limit: Max results
+        """
+        from tools import _outlook_tool
+        def _emails(s): return [e.strip() for e in s.split(",") if e.strip()]
         ops = {
-            "inbox": lambda: _outlook_tool("email_inbox", {"limit": limit}),
-            "read": lambda: _outlook_tool("email_read", {"conversationId": conversation_id}),
-            "search": lambda: _outlook_tool("email_search", {"query": query, "limit": limit, **({"folder": folder} if folder else {})}),
-            "send": lambda: _outlook_tool("email_send", _send_args()),
-            "reply": lambda: _outlook_tool("email_reply", {"itemId": item_id, "itemChangeKey": item_change_key, "body": body, "replyAll": reply_all}),
-            "forward": lambda: _outlook_tool("email_forward", {"itemId": item_id, "itemChangeKey": item_change_key, "to": _emails(to), **({"body": body} if body else {})}),
-            "draft": lambda: _outlook_tool("email_draft", _draft_args()),
             "move": lambda: _outlook_tool("email_move", {"conversationId": conversation_id, "targetFolder": target_folder}),
-            "folders": lambda: _outlook_tool("email_folders", {"folder": folder, "limit": limit, **({"query": query} if query else {})}) if folder else _outlook_tool("email_list_folders", {}),
-            "flag": lambda: _outlook_tool("email_update", _flag_args()),
+            "flag": lambda: _outlook_tool("email_update", {"itemId": item_id, "itemChangeKey": item_change_key,
+                **({"flag": {"status": flag_status}} if flag_status else {}),
+                **({"categories": _emails(categories)} if categories else {})}),
+            "folders": lambda: _outlook_tool("email_folders", {"folder": folder, "limit": limit}) if folder else _outlook_tool("email_list_folders", {}),
             "contacts": lambda: _outlook_tool("email_contacts", {"query": query, "limit": limit}),
             "attachments": lambda: _outlook_tool("email_attachments", {"attachmentId": item_id}),
         }
@@ -167,7 +208,7 @@ def _create_email_worker():
     return Agent(
             model=_model("medium"),
             system_prompt="You are an email specialist. You fetch, search, classify, send, and manage emails. Be concise and action-oriented.",
-            tools=[inbox, email_operation, cleanup, delete, customer_scan, digest, send_to_self],
+            tools=[inbox, read_email, search_email, send_email, reply_email, forward_email, manage_email, cleanup, delete, customer_scan, digest, send_to_self],
             callback_handler=None,
         )
 
@@ -550,10 +591,33 @@ def _create_research_worker():
         """
         return asyncio.run(internal.resolve_tiny(shortlink))
 
+    @tool
+    def web_search(query: str, count: int = 5) -> str:
+        """Search the web using Brave Search. Use for external/public information.
+        Args:
+            query: Search query
+            count: Number of results (default 5, max 20)
+        """
+        import os, requests as req
+        api_key = os.environ.get("BRAVE_API_KEY", "")
+        if not api_key:
+            return "BRAVE_API_KEY not set. Add it to ~/.envoy/.env or your environment."
+        resp = req.get("https://api.search.brave.com/res/v1/web/search",
+            headers={"X-Subscription-Token": api_key, "Accept": "application/json"},
+            params={"q": query, "count": min(count, 20)}, timeout=10)
+        resp.raise_for_status()
+        results = resp.json().get("web", {}).get("results", [])
+        if not results:
+            return f"No results for: {query}"
+        return "\n\n".join(
+            f"**{r['title']}**\n{r.get('description', '')}\n{r['url']}"
+            for r in results
+        )
+
     return Agent(
-            model=_model("light"),
-            system_prompt="You are a research specialist. You look up people, Kingpin goals, wiki pages, Taskei tasks, Broadcast videos, and resolve links. Return data concisely.",
-            tools=[lookup_person, kingpin, wiki, taskei, broadcast, tiny],
+            model=_model("medium"),
+            system_prompt="You are a research specialist. You look up people, Kingpin goals, wiki pages, Taskei tasks, Broadcast videos, resolve links, and search the web. Return data concisely.",
+            tools=[lookup_person, kingpin, wiki, taskei, broadcast, tiny, web_search],
             callback_handler=None,
         )
 
