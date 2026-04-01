@@ -95,6 +95,17 @@ Add your own: drop a folder with a `SKILL.md` into `~/.envoy/skills/` or `~/.age
 | `/settings` | Edit personality and config |
 | Export | Generate Word (.docx) and PowerPoint (.pptx) from any report |
 
+### Heartbeat & Routines
+
+Envoy can run autonomously on a schedule, checking your routines and alerting you:
+
+| Command | Slash | Description |
+|---|---|---|
+| `envoy heartbeat` | `/heartbeat` | Run heartbeat check now |
+| `envoy routine list` | `/routines` | View your routines |
+| `envoy routine add` | `/routine` | Add a new routine |
+| `envoy routine suggest` | `/suggest-routines` | AI-suggested routines |
+
 ## CLI Reference
 
 Running `envoy` with no arguments opens the REPL. Subcommands are available for scripting:
@@ -113,6 +124,10 @@ envoy cal-audit --days 5
 envoy response-times --days 7
 envoy slack-catchup --days 3
 envoy yesterbox --days 1
+envoy heartbeat --notify slack
+envoy routine list
+envoy routine add --order "Alert me if any sev-2 tickets go stale"
+envoy routine suggest
 envoy --help
 ```
 
@@ -162,6 +177,8 @@ envoy --help
 | `envoy yesterbox` | `--days` (default: 1) |
 | `envoy prep-1on1 <alias>` | Takes alias as argument |
 | `envoy prep-meeting` | `--meeting` (default: next meeting) |
+| `envoy heartbeat` | `--quiet`, `--notify` (slack/email/none) |
+| `envoy routine` | `list`, `add`, `remove`, `suggest` |
 
 ## Automation
 
@@ -170,6 +187,7 @@ envoy --help
 ```bash
 envoy cron presets     # see available templates
 envoy cron add --name weekly-digest --schedule "0 8 * * 1" --command "digest --days 7 --slack --no-display"
+envoy cron add --name daily-heartbeat --schedule "0 8 * * *" --command "heartbeat --notify slack"
 envoy cron list
 envoy cron remove --name weekly-digest
 ```
@@ -179,6 +197,9 @@ envoy cron remove --name weekly-digest
 ```bash
 # Weekly Monday digest via Slack
 0 8 * * 1 /usr/local/bin/envoy digest --days 7 --slack --no-display
+
+# Daily heartbeat check
+0 8 * * * /usr/local/bin/envoy heartbeat --notify slack
 
 # Daily customer scan
 0 9 * * * /usr/local/bin/envoy customers --days 1 --slack
@@ -209,12 +230,30 @@ The supervisor agent routes requests to specialized workers, each with focused t
 
 | Worker | Tier | Tools | Domain |
 |---|---|---|---|
-| Email | Medium | inbox, read, search, send (with CC/BCC), reply, forward, draft, move, flag/categorize, cleanup, digest, contacts, attachments | Email operations |
+| Email | Medium | inbox, read, search, send (with CC/BCC), reply (threaded), forward, manage (move/flag/categorize), cleanup, digest, contacts, attachments | Email operations |
 | Comms | Medium | Slack scan (with user resolution + thread context), send messages (DMs, channels, threaded replies), search, mark read, reactions, drafts, file downloads, Slack Lists, EA delegation | Slack messaging |
 | Calendar | Light | view, create (recurring, optional attendees, room resources), find times, book rooms, shared calendars | Calendar management |
 | Productivity | Medium | to-dos (list, add with due dates/importance, complete, update, delete), tickets, memory, cron, briefings | Task management |
-| Research | Light | Phonetool, Kingpin, Wiki, Taskei, Broadcast | Internal lookups |
+| Research | Medium | Phonetool, Kingpin, Wiki, Taskei, Broadcast, web search (Brave) | Internal & external lookups |
 | SharePoint | Medium | search, files, read, write, lists, analyze | SharePoint/OneDrive |
+
+### Supervisor Tools
+
+The supervisor layer provides cross-domain capabilities:
+
+| Tool | Purpose |
+|---|---|
+| `gather` | Parallel multi-source fetch with cross-reference intelligence |
+| `read_email_thread` | Drill into specific emails (cached for follow-up) |
+| `get_attachment` | Download and preview email attachments |
+| `search_emails` | Targeted email search |
+| `lookup_person` | Phonetool profile lookup |
+| `current_time` | Live date/time/timezone |
+| `show_context` | Inspect conversation context for drill-downs |
+
+### Cross-Reference Intelligence
+
+When gathering data from multiple sources, Envoy automatically extracts entities (people, projects, ticket IDs) and identifies overlaps. If Alice is mentioned in both an email and a Slack message, or a SIM ticket appears in email and your to-do list, the briefing surfaces these connections explicitly.
 
 ### MCP Servers
 
@@ -233,8 +272,19 @@ Configurable per tier via `/models` or `~/.envoy/models.json`:
 |---|---|---|
 | Agent | Conversational REPL | Claude Opus |
 | Heavy | Summaries, document analysis | Claude Opus |
-| Medium | Classification, scans, workers | Configurable |
-| Light | Simple extraction, lookups | Configurable |
+| Medium | Classification, scans, workers | Claude Sonnet |
+| Light | Simple extraction, lookups | Claude 3.5 Haiku |
+| Memory | Memory compression | Nova Micro |
+
+### Memory System
+
+Envoy maintains persistent memory across sessions with entity-aware compression:
+
+- **Raw entries**: Last 14 days of actions, decisions, and observations stored as JSONL
+- **Entity index**: People, projects, and topics auto-extracted and indexed for fast recall
+- **Per-entity summaries**: Older entries compressed into structured per-entity summaries (not a single blob)
+- **Recall**: Query by entity for precise results, or general recall for recent context
+- **Size limits**: 2MB cap with automatic pruning and compression
 
 ### Agent Skills
 
@@ -263,7 +313,7 @@ envoy/
 ├── repl.py                  # Interactive REPL with slash commands
 ├── ui.py                    # Rich console rendering
 ├── tools.py                 # Strands @tool definitions + worker routing
-├── supervisor.py            # Parallel data gathering
+├── supervisor.py            # Parallel data gathering + cross-referencing
 ├── templates/
 │   ├── commands.md          # Core command prompts
 │   ├── skills/              # Bundled Agent Skills (8 skills)
@@ -273,14 +323,15 @@ envoy/
 │   ├── workers.py           # Domain-specific Strands worker agents
 │   ├── skills.py            # Agent Skills loader (agentskills.io)
 │   ├── workflows.py         # Compound commands (digest, catchup, etc.)
-│   ├── email.py             # Email: send/reply/draft (CC/BCC), read full threads, classify, flag, attachments, contacts
-│   ├── slack_agent.py       # Slack: scan (user resolution + threads), send (DM/channel/threaded), reactions, drafts, files, Lists
-│   ├── calendar.py          # Calendar: view, create (recurring/optional attendees/resources), shared calendars
-│   ├── todo.py              # To-Do: list, add (due dates/importance/reminders), complete, update, delete
+│   ├── heartbeat.py         # Autonomous heartbeat + routines
+│   ├── email.py             # Email: send/reply/draft (CC/BCC), read, classify, flag, attachments
+│   ├── slack_agent.py       # Slack: scan, send, reactions, drafts, files, Lists
+│   ├── calendar.py          # Calendar: view, create, shared calendars
+│   ├── todo.py              # To-Do: list, add, complete, update, delete
 │   ├── people.py            # Phonetool domain agent
 │   ├── sharepoint_agent.py  # SharePoint/OneDrive domain agent
 │   ├── tickets.py           # Tickets domain agent
-│   ├── memory.py / memory2.py  # Persistent memory (with size limits)
+│   ├── memory2.py           # Entity-aware persistent memory
 │   ├── observer.py          # Observer/learning agent
 │   ├── internal.py          # Internal websites (Kingpin, Wiki, Taskei)
 │   ├── export.py            # Word/PowerPoint export
@@ -293,6 +344,8 @@ envoy/
 - [QUICKSTART.md](QUICKSTART.md) — Quick start for experienced users
 - [CONTRIBUTING.md](CONTRIBUTING.md) — Development guide
 - [AGENTCORE.md](AGENTCORE.md) — AgentCore deployment
+- [ROADMAP.md](ROADMAP.md) — Feature roadmap
+- [TEAM-HEALTH-SPEC.md](TEAM-HEALTH-SPEC.md) — Team health dashboard spec
 
 ## Troubleshooting
 
@@ -305,3 +358,4 @@ envoy/
 | `Midway expired` | Run `mwinit` (auto-refreshed hourly) |
 | `Token limit exceeded` | Document too large for model context — content is auto-truncated |
 | `Cleanup too aggressive` | Classifier reads full email bodies and is conservative; only true junk flagged DELETE |
+| `Worker unavailable` | Worker failed after retry — check MCP connections with `/status` |
