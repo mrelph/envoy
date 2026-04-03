@@ -1,12 +1,11 @@
 """Envoy Strands tools — supervisor tools that route to worker agents."""
-import asyncio
 import os
 import re
 import hashlib
 import functools
 from strands import tool
 from envoy_logger import logged_tool
-from agents.base import outlook, builder, invoke_ai, BUILDER_PARAMS, check_mcp_connections, _load_models, MODEL_CATALOG, MODELS_FILE, mcp_batch, get_token_usage, format_token_usage, reset_token_usage
+from agents.base import outlook, builder, invoke_ai, BUILDER_PARAMS, check_mcp_connections, _load_models, MODEL_CATALOG, MODELS_FILE, mcp_batch, get_token_usage, format_token_usage, reset_token_usage, run
 from agents import email, slack_agent, calendar, todo, tickets, memory2 as memory, teamsnap_agent, people, internal, export
 from agents import workflows as wf
 from agents.workers import get_worker
@@ -21,7 +20,7 @@ def _outlook_tool(tool_name: str, args: dict) -> str:
         async with outlook() as session:
             result = await session.call_tool(tool_name, args)
             return result.content[0].text if result.content else "No result."
-    return asyncio.run(_call())
+    return run(_call())
 
 
 def _check_replies_combined() -> str:
@@ -39,14 +38,10 @@ def _check_replies_combined() -> str:
             pass
         return "\n".join(results) if results else "Checked sent messages — no replies detected yet."
     try:
-        return asyncio.run(_check())
+        return run(_check())
     except Exception:
         return "⚠️ Slack MCP unavailable — could only check email replies."
 
-
-def _run(coro):
-    """Run an async coroutine — shared helper to replace scattered asyncio.run() calls."""
-    return asyncio.run(coro)
 
 
 async def _outlook_batch(calls: list) -> list:
@@ -233,7 +228,7 @@ def add_vip(alias: str) -> str:
                     arguments={"inputs": [f"https://phonetool.amazon.com/users/{alias}"]})
                 return str(res.content[0].text) if res.content else ""
 
-        text = _run(_lookup())
+        text = run(_lookup())
         for line in text.split("\n"):
             line = line.strip()
             if ("Job Title:" in line or "Business Title:" in line) and not info["title"]:
@@ -269,7 +264,7 @@ def teamsnap_auth() -> str:
     """Authenticate with TeamSnap via AWS-hosted OAuth.
     Call this before using any other TeamSnap tools if not yet authenticated.
     """
-    return _run(teamsnap_agent.auth())
+    return run(teamsnap_agent.auth())
 
 
 @tool
@@ -281,7 +276,7 @@ def teamsnap_schedule(team_id: str = "", start_date: str = "", end_date: str = "
         start_date: Filter from date (ISO 8601, optional)
         end_date: Filter until date (ISO 8601, optional)
     """
-    return _run(teamsnap_agent.get_schedule(team_id, start_date, end_date))
+    return run(teamsnap_agent.get_schedule(team_id, start_date, end_date))
 
 
 @tool
@@ -291,7 +286,7 @@ def teamsnap_roster(team_id: str) -> str:
     Args:
         team_id: TeamSnap team ID
     """
-    return _run(teamsnap_agent.get_roster(team_id))
+    return run(teamsnap_agent.get_roster(team_id))
 
 
 @tool
@@ -301,7 +296,7 @@ def teamsnap_availability(event_id: str) -> str:
     Args:
         event_id: TeamSnap event ID
     """
-    return _run(teamsnap_agent.get_availability(event_id))
+    return run(teamsnap_agent.get_availability(event_id))
 
 
 @tool
@@ -647,7 +642,6 @@ def _delegate(worker_name: str, request: str, _retries: int = 1) -> str:
             last_err = e
             print(f"[{worker_name}] attempt {attempt+1} failed: {e}", file=sys.stderr)
             if attempt < _retries:
-                # Clear cached worker in case it's in a bad state
                 from agents.workers import _workers
                 _workers.pop(worker_name, None)
     return f"⚠️ {worker_name} worker unavailable: {last_err}. Other sources may still have the information you need."

@@ -14,7 +14,7 @@ The `_context` dict in supervisor.py is shallow. "What did Curtis say in that em
 Email attachments are referenced but there's no download/preview/summarize flow. "What's in the PDF Alice sent me?" is a natural ask with no answer today.
 
 ### 4. Proactive notifications
-Patrol exists but is cron-based. No webhook/push path. A Slack bot listener that triggers Envoy on @mention or DM would make it feel alive rather than batch-only.
+Heartbeat exists but is cron-based. No webhook/push path. A Slack bot listener that triggers Envoy on @mention or DM would make it feel alive rather than batch-only.
 
 ## 🟡 Medium Impact
 

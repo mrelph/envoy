@@ -5,7 +5,7 @@ import shutil
 from pathlib import Path
 from rich.console import Console
 from rich.panel import Panel
-from agents.base import invoke_ai, builder
+from agents.base import invoke_ai, builder, run
 from agents import people
 
 CONFIG_DIR = Path.home() / ".envoy"
@@ -216,7 +216,6 @@ def run_init():
     name, title, manager, directs = "", "", "", []
     try:
         console.print(f"[dim]Looking you up in Phonetool...[/dim]")
-        import asyncio
 
         async def _lookup():
             async with builder() as session:
@@ -226,7 +225,7 @@ def run_init():
                 )
                 return str(result.content[0].text) if result.content else ""
 
-        pt_text = asyncio.run(_lookup())
+        pt_text = run(_lookup())
         for line in pt_text.split("\n"):
             if "Job Title:" in line or "Business Title:" in line:
                 title = line.split(":", 1)[1].strip()
@@ -239,7 +238,7 @@ def run_init():
             console.print(f"  Manager: {manager}")
 
         try:
-            dr = asyncio.run(people.get_direct_reports(alias))
+            dr = run(people.get_direct_reports(alias))
             directs = [d.get("alias", d.get("name", "")) for d in dr]
             if directs:
                 console.print(f"  Direct reports: {', '.join(directs)}")
@@ -264,7 +263,6 @@ def run_init():
         aliases_to_lookup = [a.strip() for a in vips_raw.split(",") if a.strip()]
         try:
             console.print(f"[dim]Looking up {len(aliases_to_lookup)} VIP(s) in Phonetool...[/dim]")
-            import asyncio as _aio
 
             async def _lookup_vips():
                 results = []
@@ -279,7 +277,7 @@ def run_init():
                             results.append({"alias": a, "email": f"{a}@amazon.com", "name": "", "title": ""})
                 return results
 
-            vip_entries = _aio.run(_lookup_vips())
+            vip_entries = run(_lookup_vips())
             for v in vip_entries:
                 label = f"{v['name']} ({v['alias']})" if v["name"] else v["alias"]
                 if v["title"]:
@@ -303,7 +301,6 @@ def run_init():
     if ea_alias:
         try:
             console.print(f"[dim]Looking up {ea_alias} in Phonetool...[/dim]")
-            import asyncio as _aio2
 
             async def _ea_lookup():
                 async with builder() as session:
@@ -311,7 +308,7 @@ def run_init():
                         arguments={"inputs": [f"https://phonetool.amazon.com/users/{ea_alias}"]})
                     return str(res.content[0].text) if res.content else ""
 
-            ea_entry = _parse_phonetool(_aio2.run(_ea_lookup()), ea_alias)
+            ea_entry = _parse_phonetool(run(_ea_lookup()), ea_alias)
             if ea_entry["name"]:
                 console.print(f"  Found: [bold]{ea_entry['name']}[/bold]")
         except Exception:

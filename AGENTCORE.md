@@ -8,12 +8,12 @@ Envoy can run as a hosted agent on Amazon's AgentCore platform.
 cd envoy
 zip -r envoy-agent.zip . -x "*.git*" -x "venv/*" -x "__pycache__/*" -x ".env"
 
-agentcore deploy --config agent_config.json --package envoy-agent.zip
+agentcore deploy --package envoy-agent.zip
 ```
 
 ## Agent Configuration
 
-See `agent_config.json` for the full configuration. The agent exposes tools for:
+The agent exposes tools for:
 - Team email digest generation (reads full thread bodies)
 - Inbox cleanup classification (reads full bodies for accurate triage)
 - Customer email scanning
@@ -63,7 +63,7 @@ The AgentCore runtime needs:
 ## Testing Locally
 
 ```bash
-python3 agent_handler.py
+envoy digest --days 7
 ```
 
-This runs a test request against the handler and prints the result.
+This runs a digest locally to verify MCP connections and Bedrock access.

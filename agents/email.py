@@ -123,7 +123,7 @@ def classify_emails(emails: List[Dict], user_alias: str) -> List[Dict]:
         return []
     try:
         # Read full bodies for emails where preview is ambiguous (batch up to 20)
-        import asyncio
+        from agents.base import run
         async def _enrich():
             async with outlook() as session:
                 for e in emails[:20]:
@@ -135,7 +135,7 @@ def classify_emails(emails: List[Dict], user_alias: str) -> List[Dict]:
                         except Exception:
                             pass
         try:
-            asyncio.run(_enrich())
+            run(_enrich())
         except Exception:
             pass
 

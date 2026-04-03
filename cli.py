@@ -8,7 +8,6 @@ from rich.prompt import Prompt, Confirm
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 from rich import box
-from cot_renderer import CoTRenderer
 from envoy_logger import get_logger, LogEntry
 
 console = Console()
@@ -53,19 +52,17 @@ def cli(ctx, verbose):
     env_verbose = os.environ.get('ENVOY_VERBOSE', '').strip().lower() in ('1', 'true')
     is_verbose = verbose or env_verbose
 
-    # Initialize CoT renderer and register with logger
-    renderer = CoTRenderer(console=console, enabled=is_verbose)
-    logger = get_logger()
-    logger.on_entry(renderer.on_log_entry)
-
     # Store on context for subcommands if needed
     ctx.ensure_object(dict)
     ctx.obj['verbose'] = is_verbose
-    ctx.obj['renderer'] = renderer
 
     if ctx.invoked_subcommand is None:
-        from repl import run_interactive
-        run_interactive()
+        try:
+            from tui import run_tui
+            run_tui()
+        except ImportError:
+            from repl import run_interactive
+            run_interactive()
 
 
 @cli.command()
@@ -138,11 +135,22 @@ def logs(ctx, level, event_type, tail):
         return
 
     entries = parse_log_file(log_path)
-    renderer = ctx.obj.get('renderer') if ctx.obj else None
-    if renderer is None:
-        renderer = CoTRenderer(console=console, enabled=False)
 
-    renderer.render_logs_table(entries, level_filter=level, type_filter=event_type, tail=tail)
+    # Filter
+    if level:
+        from envoy_logger import _LEVEL_ORDER
+        min_sev = _LEVEL_ORDER.get(level.upper(), 0)
+        entries = [e for e in entries if _LEVEL_ORDER.get(e.level.upper(), 0) >= min_sev]
+    if event_type:
+        entries = [e for e in entries if e.event_type == event_type]
+    entries = entries[-tail:] if tail else entries
+
+    _styles = {"ERROR": "red", "WARNING": "yellow", "INFO": "green", "DEBUG": "dim"}
+    t = Table(box=box.SIMPLE)
+    t.add_column("Timestamp"); t.add_column("Level"); t.add_column("Event"); t.add_column("Message")
+    for e in entries:
+        t.add_row(e.timestamp, e.level, e.event_type, e.message, style=_styles.get(e.level.upper(), ""))
+    console.print(t)
 
 
 def _get_latest_tag(script_dir):

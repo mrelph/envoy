@@ -9,15 +9,40 @@ from datetime import datetime, timedelta
 from typing import List, Dict
 
 from dotenv import load_dotenv
-from mcp import ClientSession, StdioServerParameters
-from mcp.client.stdio import stdio_client
 from envoy_logger import get_logger
+
+# Lazy-loaded heavy modules (mcp ~2s, boto3 ~0.7s)
+ClientSession = None
+StdioServerParameters = None
+stdio_client = None
+
+def _ensure_mcp():
+    global ClientSession, StdioServerParameters, stdio_client
+    if ClientSession is None:
+        from mcp import ClientSession as _CS, StdioServerParameters as _SP
+        from mcp.client.stdio import stdio_client as _sc
+        ClientSession = _CS
+        StdioServerParameters = _SP
+        stdio_client = _sc
 
 load_dotenv(os.path.expanduser("~/.envoy/.env"))
 load_dotenv()  # fallback to project-dir .env
 
 # Suppress MCP server stderr noise (Node warnings, internal errors)
-_devnull = open(os.devnull, "w")
+_devnull = None
+
+def _get_devnull():
+    global _devnull
+    if _devnull is None or _devnull.closed:
+        import atexit
+        _devnull = open(os.devnull, "w")
+        atexit.register(_devnull.close)
+    return _devnull
+
+
+def run(coro):
+    """Run an async coroutine synchronously. Single entry point for all sync→async bridges."""
+    return asyncio.run(coro)
 
 
 class MCPConnectionError(Exception):
@@ -25,11 +50,7 @@ class MCPConnectionError(Exception):
     pass
 
 
-# --- MCP server params (singletons) ---
-
-OUTLOOK_PARAMS = StdioServerParameters(command="aws-outlook-mcp", args=[])
-BUILDER_PARAMS = StdioServerParameters(command="builder-mcp", args=[])
-SLACK_PARAMS = StdioServerParameters(command="ai-community-slack-mcp", args=[])
+# --- MCP server params (lazy — constructed on first use to avoid importing mcp at module load) ---
 
 _teamsnap_dir = os.path.join(os.path.expanduser("~"), "TeamSnapMCP")
 _teamsnap_env = {**os.environ}
@@ -41,66 +62,186 @@ if os.path.exists(_teamsnap_dotenv):
             if line and not line.startswith("#") and "=" in line:
                 k, v = line.split("=", 1)
                 _teamsnap_env[k.strip()] = v.strip()
-TEAMSNAP_PARAMS = StdioServerParameters(
-    command="node",
-    args=[os.path.join(_teamsnap_dir, "dist", "wrapper.js")],
-    env=_teamsnap_env,
-)
 
 _node_quiet_env = {**os.environ, "NODE_NO_WARNINGS": "1"}
 
-SHAREPOINT_PARAMS = StdioServerParameters(command="amazon-sharepoint-mcp", args=[], env=_node_quiet_env)
-
-MCP_SERVERS = {
-    "Outlook": OUTLOOK_PARAMS,
-    "Phonetool": BUILDER_PARAMS,
-    "Slack": SLACK_PARAMS,
-    "TeamSnap": TEAMSNAP_PARAMS,
-    "SharePoint": SHAREPOINT_PARAMS,
+# Raw param dicts — converted to StdioServerParameters on first access
+_MCP_PARAM_DEFS = {
+    "Outlook":    {"command": "aws-outlook-mcp", "args": []},
+    "Phonetool":  {"command": "builder-mcp", "args": []},
+    "Slack":      {"command": "ai-community-slack-mcp", "args": []},
+    "TeamSnap":   {"command": "node", "args": [os.path.join(_teamsnap_dir, "dist", "wrapper.js")], "env": _teamsnap_env},
+    "SharePoint": {"command": "amazon-sharepoint-mcp", "args": [], "env": _node_quiet_env},
 }
+
+_mcp_params_cache = {}
+
+def _get_params(name):
+    if name not in _mcp_params_cache:
+        _ensure_mcp()
+        _mcp_params_cache[name] = StdioServerParameters(**_MCP_PARAM_DEFS[name])
+    return _mcp_params_cache[name]
+
+# Legacy aliases for external code that references these directly
+def __getattr__(name):
+    _aliases = {
+        "OUTLOOK_PARAMS": "Outlook", "BUILDER_PARAMS": "Phonetool",
+        "SLACK_PARAMS": "Slack", "TEAMSNAP_PARAMS": "TeamSnap",
+        "SHAREPOINT_PARAMS": "SharePoint",
+        "MCP_SERVERS": None,
+    }
+    if name in _aliases:
+        if name == "MCP_SERVERS":
+            return {k: _get_params(k) for k in _MCP_PARAM_DEFS}
+        return _get_params(_aliases[name])
+    raise AttributeError(f"module 'agents.base' has no attribute {name!r}")
 
 
 # --- MCP context managers ---
 
-def _mcp_session(params, name):
-    """Generic MCP session context manager with logging and connection caching.
-    
-    First call opens the connection. Subsequent calls within the same async context
-    reuse it. Falls back to a fresh connection if the cached one is stale.
-    """
-    _cache = {"session": None, "stdio": None}
+MCP_CALL_TIMEOUT = 30  # seconds per MCP tool call
 
+
+class _TimeoutSession:
+    """Wraps an MCP ClientSession to add a timeout to every call_tool invocation."""
+    def __init__(self, session, name, timeout=MCP_CALL_TIMEOUT):
+        self._session = session
+        self._name = name
+        self._timeout = timeout
+
+    async def call_tool(self, tool_name, arguments=None, **kwargs):
+        try:
+            return await asyncio.wait_for(
+                self._session.call_tool(tool_name, arguments, **kwargs),
+                timeout=self._timeout,
+            )
+        except asyncio.TimeoutError:
+            raise TimeoutError(f"{self._name}/{tool_name} timed out after {self._timeout}s")
+
+    def __getattr__(self, name):
+        return getattr(self._session, name)
+
+
+import threading
+
+
+# Single persistent event loop for all MCP operations.
+# This lets subprocess transports survive across multiple run() calls.
+_loop = None
+_loop_thread = None
+_loop_lock = threading.Lock()
+
+
+def _get_loop():
+    global _loop, _loop_thread
+    if _loop is not None and _loop.is_running():
+        return _loop
+    with _loop_lock:
+        if _loop is not None and _loop.is_running():
+            return _loop
+        _loop = asyncio.new_event_loop()
+        _loop_thread = threading.Thread(target=_loop.run_forever, daemon=True)
+        _loop_thread.start()
+        return _loop
+
+
+def run(coro):
+    """Run an async coroutine on the shared event loop.
+    
+    Uses a persistent background loop so MCP subprocess connections
+    survive across calls (~0.9s saved per reused connection).
+    """
+    future = asyncio.run_coroutine_threadsafe(coro, _get_loop())
+    return future.result(timeout=120)
+
+
+# --- Persistent MCP sessions ---
+# Instead of opening/closing a subprocess per call (~0.9s overhead each),
+# keep sessions alive and reuse them. Closed on process exit.
+
+_persistent = {}  # server_name → (process, session, loop, thread)
+_persistent_lock = threading.Lock()
+
+
+async def _open_persistent(server_name):
+    """Open a persistent MCP session (subprocess stays running)."""
+    _ensure_mcp()
+    params = _get_params(server_name)
+    # We need to keep the context managers alive, so we drive them manually
+    stdio_cm = stdio_client(params, errlog=_get_devnull())
+    r, w = await stdio_cm.__aenter__()
+    session_cm = ClientSession(r, w)
+    session = await session_cm.__aenter__()
+    await session.initialize()
+    return stdio_cm, session_cm, _TimeoutSession(session, server_name)
+
+
+async def _close_persistent(entry):
+    """Close a persistent MCP session."""
+    stdio_cm, session_cm, _ = entry
+    try:
+        await session_cm.__aexit__(None, None, None)
+    except Exception:
+        pass
+    try:
+        await stdio_cm.__aexit__(None, None, None)
+    except Exception:
+        pass
+
+
+def _mcp_session(server_name):
+    """MCP session context manager with persistent connection reuse.
+    
+    First call opens the subprocess. Subsequent calls reuse it.
+    If the connection is dead, it's reopened automatically.
+    """
     @asynccontextmanager
     async def _ctx():
+        # Try cached session first
+        if server_name in _persistent:
+            try:
+                _, _, session = _persistent[server_name]
+                yield session
+                return
+            except Exception:
+                # Dead connection — clean up and reopen
+                entry = _persistent.pop(server_name, None)
+                if entry:
+                    try:
+                        await _close_persistent(entry)
+                    except Exception:
+                        pass
+
+        # Open new persistent session
         logger = get_logger()
         try:
-            logger.log("DEBUG", "mcp_request", f"MCP connect to {name}: initialize",
-                        server_name=name, tool_name="initialize", argument_keys=[])
+            logger.log("DEBUG", "mcp_request", f"MCP connect to {server_name}: initialize",
+                        server_name=server_name, tool_name="initialize", argument_keys=[])
         except Exception:
             pass
         try:
-            async with stdio_client(params, errlog=_devnull) as (r, w):
-                async with ClientSession(r, w) as s:
-                    await s.initialize()
-                    try:
-                        logger.log("DEBUG", "mcp_response", f"MCP connected to {name}",
-                                    server_name=name, tool_name="initialize", response_size_bytes=0)
-                    except Exception:
-                        pass
-                    yield s
-        except Exception as e:
+            stdio_cm, session_cm, session = await _open_persistent(server_name)
+            _persistent[server_name] = (stdio_cm, session_cm, session)
             try:
-                logger.log("ERROR", "mcp_error", f"MCP error connecting to {name}: {e}",
-                            server_name=name, tool_name="initialize", error_description=str(e))
+                logger.log("DEBUG", "mcp_response", f"MCP connected to {server_name}",
+                            server_name=server_name, tool_name="initialize", response_size_bytes=0)
             except Exception:
                 pass
-            if name == "Slack":
+            yield session
+        except Exception as e:
+            _persistent.pop(server_name, None)
+            try:
+                logger.log("ERROR", "mcp_error", f"MCP error connecting to {server_name}: {e}",
+                            server_name=server_name, tool_name="initialize", error_description=str(e))
+            except Exception:
+                pass
+            if server_name == "Slack":
                 raise MCPConnectionError(f"Slack MCP unavailable: {e}") from e
             raise
     return _ctx
 
 
-def _mcp_batch_session(params, name):
+def _mcp_batch_session(params, server_name):
     """Long-lived MCP session for batch operations within a single event loop.
     
     Usage:
@@ -112,11 +253,11 @@ def _mcp_batch_session(params, name):
     pass  # Placeholder for multi-agent phase
 
 
-outlook = _mcp_session(OUTLOOK_PARAMS, "Outlook")
-builder = _mcp_session(BUILDER_PARAMS, "Phonetool")
-slack = _mcp_session(SLACK_PARAMS, "Slack")
-teamsnap = _mcp_session(TEAMSNAP_PARAMS, "TeamSnap")
-sharepoint = _mcp_session(SHAREPOINT_PARAMS, "SharePoint")
+outlook = _mcp_session("Outlook")
+builder = _mcp_session("Phonetool")
+slack = _mcp_session("Slack")
+teamsnap = _mcp_session("TeamSnap")
+sharepoint = _mcp_session("SharePoint")
 
 
 # --- Shared MCP batch runner ---
@@ -150,9 +291,10 @@ async def mcp_batch(server_name: str, calls: list) -> list:
 # --- Connection testing ---
 
 def check_mcp_connections() -> Dict[str, bool]:
+    _ensure_mcp()
     async def _test_one(name, params):
         try:
-            async with stdio_client(params, errlog=_devnull) as (r, w):
+            async with stdio_client(params, errlog=_get_devnull()) as (r, w):
                 async with ClientSession(r, w) as s:
                     await asyncio.wait_for(s.initialize(), timeout=10)
                     return name, True
@@ -169,11 +311,12 @@ def check_mcp_connections() -> Dict[str, bool]:
             return "Bedrock", False
 
     async def _test_all():
-        tasks = [_test_one(n, p) for n, p in MCP_SERVERS.items()]
+        servers = {k: _get_params(k) for k in _MCP_PARAM_DEFS}
+        tasks = [_test_one(n, p) for n, p in servers.items()]
         tasks.append(_test_bedrock())
         return dict(await asyncio.gather(*tasks))
 
-    return asyncio.run(_test_all())
+    return run(_test_all())
 
 
 # --- AI / Bedrock ---

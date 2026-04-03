@@ -29,10 +29,18 @@ envoy/
 │   ├── skills/              # Bundled Agent Skills (8 skills)
 │   └── soul.md / envoy.md / process.md  # Config templates
 ├── agents/
-│   ├── base.py              # MCP connections, Bedrock client, AI invocation
-│   ├── workers.py           # Domain-specific Strands worker agents (6 workers)
+│   ├── base.py              # MCP connections, Bedrock client, AI invocation, run() helper
+│   ├── workers/             # Domain-specific Strands worker agents
+│   │   ├── __init__.py      # Worker factory + shared infra (_model, _USER, get_worker)
+│   │   ├── email_worker.py  # Email operations worker
+│   │   ├── comms_worker.py  # Slack + EA delegation worker
+│   │   ├── calendar_worker.py   # Calendar management worker
+│   │   ├── productivity_worker.py  # To-dos, tickets, memory, cron
+│   │   ├── research_worker.py     # Phonetool, Kingpin, Wiki, web search
+│   │   └── sharepoint_worker.py   # SharePoint/OneDrive worker
 │   ├── skills.py            # Agent Skills loader (agentskills.io)
 │   ├── workflows.py         # Compound commands (digest, catchup, etc.)
+│   ├── heartbeat.py         # Autonomous heartbeat + routines
 │   ├── email.py             # Email: send/reply/draft (CC/BCC), read full threads, classify, flag, attachments, contacts
 │   ├── slack_agent.py       # Slack: scan (user resolution + threads), send (DM/channel/threaded), reactions, drafts, files, Lists
 │   ├── calendar.py          # Calendar: view, create (recurring/optional attendees/resources), shared calendars
@@ -40,7 +48,7 @@ envoy/
 │   ├── people.py            # Phonetool domain agent
 │   ├── sharepoint_agent.py  # SharePoint/OneDrive domain agent
 │   ├── tickets.py           # Tickets domain agent
-│   ├── memory.py / memory2.py  # Persistent memory
+│   ├── memory2.py           # Entity-aware persistent memory
 │   ├── observer.py          # Observer/learning agent
 │   ├── internal.py          # Internal websites (Kingpin, Wiki, Taskei)
 │   ├── export.py            # Word/PowerPoint export
@@ -54,7 +62,7 @@ envoy/
 1. User types in REPL (`repl.py`) or runs CLI subcommand (`cli.py`)
 2. Slash commands map to agent prompts; freeform input goes directly to the Strands agent
 3. The supervisor agent (`agent.py` + `tools.py`) routes to specialized workers
-4. Workers (`agents/workers.py`) have focused toolsets and run on appropriate model tiers
+4. Workers (`agents/workers/`) have focused toolsets and run on appropriate model tiers
 5. Workers call domain agents (`agents/*.py`) which talk to MCP servers
 6. Results flow back through the supervisor to the user
 
@@ -160,10 +168,11 @@ Bundled skills live in `templates/skills/` and are copied to `~/.envoy/skills/` 
 
 1. Create the domain agent in `agents/my_agent.py` (async MCP wrappers)
 2. Add MCP params to `agents/base.py` if it's a new MCP server
-3. Add `_create_my_worker()` in `agents/workers.py` with focused tools
-4. Register in the worker factory and `WORKER_NAMES`
-5. Add the `my_worker` delegate tool in `tools.py`
-6. Add to `_ALL_TOOLS_RAW`
+3. Create `agents/workers/my_worker.py` with a `create()` function that returns an `Agent`
+4. Import shared infra from `agents.workers` (`_model`, `_USER`) and `run` from `agents.base`
+5. Register in `agents/workers/__init__.py`: add to factory imports and `WORKER_NAMES`
+6. Add the `my_worker` delegate tool in `tools.py`
+7. Add to `_ALL_TOOLS_RAW`
 
 ### Adding a new MCP server
 
@@ -196,7 +205,7 @@ Bundled skills live in `templates/skills/` and are copied to `~/.envoy/skills/` 
 
 ## Code Style
 
-- Domain agents are async; workers wrap with `asyncio.run()`
+- Domain agents are async; workers and tools bridge to sync via `run()` from `agents.base`
 - MCP connections use `async with` context managers (not persistent)
 - Worker agents use `callback_handler=None` to suppress streaming output
 - Error handling returns graceful messages, never crashes the REPL

@@ -6,14 +6,13 @@ follow_up_tracker, one_on_one_prep, commitment_tracker, meeting_prep,
 yesterbox, send_to_ea, recommend_responses, learn_response
 """
 
-import asyncio
 import json
 import os
 from datetime import datetime, timedelta
 from typing import List, Dict
 
 from envoy_logger import get_logger
-from agents.base import invoke_ai, MCPConnectionError, outlook, parse_email_search_result
+from agents.base import invoke_ai, MCPConnectionError, outlook, parse_email_search_result, run
 from agents import people, email, slack_agent, calendar, todo, tickets, memory2 as memory
 
 _USER = os.getenv('USER', '')
@@ -21,7 +20,7 @@ _USER = os.getenv('USER', '')
 
 def pto_catchup(alias: str = "", days: int = 5) -> str:
     alias = alias or _USER
-    return asyncio.run(_pto_catchup_async(alias, days))
+    return run(_pto_catchup_async(alias, days))
 
 
 async def _pto_catchup_async(alias: str, days: int) -> str:
@@ -37,7 +36,7 @@ async def _pto_catchup_async(alias: str, days: int) -> str:
     except Exception:
         pass
     try:
-        emails = asyncio.run(email.fetch_inbox(days=days, limit=50))
+        emails = await email.fetch_inbox(days=days, limit=50)
         if emails:
             sections.append("YOUR INBOX:\n" + "\n".join(
                 f"- {e['from']}: {e['subject']} ({e['date']})" for e in emails[:30]))
@@ -87,7 +86,7 @@ Data:
 
 def slack_catchup(alias: str = "", days: int = 3) -> str:
     alias = alias or _USER
-    return asyncio.run(_slack_catchup_async(alias, days))
+    return run(_slack_catchup_async(alias, days))
 
 
 async def _slack_catchup_async(alias: str, days: int) -> str:
@@ -112,7 +111,7 @@ Messages:
 
 def calendar_audit(alias: str = "", days: int = 5) -> str:
     alias = alias or _USER
-    return asyncio.run(_calendar_audit_async(alias, days))
+    return run(_calendar_audit_async(alias, days))
 
 
 async def _calendar_audit_async(alias: str, days: int) -> str:
@@ -138,7 +137,7 @@ Events:
 
 def response_time_tracker(alias: str = "", days: int = 7) -> str:
     alias = alias or _USER
-    return asyncio.run(_response_time_async(alias, days))
+    return run(_response_time_async(alias, days))
 
 
 async def _response_time_async(alias: str, days: int) -> str:
@@ -185,7 +184,7 @@ Data:
 
 def follow_up_tracker(alias: str = "", days: int = 7) -> str:
     alias = alias or _USER
-    return asyncio.run(_follow_up_tracker_async(alias, days))
+    return run(_follow_up_tracker_async(alias, days))
 
 
 async def _follow_up_tracker_async(alias: str, days: int) -> str:
@@ -243,7 +242,7 @@ INBOX (for cross-reference):
 
 def one_on_one_prep(person_alias: str, alias: str = "") -> str:
     alias = alias or _USER
-    return asyncio.run(_one_on_one_prep_async(person_alias, alias))
+    return run(_one_on_one_prep_async(person_alias, alias))
 
 
 async def _one_on_one_prep_async(person_alias: str, alias: str) -> str:
@@ -316,7 +315,7 @@ Data:
 
 def commitment_tracker(alias: str = "", days: int = 7) -> str:
     alias = alias or _USER
-    return asyncio.run(_commitment_tracker_async(alias, days))
+    return run(_commitment_tracker_async(alias, days))
 
 
 async def _commitment_tracker_async(alias: str, days: int) -> str:
@@ -378,7 +377,7 @@ Data:
 
 def meeting_prep(meeting_subject: str = "", alias: str = "") -> str:
     alias = alias or _USER
-    return asyncio.run(_meeting_prep_async(meeting_subject, alias))
+    return run(_meeting_prep_async(meeting_subject, alias))
 
 
 async def _meeting_prep_async(meeting_subject: str, alias: str) -> str:
@@ -454,7 +453,7 @@ Data:
 
 def yesterbox(alias: str = "", days: int = 1) -> str:
     alias = alias or _USER
-    return asyncio.run(_yesterbox_async(alias, days))
+    return run(_yesterbox_async(alias, days))
 
 
 async def _yesterbox_async(alias: str, days: int) -> str:
@@ -556,7 +555,7 @@ def _load_response_patterns() -> str:
 
 def recommend_responses(alias: str = "", days: int = 3) -> str:
     alias = alias or _USER
-    return asyncio.run(_recommend_responses_async(alias, days))
+    return run(_recommend_responses_async(alias, days))
 
 
 async def _recommend_responses_async(alias: str, days: int) -> str:
@@ -649,7 +648,7 @@ Messages:
 # --- Send to EA ---
 
 def send_to_ea(message: str, ea_alias: str = None, category: str = "task") -> str:
-    return asyncio.run(_send_to_ea_async(message, ea_alias, category))
+    return run(_send_to_ea_async(message, ea_alias, category))
 
 
 async def _send_to_ea_async(message: str, ea_alias: str = None, category: str = "task") -> str:

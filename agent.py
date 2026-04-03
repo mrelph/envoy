@@ -2,11 +2,6 @@
 import os
 import json
 from pathlib import Path
-from strands import Agent
-from strands.models import BedrockModel
-from strands.session.file_session_manager import FileSessionManager
-from strands.handlers import null_callback_handler
-from tools import ALL_TOOLS
 from envoy_logger import get_logger
 
 CONFIG_DIR = Path.home() / ".envoy"
@@ -271,7 +266,7 @@ def _create_reasoning_callback_handler():
     return reasoning_callback_handler
 
 
-def create_agent(session_id: str = "default") -> Agent:
+def create_agent(session_id: str = "default"):
     """Create a Envoy Strands agent with personality, soul, and session persistence."""
     CONFIG_DIR.mkdir(exist_ok=True)
     SESSIONS_DIR.mkdir(exist_ok=True)
@@ -284,6 +279,11 @@ def create_agent(session_id: str = "default") -> Agent:
         pass
 
     from agents.base import _load_models
+    from strands import Agent
+    from strands.models import BedrockModel
+    from strands.session.file_session_manager import FileSessionManager
+    from tools import ALL_TOOLS
+
     agent_model_id = _load_models().get("agent", "us.anthropic.claude-opus-4-6-v1")
 
     model = BedrockModel(

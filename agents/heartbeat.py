@@ -10,7 +10,7 @@ import os
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from agents.base import invoke_ai, outlook, MCPConnectionError
+from agents.base import invoke_ai, outlook, MCPConnectionError, run
 from agents import email, slack_agent, calendar, todo, tickets, people, memory2 as memory
 
 _USER = os.getenv("USER", "")
@@ -136,7 +136,7 @@ async def _gather_context(days: int = 1) -> str:
 
 def run_heartbeat(quiet: bool = False, notify: str = "slack") -> str:
     """Main heartbeat entry point. Called by cron or CLI."""
-    return asyncio.run(_run_heartbeat_async(quiet, notify))
+    return run(_run_heartbeat_async(quiet, notify))
 
 
 async def _run_heartbeat_async(quiet: bool = False, notify: str = "slack") -> str:

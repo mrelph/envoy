@@ -3,9 +3,11 @@ click>=8.0.0
 boto3
 botocore[crt]
 rich>=13.0.0
+textual>=0.50.0
 python-dotenv
 strands-agents
 strands-agents-tools
 markdown
 python-docx
 python-pptx
+requests

@@ -319,8 +319,15 @@ envoy/
 │   ├── skills/              # Bundled Agent Skills (8 skills)
 │   └── soul.md / envoy.md / process.md
 ├── agents/
-│   ├── base.py              # MCP connections, Bedrock client, AI invocation
-│   ├── workers.py           # Domain-specific Strands worker agents
+│   ├── base.py              # MCP connections, Bedrock client, AI invocation, run() helper
+│   ├── workers/             # Domain-specific Strands worker agents
+│   │   ├── __init__.py      # Worker factory + shared infra
+│   │   ├── email_worker.py  # Email operations worker
+│   │   ├── comms_worker.py  # Slack + EA delegation worker
+│   │   ├── calendar_worker.py   # Calendar management worker
+│   │   ├── productivity_worker.py  # To-dos, tickets, memory, cron
+│   │   ├── research_worker.py     # Phonetool, Kingpin, Wiki, web search
+│   │   └── sharepoint_worker.py   # SharePoint/OneDrive worker
 │   ├── skills.py            # Agent Skills loader (agentskills.io)
 │   ├── workflows.py         # Compound commands (digest, catchup, etc.)
 │   ├── heartbeat.py         # Autonomous heartbeat + routines

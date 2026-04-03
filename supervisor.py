@@ -12,6 +12,7 @@ import os
 from datetime import datetime
 from strands import tool
 from envoy_logger import get_logger
+from agents.base import run
 
 # --- Conversation context (persists across turns within a session) ---
 
@@ -47,7 +48,7 @@ def gather(sources: str = "email,slack,calendar,todos", days: int = 1, alias: st
     """
     alias = alias or os.getenv("USER", "")
     source_list = [s.strip().lower() for s in sources.split(",")]
-    results = asyncio.run(_gather_async(source_list, days, alias))
+    results = run(_gather_async(source_list, days, alias))
 
     # Store in context for follow-up questions
     for key, value in results.items():
@@ -193,7 +194,7 @@ def read_email_thread(conversation_id: str) -> str:
                 "conversationId": conversation_id, "format": "markdown"
             })
             return str(result.content[0].text) if result.content else "No result."
-    result = asyncio.run(_call())
+    result = run(_call())
     set_context("last_email_thread", result)
     # Cache for follow-up questions
     bodies = _context.get("last_email_bodies", {})
@@ -214,7 +215,6 @@ def lookup_person(alias: str) -> str:
     Args:
         alias: Amazon login alias
     """
-    import asyncio
     from agents.base import builder
 
     async def _fetch():
@@ -225,7 +225,7 @@ def lookup_person(alias: str) -> str:
             )
             return str(result.content[0].text) if result.content else f"No profile found for {alias}"
 
-    result = asyncio.run(_fetch())
+    result = run(_fetch())
     set_context("last_person_lookup", result)
     return result
 
@@ -250,7 +250,7 @@ def search_emails(query: str, days: int = 14) -> str:
                 "query": query, "startDate": start_date, "endDate": end_date, "limit": 25
             })
             return str(result.content[0].text) if result.content else "No results."
-    result = asyncio.run(_call())
+    result = run(_call())
     set_context("last_search_results", result)
     return result
 
@@ -269,7 +269,7 @@ def get_attachment(item_id: str, filename: str = "") -> str:
         async with _outlook() as session:
             result = await session.call_tool("email_attachments", {"attachmentId": item_id})
             return str(result.content[0].text) if result.content else "No attachment data."
-    result = asyncio.run(_call())
+    result = run(_call())
     set_context("last_attachment", result)
     return result
 

@@ -80,8 +80,8 @@ Events:
 
 
 def events(start_date: str = "", days: int = 1, search: str = "") -> str:
-    import asyncio
-    raw, _ = asyncio.run(get_events_raw(
+    from agents.base import run
+    raw, _ = run(get_events_raw(
         view="week" if days > 1 else "day",
         start_date=start_date, days_ahead=days,
     ))
