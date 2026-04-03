@@ -260,12 +260,6 @@ def add_vip(alias: str) -> str:
     return f"Added {label}{title_part} to High Priority People."
 
 @tool
-def teamsnap_auth() -> str:
-    """Check TeamSnap authentication status. Already authenticated via AWS Lambda — only call if other TeamSnap tools return auth errors."""
-    return run(teamsnap_agent.auth())
-
-
-@tool
 def teamsnap_schedule(team_id: str = "", start_date: str = "", end_date: str = "") -> str:
     """Get TeamSnap schedule/events. Lists teams if no team_id given.
 
