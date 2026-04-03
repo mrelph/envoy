@@ -44,6 +44,9 @@ Let users configure urgency thresholds. "Only Slack me for 🔴 items, email me 
 ### 12. Undo / audit trail
 "What did Envoy do on my behalf today?" — a log of all actions taken (emails sent, meetings booked, to-dos created) with the ability to reverse them.
 
+### 13. Obsidian integration
+Two-way sync between Envoy's memory system and an Obsidian vault. Memory entries become daily notes with `[[wikilinks]]` for entities, enabling Obsidian's graph view to visualize people/project connections. Start with an `/obsidian` export command (~50 lines), then upgrade to live file-based sync. Obsidian → Envoy import via a watched inbox folder where dropped `.md` files get parsed and added to memory.
+
 ## Recommended Build Order
 
 1. **Worker retry + graceful degradation** — Immediate quality-of-life fix

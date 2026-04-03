@@ -160,39 +160,36 @@ async def scan_raw(channels: List[str] = None, days: int = 7) -> str:
             result = await session.call_tool("batch_get_conversation_history", arguments={"channels": batch})
             raw = json.loads(result.content[0].text) if result.content else []
 
-        lookup = {}
-        for cid, name, kind in channel_ids:
-            lookup[cid] = (name_map.get(cid, name), kind)
+            lookup = {}
+            for cid, name, kind in channel_ids:
+                lookup[cid] = (name_map.get(cid, name), kind)
 
-        # Collect all user IDs for batch resolution
-        all_user_ids = set()
-        all_messages = []
-        threaded_msgs = []  # (channel_id, thread_ts) for messages with replies
-        for item in raw:
-            ch_id = item.get('channelId', '')
-            for msg in item.get('result', {}).get('messages', []):
-                uid = msg.get('user', '')
-                if uid:
-                    all_user_ids.add(uid)
-                all_messages.append((ch_id, msg))
-                # Track messages with thread replies
-                if msg.get('reply_count', 0) > 0 and msg.get('ts'):
-                    threaded_msgs.append((ch_id, msg['ts']))
+            # Collect all user IDs for batch resolution
+            all_user_ids = set()
+            all_messages = []
+            threaded_msgs = []
+            for item in raw:
+                ch_id = item.get('channelId', '')
+                for msg in item.get('result', {}).get('messages', []):
+                    uid = msg.get('user', '')
+                    if uid:
+                        all_user_ids.add(uid)
+                    all_messages.append((ch_id, msg))
+                    if msg.get('reply_count', 0) > 0 and msg.get('ts'):
+                        threaded_msgs.append((ch_id, msg['ts']))
 
-        # Resolve user IDs to names
-        user_names = {}
-        if all_user_ids:
-            try:
-                async with slack() as session:
+            # Resolve user IDs to names (same session)
+            user_names = {}
+            if all_user_ids:
+                try:
                     user_names = await resolve_user_ids(list(all_user_ids), session)
-            except Exception:
-                pass
+                except Exception:
+                    pass
 
-        # Fetch thread replies for messages with threads (up to 10)
-        thread_lines = {}
-        if threaded_msgs:
-            try:
-                async with slack() as session:
+            # Fetch thread replies (same session, up to 10)
+            thread_lines = {}
+            if threaded_msgs:
+                try:
                     thread_batch = [{"channelId": cid, "threadTs": ts} for cid, ts in threaded_msgs[:10]]
                     result = await session.call_tool("batch_get_thread_replies", arguments={"threads": thread_batch})
                     thread_data = json.loads(result.content[0].text) if result.content else []
@@ -200,20 +197,17 @@ async def scan_raw(channels: List[str] = None, days: int = 7) -> str:
                         if i < len(threaded_msgs):
                             cid, ts = threaded_msgs[i]
                             replies = item.get('result', {}).get('messages', [])
-                            # Skip first message (parent), take replies
                             reply_texts = []
-                            for r in replies[1:5]:  # up to 4 replies
+                            for r in replies[1:5]:
                                 r_uid = r.get('user', '?')
                                 r_name = user_names.get(r_uid, r_uid)
                                 r_text = r.get('text', '')[:300]
                                 if r_text:
                                     reply_texts.append(f"    ↳ {r_name}: {r_text}")
-                                    if r_uid not in user_names:
-                                        all_user_ids.add(r_uid)
                             if reply_texts:
                                 thread_lines[(cid, ts)] = "\n".join(reply_texts)
-            except Exception:
-                pass
+                except Exception:
+                    pass
 
         lines = []
         for ch_id, msg in all_messages:

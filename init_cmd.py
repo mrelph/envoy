@@ -77,8 +77,10 @@ def run_settings():
         (ENVOY_FILE,  "Manager",    "Manager"),
         (SOUL_FILE,   "Agent name", "Agent name"),
         (ENVOY_FILE,  "Signature",  "Signature"),
-        (ENVOY_FILE,  "ea_alias",   "EA alias"),
-        (ENVOY_FILE,  "ea_name",    "EA name"),
+        (ENVOY_FILE,  "ea_alias",          "EA alias"),
+        (ENVOY_FILE,  "ea_name",            "EA name"),
+        (ENVOY_FILE,  "Knowledge Folder",   "Knowledge Folder"),
+        (ENVOY_FILE,  "Exports Folder",     "Exports Folder"),
     ]
 
     from rich.table import Table
@@ -295,6 +297,12 @@ def run_init():
     calendar_prefs = _ask("Calendar preferences (e.g., 'no meetings before 9am', 'block focus time')", "")
 
     console.print()
+    console.print("[bold]SharePoint / OneDrive[/bold]")
+    console.print("[dim]  Envoy can read from a knowledge folder and save exports to a folder on your OneDrive.[/dim]")
+    knowledge_folder = _ask("Knowledge folder path (e.g., 'Documents/Knowledge' or Enter to skip)", "")
+    exports_folder = _ask("Exports folder path (e.g., 'Documents/Envoy Exports' or Enter to skip)", "")
+
+    console.print()
     console.print("[bold]Executive Assistant[/bold]")
     ea_alias = _ask("Your EA's login (leave blank if none)", "")
     ea_entry = None
@@ -339,6 +347,12 @@ def run_init():
         envoy += f"\n## Calendar\n- {calendar_prefs}\n"
     if agent_sig:
         envoy += f"\n## Signature\n- {agent_sig}\n"
+    if knowledge_folder or exports_folder:
+        envoy += "\n## SharePoint / OneDrive\n"
+        if knowledge_folder:
+            envoy += f"- Knowledge Folder: {knowledge_folder}\n"
+        if exports_folder:
+            envoy += f"- Exports Folder: {exports_folder}\n"
     if ea_entry:
         envoy += f"\n# Executive Assistant\n\n- {ea_entry['name'] or ea_alias} | {ea_entry['alias']} | {ea_entry['email']} | {ea_entry['title']}\n"
 

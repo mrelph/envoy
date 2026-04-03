@@ -16,19 +16,47 @@ from agents.base import run
 
 # --- Conversation context (persists across turns within a session) ---
 
+import time as _time
+
 _context = {
-    "last_emails": [],       # emails from last fetch
-    "last_email_bodies": {},  # conversation_id → full thread body
-    "last_slack": "",        # raw slack from last scan
-    "last_calendar": "",     # raw calendar from last view
-    "last_todos": "",        # raw todos from last fetch
+    "items": {},             # ref_id → {type, summary, data, ...}  e.g. "E1" → email dict
+    "last_email_bodies": {}, # conversation_id → full thread body (cache)
     "last_report": "",       # last AI-generated report
-    "last_people": [],       # people from last lookup
-    "last_tickets": "",      # tickets from last scan
+    "ts": 0,                 # timestamp of last gather
 }
+
+_CONTEXT_TTL = 1800  # 30 minutes
+
+
+def _next_ref(prefix: str) -> str:
+    """Generate next reference ID like E1, E2, S1, S2, C1..."""
+    existing = [k for k in _context["items"] if k.startswith(prefix)]
+    return f"{prefix}{len(existing) + 1}"
+
+
+def _store_item(prefix: str, summary: str, **data) -> str:
+    """Store an item in context and return its reference ID."""
+    ref = _next_ref(prefix)
+    _context["items"][ref] = {"summary": summary, **data}
+    return ref
+
+
+def clear_context():
+    """Clear all indexed items and reset timestamp."""
+    _context["items"].clear()
+    _context["last_email_bodies"].clear()
+    _context["last_report"] = ""
+    _context["ts"] = 0
+
+
+def _check_ttl():
+    """Clear stale context."""
+    if _context["ts"] and (_time.monotonic() - _context["ts"]) > _CONTEXT_TTL:
+        clear_context()
 
 
 def get_context() -> dict:
+    _check_ttl()
     return _context
 
 
@@ -38,8 +66,8 @@ def set_context(key: str, value):
 
 @tool
 def gather(sources: str = "email,slack,calendar,todos", days: int = 1, alias: str = "") -> str:
-    """Fetch data from multiple sources in parallel and return combined context.
-    Use this for briefings or when you need a cross-referenced view.
+    """Fetch data from multiple sources in parallel and return combined context with reference IDs.
+    Each item gets a ref like [E1], [S1], [C1] that the user can reference in follow-ups.
 
     Args:
         sources: Comma-separated list of: email, slack, calendar, todos, tickets, team, bosses
@@ -48,13 +76,14 @@ def gather(sources: str = "email,slack,calendar,todos", days: int = 1, alias: st
     """
     alias = alias or os.getenv("USER", "")
     source_list = [s.strip().lower() for s in sources.split(",")]
+
+    # Clear previous context for fresh gather
+    clear_context()
+    _context["ts"] = _time.monotonic()
+
     results = run(_gather_async(source_list, days, alias))
 
-    # Store in context for follow-up questions
-    for key, value in results.items():
-        set_context(f"last_{key}", value)
-
-    # Build combined output
+    # Build combined output with reference IDs
     sections = []
     for key, value in results.items():
         if value and not str(value).startswith("Error") and not str(value).startswith("⚠️"):
@@ -65,7 +94,9 @@ def gather(sources: str = "email,slack,calendar,todos", days: int = 1, alias: st
     if xref:
         sections.append(f"## CROSS-REFERENCES\n{xref}")
 
-    return "\n\n---\n\n".join(sections) if sections else "No data gathered from any source."
+    output = "\n\n---\n\n".join(sections) if sections else "No data gathered from any source."
+    _context["last_report"] = output
+    return output
 
 
 def _cross_reference(results: dict) -> str:
@@ -138,23 +169,72 @@ async def _gather_async(sources: list, days: int, alias: str) -> dict:
             results[name] = f"⚠️ {name} unavailable: {result}"
         elif isinstance(result, tuple):
             # calendar returns (raw, xref)
-            results[name] = result[0]
+            raw_cal = result[0] if result[0] else ""
+            lines = []
+            for line in str(raw_cal).splitlines():
+                line = line.strip()
+                if not line or line.startswith(("#", "<", "IMPORTANT")):
+                    if line.startswith("#"):
+                        lines.append(line)
+                    continue
+                if any(skip in line for skip in ("untrusted_content", "success", "error")):
+                    continue
+                ref = _store_item("C", line[:200], type="calendar", raw=line)
+                lines.append(f"[{ref}] {line}")
+            results[name] = "\n".join(lines) if lines else str(raw_cal)
         elif isinstance(result, list):
             if result and isinstance(result[0], dict):
-                # emails or people
                 if 'subject' in result[0]:
-                    # Store raw email list for follow-up drill-downs
-                    set_context("last_emails", result[:30])
-                    results[name] = "\n".join(
-                        f"[{i+1}] {e['from']}: {e['subject']} ({e['date']}) [id:{e.get('conversationId','')}]"
-                        for i, e in enumerate(result[:30]))
+                    # Emails — index each one
+                    lines = []
+                    for e in result[:30]:
+                        ref = _store_item("E", f"{e['from']}: {e['subject']}",
+                                          type="email",
+                                          conversationId=e.get('conversationId', ''),
+                                          **{k: e.get(k, '') for k in ('from', 'subject', 'date', 'preview')})
+                        lines.append(f"[{ref}] {e['from']}: {e['subject']} ({e['date']})")
+                    results[name] = "\n".join(lines)
                 else:
+                    # People
                     results[name] = "\n".join(
                         f"- {p.get('name', p.get('alias', '?'))} ({p.get('alias', '')})" for p in result)
             else:
                 results[name] = str(result)
         else:
-            results[name] = str(result) if result else ""
+            text = str(result) if result else ""
+            # Index Slack messages and todos
+            if name == "slack" and text:
+                lines = []
+                for line in text.splitlines():
+                    line = line.strip()
+                    if line and ("[" in line or line.startswith("🔴") or line.startswith("🟡")):
+                        ref = _store_item("S", line[:200], type="slack", raw=line)
+                        lines.append(f"[{ref}] {line}")
+                    elif line:
+                        lines.append(line)
+                results[name] = "\n".join(lines)
+            elif name == "todos" and text:
+                lines = []
+                for line in text.splitlines():
+                    line = line.strip()
+                    if line and line.startswith(("- ", "* ", "☐", "☑", "✅")):
+                        ref = _store_item("T", line[:200], type="todo", raw=line)
+                        lines.append(f"[{ref}] {line}")
+                    elif line:
+                        lines.append(line)
+                results[name] = "\n".join(lines)
+            elif name == "tickets" and text:
+                lines = []
+                for line in text.splitlines():
+                    line = line.strip()
+                    if line and line.startswith("- "):
+                        ref = _store_item("K", line[:200], type="ticket", raw=line)
+                        lines.append(f"[{ref}] {line}")
+                    elif line:
+                        lines.append(line)
+                results[name] = "\n".join(lines)
+            else:
+                results[name] = text
 
     return results
 
@@ -175,16 +255,21 @@ async def _wrap(coro):
 
 @tool
 def read_email_thread(conversation_id: str) -> str:
-    """Read the full content of a specific email thread. Use this to dig deeper into
-    an email mentioned in a previous scan or briefing.
+    """Read the full content of a specific email thread.
 
     Args:
-        conversation_id: The conversation ID from a previous email listing
+        conversation_id: The conversation ID, or a reference ID like E1
     """
+    _check_ttl()
+    # Check if it's a reference ID
+    if conversation_id.upper() in _context["items"]:
+        item = _context["items"][conversation_id.upper()]
+        if item.get("conversationId"):
+            conversation_id = item["conversationId"]
+
     # Return cached body if we already fetched it
     cached = _context.get("last_email_bodies", {}).get(conversation_id)
     if cached:
-        set_context("last_email_thread", cached)
         return cached
 
     from agents.base import outlook as _outlook
@@ -195,15 +280,11 @@ def read_email_thread(conversation_id: str) -> str:
             })
             return str(result.content[0].text) if result.content else "No result."
     result = run(_call())
-    set_context("last_email_thread", result)
-    # Cache for follow-up questions
     bodies = _context.get("last_email_bodies", {})
     bodies[conversation_id] = result
-    # Keep cache bounded
     if len(bodies) > 50:
-        oldest = list(bodies.keys())[0]
-        del bodies[oldest]
-    set_context("last_email_bodies", bodies)
+        del bodies[list(bodies.keys())[0]]
+    _context["last_email_bodies"] = bodies
     return result
 
 
@@ -275,31 +356,85 @@ def get_attachment(item_id: str, filename: str = "") -> str:
 
 
 @tool
+def drill_down(ref: str) -> str:
+    """Get full details for a referenced item from the last gather.
+    For emails, automatically fetches the full thread body.
+
+    Args:
+        ref: Reference ID like E1, S3, C2, T1, K1
+    """
+    _check_ttl()
+    ref = ref.upper().strip()
+    item = _context["items"].get(ref)
+    if not item:
+        return f"Reference {ref} not found in context. Available: {', '.join(sorted(_context['items'].keys())) or 'none'}"
+
+    # For emails, fetch full thread body
+    if item.get("type") == "email" and item.get("conversationId"):
+        conv_id = item["conversationId"]
+        # Check cache first
+        cached = _context.get("last_email_bodies", {}).get(conv_id)
+        if cached:
+            return f"**[{ref}] {item['summary']}**\n\n{cached}"
+        # Fetch full thread
+        from agents.base import outlook as _outlook
+        async def _call():
+            async with _outlook() as session:
+                result = await session.call_tool("email_read", {
+                    "conversationId": conv_id, "format": "markdown"
+                })
+                return str(result.content[0].text) if result.content else "No result."
+        body = run(_call())
+        bodies = _context.get("last_email_bodies", {})
+        bodies[conv_id] = body
+        if len(bodies) > 50:
+            del bodies[list(bodies.keys())[0]]
+        _context["last_email_bodies"] = bodies
+        return f"**[{ref}] {item['summary']}**\n\n{body}"
+
+    # For everything else, return stored data
+    return f"**[{ref}]** {item.get('summary', '')}\n\n{item.get('raw', json.dumps(item, indent=2, default=str))}"
+
+
+@tool
 def show_context(key: str = "") -> str:
     """Show what data is currently in the conversation context.
     Use this to check what's available before answering follow-up questions.
 
     Args:
-        key: Specific context key to show (e.g., 'last_emails'). Empty = show all keys with sizes.
+        key: Specific ref ID (e.g., 'E1') or empty to show all indexed items.
     """
+    _check_ttl()
     if key:
-        val = _context.get(key, "Not found")
-        return str(val)[:5000] if val else "Empty"
+        # Try as ref ID first
+        item = _context["items"].get(key.upper())
+        if item:
+            return f"**[{key.upper()}]** {item.get('summary', '')}\nType: {item.get('type', '?')}"
+        return f"Reference {key} not found."
 
-    summary = []
-    for k, v in _context.items():
-        if v:
-            size = len(str(v))
-            preview = str(v)[:100].replace('\n', ' ')
-            summary.append(f"- **{k}**: {size} chars — {preview}...")
-        else:
-            summary.append(f"- **{k}**: empty")
-    return "\n".join(summary) if summary else "Context is empty."
+    items = _context["items"]
+    if not items:
+        return "Context is empty. Use `gather` to fetch data first."
+
+    # Group by type
+    by_type = {}
+    for ref, item in sorted(items.items()):
+        t = item.get("type", "other")
+        by_type.setdefault(t, []).append((ref, item.get("summary", "")[:100]))
+
+    lines = [f"**{len(items)} items in context**\n"]
+    for t, entries in by_type.items():
+        lines.append(f"### {t.title()} ({len(entries)})")
+        for ref, summary in entries:
+            lines.append(f"  [{ref}] {summary}")
+    lines.append(f"\nUse `drill_down('E1')` to get full details for any item.")
+    return "\n".join(lines)
 
 
 # All supervisor tools to add to the agent
 SUPERVISOR_TOOLS = [
     gather,
+    drill_down,
     read_email_thread,
     get_attachment,
     lookup_person,

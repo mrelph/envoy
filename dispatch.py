@@ -48,8 +48,8 @@ COMMANDS = {
     "/search":    ("Search Slack history",                 "Search Slack for: {arg}"),
     "/sharepoint": ("Search or browse SharePoint/OneDrive", "On SharePoint/OneDrive: {arg}"),
     # Reviews
-    "/eod":       ("End-of-day summary",                   "Generate my end-of-day summary"),
-    "/weekly":    ("Weekly review",                        "Generate my weekly review"),
+    "/eod":       ("End-of-day summary",                   "Activate the eod skill and generate my end-of-day summary"),
+    "/weekly":    ("Weekly review",                        "Activate the weekly skill and generate my weekly review"),
     "/cron":      ("Manage scheduled jobs",                "Show my cron jobs and available presets"),
     # Heartbeat
     "/routine":   ("Add a routine",                        None),
@@ -59,8 +59,10 @@ COMMANDS = {
     # System (handled by UI layer, not dispatch)
     "/help":      ("Show available commands",              None),
     "/status":    ("Refresh MCP server status",            None),
+    "/mwinit":    ("Re-authenticate Midway",               None),
     "/models":    ("Show/edit AI model assignments",       None),
     "/settings":  ("Edit personality and config",          None),
+    "/skills":    ("List configured skills",               None),
     "/backup":    ("Back up config, memory, and state",    None),
     "/exit":      ("Exit Envoy",                           None),
 }
@@ -85,7 +87,7 @@ COMMAND_GROUPS = [
     ("Actions", ["/reply", "/ea", "/book", "/findtime", "/search", "/sharepoint"]),
     ("Reviews", ["/eod", "/weekly", "/cron"]),
     ("Heartbeat", ["/routine", "/routines", "/heartbeat", "/suggest-routines"]),
-    ("System", ["/status", "/models", "/settings", "/backup", "/help", "/exit"]),
+    ("System", ["/status", "/mwinit", "/models", "/skills", "/settings", "/backup", "/help", "/exit"]),
 ]
 
 
@@ -122,6 +124,17 @@ def dispatch(raw: str, agent):
     if cmd == "/suggest-routines":
         from agents.heartbeat import suggest_routines
         return (suggest_routines(), True)
+
+    if cmd == "/skills":
+        from agents.skills import get_skills
+        skills = get_skills()
+        if not skills:
+            return ("No skills configured. Add a SKILL.md to ~/.envoy/skills/<name>/", True)
+        lines = ["**Configured Skills**\n"]
+        for s in skills.values():
+            lines.append(f"- **{s['name']}** — {s['description']}")
+        lines.append(f"\n{len(skills)} skills loaded from ~/.envoy/skills/ and ~/.agents/skills/")
+        return ("\n".join(lines), True)
 
     # --- Commands needing an arg ---
     if cmd in ARG_COMMANDS and not arg:

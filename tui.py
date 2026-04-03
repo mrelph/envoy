@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal
-from textual.widgets import Static, Input, RichLog, Label
+from textual.widgets import Static, Input, RichLog, Label, TextArea
 from textual.binding import Binding
 from textual.worker import get_current_worker
 from textual import work, on
@@ -25,7 +25,7 @@ LOGO = r"""[bold cyan]
  ██╔══╝  ██║╚██╗██║╚██╗ ██╔╝██║   ██║  ╚██╔╝
  ███████╗██║ ╚████║ ╚████╔╝ ╚██████╔╝   ██║
  ╚══════╝╚═╝  ╚═══╝  ╚═══╝   ╚═════╝    ╚═╝[/bold cyan]
-[dim]  ✈  Your AI Chief of Staff  ·  v{version}[/dim]"""
+[dim]  Your AI Chief of Staff  ·  v{version}[/dim]"""
 
 SPINNER_HINTS = {
     "email": "📧 Email", "inbox": "📧 Email", "digest": "📧 Email",
@@ -175,7 +175,7 @@ class EnvoyApp(App):
     """Envoy TUI."""
 
     CSS_PATH = "tui.css"
-    TITLE = f"✈ Envoy v{VERSION}"
+    TITLE = f"Envoy v{VERSION}"
 
     BINDINGS = [
         Binding("ctrl+c", "quit", "Quit", show=False),
@@ -193,7 +193,7 @@ class EnvoyApp(App):
         yield Spinner(id="spinner")
         with Horizontal(id="input-area"):
             yield Label("›", id="prompt-label")
-            yield Input(placeholder="Type a command or chat naturally…", id="input")
+            yield TextArea(id="input", language=None, soft_wrap=True, show_line_numbers=False)
         yield StatusBar(id="status-bar")
 
     def on_mount(self) -> None:
@@ -201,7 +201,7 @@ class EnvoyApp(App):
         out.write(Text.from_markup(LOGO.format(version=VERSION)))
         out.write(Text())
         self.query_one("#spinner", Spinner).display = False
-        self.query_one("#input", Input).focus()
+        self.query_one("#input", TextArea).focus()
         self._init_agent()
 
     @work(thread=True, exclusive=True, group="init")
@@ -219,14 +219,25 @@ class EnvoyApp(App):
             Text(f"  ✓ {name} ready\n", style="green"),
         )
 
+    def on_click(self) -> None:
+        self.query_one("#input", TextArea).focus()
+
     # ── Input handling ──
 
-    @on(Input.Submitted, "#input")
-    def _on_submit(self, event: Input.Submitted) -> None:
-        raw = event.value.strip()
-        if not raw:
-            return
-        event.input.value = ""
+    @on(TextArea.Changed, "#input")
+    def _on_input_changed(self, event: TextArea.Changed) -> None:
+        """Submit on Enter (newline). Shift+Enter for actual newline."""
+        ta = event.text_area
+        text = ta.text
+        if text.endswith("\n"):
+            raw = text.rstrip("\n")
+            if not raw:
+                ta.clear()
+                return
+            ta.clear()
+            self._submit(raw)
+
+    def _submit(self, raw: str) -> None:
         out = self.query_one("#output", RichLog)
 
         # Echo user input
@@ -245,6 +256,9 @@ class EnvoyApp(App):
             return
         if cmd == "/status":
             self.action_refresh_mcp()
+            return
+        if cmd == "/mwinit":
+            self._run_mwinit()
             return
         if cmd == "/models":
             out.write(Text("  Use 'envoy --models' from CLI to edit models.", style="dim"))
@@ -269,6 +283,14 @@ class EnvoyApp(App):
         if worker.is_cancelled:
             return
 
+        # Log to observer learning loop
+        try:
+            from agents.observer import observe, maybe_analyze
+            observe(raw[:300], str(result)[:300] if result else "", domain="command")
+            maybe_analyze()
+        except Exception:
+            pass
+
         def _show():
             # Stop spinner
             self.query_one("#spinner", Spinner).stop()
@@ -292,6 +314,22 @@ class EnvoyApp(App):
 
         self.app.call_from_thread(_show)
 
+    def _run_mwinit(self) -> None:
+        import subprocess
+        out = self.query_one("#output", RichLog)
+        out.write(Text("  Launching mwinit — check your browser…", style="dim"))
+
+        def _do_mwinit():
+            with self.suspend():
+                subprocess.run(["mwinit", "-o"])
+            # Reconnect MCP sessions with fresh creds
+            from agents.base import _persistent
+            _persistent.clear()
+            self.action_refresh_mcp()
+            self.notify("✓ Midway refreshed", timeout=3)
+
+        self.call_later(_do_mwinit)
+
     # ── Helpers ──
 
     def _show_help(self) -> None:
@@ -312,7 +350,7 @@ class EnvoyApp(App):
         self.query_one(MCPBar).check()
 
     def action_focus_input(self) -> None:
-        self.query_one("#input", Input).focus()
+        self.query_one("#input", TextArea).focus()
 
 
 def run_tui():

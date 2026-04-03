@@ -59,10 +59,11 @@ if os.path.exists(_teamsnap_dotenv):
                 _teamsnap_env[k.strip()] = v.strip()
 
 _node_quiet_env = {**os.environ, "NODE_NO_WARNINGS": "1"}
+_outlook_env = {**os.environ, "OUTLOOK_MCP_ENABLE_WRITES": "true"}
 
 # Raw param dicts — converted to StdioServerParameters on first access
 _MCP_PARAM_DEFS = {
-    "Outlook":    {"command": "aws-outlook-mcp", "args": []},
+    "Outlook":    {"command": "aws-outlook-mcp", "args": [], "env": _outlook_env},
     "Phonetool":  {"command": "builder-mcp", "args": []},
     "Slack":      {"command": "ai-community-slack-mcp", "args": []},
     "TeamSnap":   {"command": "node", "args": [os.path.join(_teamsnap_dir, "dist", "wrapper.js")], "env": _teamsnap_env},
@@ -154,8 +155,7 @@ def run(coro):
 # Instead of opening/closing a subprocess per call (~0.9s overhead each),
 # keep sessions alive and reuse them. Closed on process exit.
 
-_persistent = {}  # server_name → (process, session, loop, thread)
-_persistent_lock = threading.Lock()
+_persistent = {}  # server_name → (stdio_cm, session_cm, session)
 
 
 async def _open_persistent(server_name):
@@ -308,7 +308,12 @@ def check_mcp_connections() -> Dict[str, bool]:
     async def _test_all():
         tasks = [_test_one(n, fn) for n, fn in _session_fns.items()]
         tasks.append(_test_bedrock())
-        return dict(await asyncio.gather(*tasks))
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        out = {}
+        for r in results:
+            if isinstance(r, tuple) and len(r) == 2:
+                out[r[0]] = r[1]
+        return out
 
     return run(_test_all())
 
@@ -362,10 +367,12 @@ def reload_models():
 
 
 _bedrock_client = None
+_bedrock_client_ts = 0
+_BEDROCK_TTL = 3000  # 50 minutes — refresh before 1hr token expiry
 
 def _get_bedrock_client():
-    global _bedrock_client
-    if _bedrock_client is not None:
+    global _bedrock_client, _bedrock_client_ts
+    if _bedrock_client is not None and (time.monotonic() - _bedrock_client_ts) < _BEDROCK_TTL:
         return _bedrock_client
     import boto3
     aws_config = {'region_name': os.getenv('AWS_REGION', 'us-west-2')}
@@ -375,6 +382,7 @@ def _get_bedrock_client():
         if os.getenv('AWS_SESSION_TOKEN'):
             aws_config['aws_session_token'] = os.getenv('AWS_SESSION_TOKEN')
     _bedrock_client = boto3.client('bedrock-runtime', **aws_config)
+    _bedrock_client_ts = time.monotonic()
     return _bedrock_client
 
 

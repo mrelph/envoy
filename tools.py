@@ -385,7 +385,8 @@ Tell me which preset to add, or describe a custom schedule."""
             return "Need name, schedule, and command. Example: action='add', name='weekly-digest', schedule='0 8 * * 1', command='digest --days 7 --email --no-display'"
         # Security: validate command is a safe envoy subcommand
         _ALLOWED_SUBCMDS = {"digest", "cleanup", "customers", "catchup", "slack-catchup", "yesterbox",
-                            "cal-audit", "response-times", "followup", "commitments", "prep-1on1", "prep-meeting"}
+                            "cal-audit", "response-times", "followup", "commitments", "prep-1on1", "prep-meeting",
+                            "heartbeat"}
         _DANGEROUS_CHARS = set(";|&`$(){}!><")
         first_word = command.strip().split()[0] if command.strip() else ""
         if first_word not in _ALLOWED_SUBCMDS:
@@ -591,15 +592,9 @@ def analyze_patterns(days: int = 7) -> str:
 
 @tool
 def get_observer_insights() -> str:
-    """Get a summary of what the observer has learned — recent observations and entity counts."""
-    entries = memory._load_entries(7)
-    if not entries:
-        return "No memory entries yet."
-    observations = [e for e in entries if e.get("type") == "observation"]
-    entities = memory.known_entities()
-    return (f"**{len(entries)} entries** (last 7d), {len(observations)} observations\n"
-            f"**Top entities:** {', '.join(entities[:15])}\n\n"
-            f"Use `recall('entity_name')` to dig into any of these.")
+    """Get a summary of what the observer has learned — recent observations and patterns."""
+    from agents.observer import get_insights
+    return get_insights()
 
 
 @tool
@@ -627,6 +622,12 @@ def _delegate(worker_name: str, request: str, _retries: int = 1) -> str:
             response = str(result.message) if hasattr(result, 'message') else str(result)
             try:
                 memory.remember(f"[{worker_name}] {request[:200]} → {response[:200]}", entry_type="observation")
+            except Exception:
+                pass
+            try:
+                from agents.observer import observe, maybe_analyze
+                observe(request[:300], response[:300], domain=worker_name)
+                maybe_analyze()
             except Exception:
                 pass
             return response
@@ -710,25 +711,45 @@ def sharepoint_worker(request: str) -> str:
 
 @tool
 def export_word(content: str, filename: str = "") -> str:
-    """Export any report or content to a Word document (.docx).
+    """Export any report or content to a Word document (.docx). Saves locally and uploads to configured Exports Folder on OneDrive if set.
 
     Args:
         content: Markdown content to convert
         filename: Output filename (default: auto-generated)
     """
-    return f"✅ Word document saved: {export.to_docx(content, filename)}"
+    path = export.to_docx(content, filename)
+    result = f"✅ Word document saved: {path}"
+    folders = export._configured_folders()
+    if folders["exports"]:
+        try:
+            from agents.sharepoint_agent import upload_to_folder
+            run(upload_to_folder(path, folders["exports"]))
+            result += f"\n📁 Uploaded to OneDrive: {folders['exports']}/{os.path.basename(path)}"
+        except Exception as e:
+            result += f"\n⚠️ OneDrive upload failed: {e}"
+    return result
 
 
 @tool
 def export_pptx(content: str, filename: str = "", title: str = "Envoy Report") -> str:
-    """Export any report to a PowerPoint deck (.pptx). Each ## section becomes a slide.
+    """Export any report to a PowerPoint deck (.pptx). Each ## section becomes a slide. Saves locally and uploads to configured Exports Folder on OneDrive if set.
 
     Args:
         content: Markdown content to convert
         filename: Output filename (default: auto-generated)
         title: Title for the cover slide
     """
-    return f"✅ PowerPoint saved: {export.to_pptx(content, filename, title)}"
+    path = export.to_pptx(content, filename, title)
+    result = f"✅ PowerPoint saved: {path}"
+    folders = export._configured_folders()
+    if folders["exports"]:
+        try:
+            from agents.sharepoint_agent import upload_to_folder
+            run(upload_to_folder(path, folders["exports"]))
+            result += f"\n📁 Uploaded to OneDrive: {folders['exports']}/{os.path.basename(path)}"
+        except Exception as e:
+            result += f"\n⚠️ OneDrive upload failed: {e}"
+    return result
 
 
 _ALL_TOOLS_RAW = [

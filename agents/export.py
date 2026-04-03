@@ -11,6 +11,22 @@ def _output_path(filename: str) -> str:
     return os.path.join(out_dir, filename)
 
 
+def _configured_folders() -> dict:
+    """Read Knowledge Folder and Exports Folder from envoy.md."""
+    envoy_md = os.path.expanduser("~/.envoy/envoy.md")
+    folders = {"knowledge": "", "exports": ""}
+    try:
+        with open(envoy_md) as f:
+            for line in f:
+                if line.strip().startswith("- Knowledge Folder:"):
+                    folders["knowledge"] = line.split(":", 1)[1].strip()
+                elif line.strip().startswith("- Exports Folder:"):
+                    folders["exports"] = line.split(":", 1)[1].strip()
+    except FileNotFoundError:
+        pass
+    return folders
+
+
 def _default_name(ext: str) -> str:
     ts = datetime.now().strftime("%Y%m%d-%H%M")
     return f"envoy-{ts}.{ext}"

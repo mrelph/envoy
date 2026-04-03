@@ -87,19 +87,9 @@ def create():
         from tools import manage_cron
         return manage_cron(action=action, name=name, schedule=schedule, command=command)
 
-    @tool
-    def briefing_report(type: str = "morning") -> str:
-        """Generate a briefing — morning, end-of-day, or weekly.
-        Args:
-            type: morning, eod, weekly
-        """
-        funcs = {"morning": wf.morning_briefing, "eod": wf.eod_summary, "weekly": wf.weekly_review}
-        fn = funcs.get(type, wf.morning_briefing)
-        return fn(_USER)
-
     return Agent(
         model=_model("medium"),
-        system_prompt="You are a productivity specialist. You manage to-dos (list, add with due dates/importance, complete, update, delete), scan tickets, maintain memory, run briefings, and manage cron jobs. Be action-oriented.",
-        tools=[todo_items, tickets, remember_item, cron_jobs, briefing_report],
+        system_prompt="You are a productivity specialist. You manage to-dos (list, add with due dates/importance, complete, update, delete), scan tickets, maintain memory, and manage cron jobs. For briefings, EOD summaries, and weekly reviews, tell the user to use /briefing, /eod, or /weekly commands. Be action-oriented.",
+        tools=[todo_items, tickets, remember_item, cron_jobs],
         callback_handler=None,
     )

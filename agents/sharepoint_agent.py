@@ -213,6 +213,12 @@ async def upload_file(library: str, file_name: str, source_path: str, folder: st
         return result.content[0].text if result.content else "Upload failed."
 
 
+async def upload_to_folder(local_path: str, folder_path: str) -> str:
+    """Upload a local file to a folder on the user's OneDrive."""
+    file_name = os.path.basename(local_path)
+    return await upload_file("Documents", file_name, local_path, folder=folder_path)
+
+
 async def delete_file(server_relative_url: str, personal: bool = True, site_url: str = "") -> str:
     args = {"serverRelativeUrl": server_relative_url, "personal": personal}
     if site_url:
