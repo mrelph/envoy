@@ -19,8 +19,6 @@ Screen {
     scrollbar-size: 1 1;
     scrollbar-color: $primary-background-lighten-1;
     scrollbar-color-hover: $accent;
-    selection-background: $accent 30%;
-    selection-color: $text;
 }
 
 #spinner {
