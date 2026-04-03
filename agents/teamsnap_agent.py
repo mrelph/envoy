@@ -6,6 +6,19 @@ from agents.base import teamsnap
 async def auth() -> str:
     try:
         async with teamsnap() as session:
+            # Check if already authenticated — skip OAuth flow if so
+            status = await session.call_tool("teamsnap_auth_status", {})
+            if status.content:
+                import json
+                try:
+                    data = json.loads(status.content[0].text)
+                    if data.get("authenticated"):
+                        user = data.get("user", {})
+                        name = f"{user.get('firstName', '')} {user.get('lastName', '')}".strip()
+                        return f"Already authenticated as {name or 'TeamSnap user'}."
+                except (json.JSONDecodeError, KeyError):
+                    pass
+            # Not authenticated — try OAuth flow
             result = await session.call_tool("teamsnap_auth", {})
             return result.content[0].text if result.content else "Auth failed."
     except FileNotFoundError:

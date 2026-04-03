@@ -58,7 +58,7 @@ A project-local `.env` also works (copy `.env.example`), but `~/.envoy/.env` is 
 ## Run It
 
 ```bash
-# Interactive REPL
+# Interactive TUI (default)
 envoy
 
 # Or use subcommands directly
@@ -67,7 +67,7 @@ envoy cleanup
 envoy --help
 ```
 
-Type `/help` in the REPL to see all slash commands.
+Type `/help` in the TUI to see all slash commands.
 
 ## What's Available
 

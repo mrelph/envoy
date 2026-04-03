@@ -5,7 +5,7 @@ import hashlib
 import functools
 from strands import tool
 from envoy_logger import logged_tool
-from agents.base import outlook, builder, invoke_ai, BUILDER_PARAMS, check_mcp_connections, _load_models, MODEL_CATALOG, MODELS_FILE, mcp_batch, get_token_usage, format_token_usage, reset_token_usage, run
+from agents.base import outlook, builder, invoke_ai, check_mcp_connections, _load_models, MODEL_CATALOG, MODELS_FILE, mcp_batch, get_token_usage, format_token_usage, reset_token_usage, run
 from agents import email, slack_agent, calendar, todo, tickets, memory2 as memory, teamsnap_agent, people, internal, export
 from agents import workflows as wf
 from agents.workers import get_worker
@@ -261,9 +261,7 @@ def add_vip(alias: str) -> str:
 
 @tool
 def teamsnap_auth() -> str:
-    """Authenticate with TeamSnap via AWS-hosted OAuth.
-    Call this before using any other TeamSnap tools if not yet authenticated.
-    """
+    """Check TeamSnap authentication status. Already authenticated via AWS Lambda — only call if other TeamSnap tools return auth errors."""
     return run(teamsnap_agent.auth())
 
 
@@ -778,7 +776,6 @@ _ALL_TOOLS_RAW = [
     token_usage,
     activate_skill,
     # --- TeamSnap ---
-    teamsnap_auth,
     teamsnap_schedule,
     teamsnap_roster,
     teamsnap_availability,

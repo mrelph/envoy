@@ -17,19 +17,21 @@ envoy/
 ├── envoy                    # Bash entrypoint (auto-installs venv)
 ├── cli.py                   # CLI commands (Click) → agent prompts
 ├── agent.py                 # Strands agent factory + system prompt
-├── repl.py                  # Interactive REPL with slash commands
-├── ui.py                    # Rich console rendering
+├── tui.py                   # Textual TUI (default interface)
+├── tui.css                  # TUI stylesheet
+├── dispatch.py              # Shared command dispatch (TUI + REPL)
+├── repl.py                  # Plain text REPL fallback
+├── ui.py                    # MCP health checks + model catalog
 ├── tools.py                 # Strands @tool definitions + worker routing
 ├── supervisor.py            # Parallel data gathering + context
 ├── init_cmd.py              # envoy init / settings interactive setup
 ├── envoy_logger.py          # Structured JSON logging
-├── cot_renderer.py          # Chain-of-thought log renderer
 ├── templates/
 │   ├── commands.md          # Core command prompts (editable)
 │   ├── skills/              # Bundled Agent Skills (8 skills)
 │   └── soul.md / envoy.md / process.md  # Config templates
 ├── agents/
-│   ├── base.py              # MCP connections, Bedrock client, AI invocation, run() helper
+│   ├── base.py              # MCP connections (persistent), Bedrock client, run() helper
 │   ├── workers/             # Domain-specific Strands worker agents
 │   │   ├── __init__.py      # Worker factory + shared infra (_model, _USER, get_worker)
 │   │   ├── email_worker.py  # Email operations worker
@@ -59,12 +61,12 @@ envoy/
 
 ### Request Flow
 
-1. User types in REPL (`repl.py`) or runs CLI subcommand (`cli.py`)
-2. Slash commands map to agent prompts; freeform input goes directly to the Strands agent
+1. User types in TUI (`tui.py`) or plain REPL (`repl.py`) or runs CLI subcommand (`cli.py`)
+2. Slash commands are parsed by `dispatch.py`; freeform input goes directly to the Strands agent
 3. The supervisor agent (`agent.py` + `tools.py`) routes to specialized workers
 4. Workers (`agents/workers/`) have focused toolsets and run on appropriate model tiers
-5. Workers call domain agents (`agents/*.py`) which talk to MCP servers
-6. Results flow back through the supervisor to the user
+5. Workers call domain agents (`agents/*.py`) which talk to MCP servers via persistent connections
+6. Results flow back through the supervisor to the TUI/REPL
 
 ### Worker Agents
 
@@ -176,10 +178,9 @@ Bundled skills live in `templates/skills/` and are copied to `~/.envoy/skills/` 
 
 ### Adding a new MCP server
 
-1. Add `StdioServerParameters` in `agents/base.py`
-2. Create a context manager: `my_server = _mcp_session(MY_PARAMS, "MyServer")`
-3. Register in `MCP_SERVERS` dict
-4. Create async wrapper functions in a new `agents/my_agent.py`
+1. Add params to `_MCP_PARAM_DEFS` dict in `agents/base.py`
+2. Create a session factory: `my_server = _mcp_session("MyServer")`
+3. Create async wrapper functions in a new `agents/my_agent.py`
 
 ## Security Notes
 
@@ -197,6 +198,7 @@ Bundled skills live in `templates/skills/` and are copied to `~/.envoy/skills/` 
 | `mcp` | MCP Python SDK for server communication |
 | `click` | CLI framework |
 | `rich` | Terminal formatting, panels, tables |
+| `textual` | Full-screen TUI framework (built on Rich) |
 | `boto3` / `botocore[crt]` | AWS SDK for Bedrock |
 | `python-dotenv` | Load `.env` credentials |
 | `python-docx` | Word document generation |
@@ -206,8 +208,9 @@ Bundled skills live in `templates/skills/` and are copied to `~/.envoy/skills/` 
 ## Code Style
 
 - Domain agents are async; workers and tools bridge to sync via `run()` from `agents.base`
-- MCP connections use `async with` context managers (not persistent)
+- MCP connections are persistent — subprocess stays alive across calls via a shared background event loop
+- Heavy imports (strands, mcp, boto3) are lazy-loaded on first use, not at module import time
 - Worker agents use `callback_handler=None` to suppress streaming output
-- Error handling returns graceful messages, never crashes the REPL
+- Error handling returns graceful messages, never crashes the TUI
 - Analytical workflows read full email bodies (not just previews) before AI classification
 - Slack scans resolve user IDs to names and include thread replies for full context

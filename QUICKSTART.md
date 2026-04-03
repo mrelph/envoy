@@ -9,14 +9,14 @@ git clone https://github.com/mrelph/envoy.git
 cd envoy
 ./install.sh
 envoy init       # configure identity + agent personality
-envoy            # launch REPL
+envoy            # launch TUI
 ```
 
 Or one-liner: `curl -fsSL https://raw.githubusercontent.com/mrelph/envoy/main/get-envoy.sh | bash`
 
 Prerequisites: Python 3.7+, `builder-mcp`, `aws-outlook-mcp` in PATH, AWS credentials (`aws login` or `.env`).
 
-## REPL Commands
+## Commands
 
 ```
 /briefing          Full briefing (calendar + email + Slack)

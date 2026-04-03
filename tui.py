@@ -42,6 +42,8 @@ SPINNER_HINTS = {
     "response": "📬 Response times", "cal-audit": "📊 Calendar audit",
 }
 
+BRAILLE_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
 
 def _get_alias():
     try:
@@ -54,7 +56,6 @@ def _get_alias():
 
 
 def _get_hint(text: str) -> str:
-    """Pick a spinner hint icon+label based on keywords in the input."""
     lower = text.lower()
     for kw, label in SPINNER_HINTS.items():
         if kw in lower:
@@ -89,25 +90,58 @@ class MCPBar(Static):
         self.app.call_from_thread(self.refresh)
 
 
+class Spinner(Static):
+    """Animated braille spinner with hint text. Shows during agent work."""
+
+    _frame: int = 0
+    _hint: str = ""
+    _timer = None
+
+    def render(self) -> Text:
+        if not self._hint:
+            return Text("")
+        char = BRAILLE_FRAMES[self._frame % len(BRAILLE_FRAMES)]
+        t = Text(f"  {char} ", style="bold cyan")
+        t.append(self._hint, style="dim italic")
+        t.append("…")
+        return t
+
+    def start(self, hint: str) -> None:
+        self._hint = hint
+        self._frame = 0
+        self.display = True
+        self.refresh()
+        if self._timer is None:
+            self._timer = self.set_interval(0.1, self._tick)
+
+    def stop(self) -> None:
+        self._hint = ""
+        self.display = False
+        if self._timer:
+            self._timer.stop()
+            self._timer = None
+
+    def _tick(self) -> None:
+        self._frame += 1
+        self.refresh()
+
+
 class StatusBar(Static):
-    """Bottom bar with alias, time, keybindings."""
+    """Bottom bar with alias, time, model, keybindings."""
 
     def render(self) -> Text:
         alias = _get_alias()
         now = datetime.now().strftime("%I:%M %p").lstrip("0")
 
-        # Short model label from configured agent tier
         model = ""
         try:
             from agents.base import _load_models
             import re
             mid = _load_models().get("agent", "")
-            # Extract family+version: "claude-opus-4-6-v1" → "opus 4"
             m = re.search(r'claude-(?:\d+-\d+-)?(\w+)-?(\d+)?', mid)
             if m:
                 name = m.group(1)
                 ver = m.group(2) or ""
-                # skip long date stamps like 20250514
                 model = f"{name} {ver}" if ver and len(ver) <= 2 else name
             elif "nova" in mid:
                 m2 = re.search(r'nova-(\w+)', mid)
@@ -155,7 +189,8 @@ class EnvoyApp(App):
 
     def compose(self) -> ComposeResult:
         yield MCPBar(id="mcp-bar")
-        yield RichLog(id="output", highlight=True, markup=True, wrap=True, max_lines=5000)
+        yield RichLog(id="output", highlight=True, markup=True, wrap=True, max_lines=5000, auto_scroll=True)
+        yield Spinner(id="spinner")
         with Horizontal(id="input-area"):
             yield Label("›", id="prompt-label")
             yield Input(placeholder="Type a command or chat naturally…", id="input")
@@ -165,6 +200,7 @@ class EnvoyApp(App):
         out = self.query_one("#output", RichLog)
         out.write(Text.from_markup(LOGO.format(version=VERSION)))
         out.write(Text())
+        self.query_one("#spinner", Spinner).display = False
         self.query_one("#input", Input).focus()
         self._init_agent()
 
@@ -217,13 +253,13 @@ class EnvoyApp(App):
             out.write(Text("  Use 'envoy settings' from CLI to edit config.", style="dim"))
             return
 
-        # Show progress hint
+        # Start animated spinner
         hint = _get_hint(raw)
-        out.write(Text(f"  ⠋ {hint}…", style="dim italic"))
-        self._run_command(raw)
+        self.query_one("#spinner", Spinner).start(hint)
+        self._run_command(raw, hint)
 
     @work(thread=True, exclusive=True, group="cmd")
-    def _run_command(self, raw: str) -> None:
+    def _run_command(self, raw: str, hint: str) -> None:
         worker = get_current_worker()
         if self._agent is None:
             from agent import create_agent
@@ -234,6 +270,9 @@ class EnvoyApp(App):
             return
 
         def _show():
+            # Stop spinner
+            self.query_one("#spinner", Spinner).stop()
+
             out = self.query_one("#output", RichLog)
             if not result:
                 return
@@ -243,10 +282,13 @@ class EnvoyApp(App):
                     out.write(Text())
                     out.write(Markdown(text))
                     out.write(Text())
-                    return
                 except Exception:
-                    pass
-            out.write(Text(f"\n{text}\n"))
+                    out.write(Text(f"\n{text}\n"))
+            else:
+                out.write(Text(f"\n{text}\n"))
+
+            # Toast notification
+            self.notify(f"✓ {hint} done", timeout=3)
 
         self.app.call_from_thread(_show)
 
@@ -266,7 +308,7 @@ class EnvoyApp(App):
             out.write(t)
 
     def action_refresh_mcp(self) -> None:
-        self.query_one("#output", RichLog).write(Text("  ⠋ Refreshing MCP…", style="dim italic"))
+        self.query_one("#spinner", Spinner).start("Refreshing MCP")
         self.query_one(MCPBar).check()
 
     def action_focus_input(self) -> None:

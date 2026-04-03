@@ -4,7 +4,7 @@ description: Check TeamSnap sports schedules, rosters, and game availability. Us
 metadata:
   author: envoy
   version: "1.0"
-allowed-tools: teamsnap_auth teamsnap_schedule teamsnap_roster teamsnap_availability
+allowed-tools: teamsnap_schedule teamsnap_roster teamsnap_availability
 ---
 
 # TeamSnap Integration
@@ -15,19 +15,16 @@ Use when the user asks about sports schedules, games, practices, team rosters, o
 ## Steps
 
 ### View schedule
-1. Authenticate via teamsnap_auth if needed
-2. Get schedule via teamsnap_schedule — optionally filter by date range
-3. Present upcoming games and practices
+1. Get schedule via teamsnap_schedule — optionally filter by date range
+2. Present upcoming games and practices
 
 ### Check roster
-1. Authenticate if needed
-2. Get roster via teamsnap_roster with the team ID
-3. Present players and coaches
+1. Get roster via teamsnap_roster with the team ID
+2. Present players and coaches
 
 ### Check availability
-1. Authenticate if needed
-2. Get availability via teamsnap_availability with the event ID
-3. Show who's in, out, or hasn't responded
+1. Get availability via teamsnap_availability with the event ID
+2. Show who's in, out, or hasn't responded
 
 ## Output format
 ```

@@ -40,11 +40,6 @@ def _get_devnull():
     return _devnull
 
 
-def run(coro):
-    """Run an async coroutine synchronously. Single entry point for all sync→async bridges."""
-    return asyncio.run(coro)
-
-
 class MCPConnectionError(Exception):
     """Raised when an optional MCP server is unreachable."""
     pass
@@ -241,18 +236,6 @@ def _mcp_session(server_name):
     return _ctx
 
 
-def _mcp_batch_session(params, server_name):
-    """Long-lived MCP session for batch operations within a single event loop.
-    
-    Usage:
-        session = await mcp_pool.acquire("Outlook")
-        result = await session.call_tool(...)
-        # session stays open for reuse
-        await mcp_pool.release_all()
-    """
-    pass  # Placeholder for multi-agent phase
-
-
 outlook = _mcp_session("Outlook")
 builder = _mcp_session("Phonetool")
 slack = _mcp_session("Slack")
@@ -263,10 +246,13 @@ sharepoint = _mcp_session("SharePoint")
 # --- Shared MCP batch runner ---
 
 async def mcp_batch(server_name: str, calls: list) -> list:
-    """Run multiple MCP tool calls in a single session. Avoids reconnecting per call.
+    """Run multiple MCP tool calls in a single session.
+    
+    Convenience wrapper for making several calls to the same server.
+    Connections are persistent and reused automatically.
     
     Args:
-        server_name: Key from MCP_SERVERS ("Outlook", "Phonetool", "Slack", "TeamSnap")
+        server_name: "Outlook", "Phonetool", "Slack", "TeamSnap", or "SharePoint"
         calls: List of (tool_name, arguments) tuples
     
     Returns:
@@ -290,14 +276,23 @@ async def mcp_batch(server_name: str, calls: list) -> list:
 
 # --- Connection testing ---
 
+_session_fns = {"Outlook": None, "Phonetool": None, "Slack": None, "TeamSnap": None, "SharePoint": None}
+
 def check_mcp_connections() -> Dict[str, bool]:
-    _ensure_mcp()
-    async def _test_one(name, params):
+    """Test MCP server connectivity using persistent sessions.
+    
+    This warms up the connection pool — subsequent calls reuse these sessions.
+    """
+    # Lazy-bind session functions (avoids circular import at module level)
+    if _session_fns["Outlook"] is None:
+        _session_fns.update({"Outlook": outlook, "Phonetool": builder, "Slack": slack,
+                             "TeamSnap": teamsnap, "SharePoint": sharepoint})
+
+    async def _test_one(name, session_fn):
         try:
-            async with stdio_client(params, errlog=_get_devnull()) as (r, w):
-                async with ClientSession(r, w) as s:
-                    await asyncio.wait_for(s.initialize(), timeout=10)
-                    return name, True
+            async with session_fn() as s:
+                # Session opened successfully — connection is alive and cached
+                return name, True
         except Exception:
             return name, False
 
@@ -311,8 +306,7 @@ def check_mcp_connections() -> Dict[str, bool]:
             return "Bedrock", False
 
     async def _test_all():
-        servers = {k: _get_params(k) for k in _MCP_PARAM_DEFS}
-        tasks = [_test_one(n, p) for n, p in servers.items()]
+        tasks = [_test_one(n, fn) for n, fn in _session_fns.items()]
         tasks.append(_test_bedrock())
         return dict(await asyncio.gather(*tasks))
 
@@ -476,11 +470,12 @@ def invoke_ai(prompt: str, max_tokens: int = 10000, tier: str = "heavy") -> str:
 def agent_name() -> str:
     p = os.path.expanduser("~/.envoy/soul.md")
     if os.path.exists(p):
-        for line in open(p):
-            if line.strip().startswith("- Agent name:"):
-                val = line.split(":", 1)[1].strip()
-                if val:
-                    return val
+        with open(p) as f:
+            for line in f:
+                if line.strip().startswith("- Agent name:"):
+                    val = line.split(":", 1)[1].strip()
+                    if val:
+                        return val
     return "Envoy"
 
 
@@ -500,7 +495,8 @@ def log_sent(tag: str, channel: str, recipient: str, medium: str, summary: str):
     entries = []
     if os.path.exists(SENT_LOG):
         try:
-            entries = json.loads(open(SENT_LOG).read())
+            with open(SENT_LOG) as f:
+                entries = json.loads(f.read())
         except (json.JSONDecodeError, FileNotFoundError):
             pass
     entries.append({
@@ -517,7 +513,8 @@ def log_sent(tag: str, channel: str, recipient: str, medium: str, summary: str):
 def load_sent() -> list:
     if os.path.exists(SENT_LOG):
         try:
-            return json.loads(open(SENT_LOG).read())
+            with open(SENT_LOG) as f:
+                return json.loads(f.read())
         except (json.JSONDecodeError, FileNotFoundError):
             pass
     return []

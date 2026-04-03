@@ -23,27 +23,35 @@ git clone https://github.com/mrelph/envoy.git
 cd envoy
 ./install.sh
 envoy init       # configure identity + agent personality
-envoy            # launch interactive REPL
+envoy            # launch TUI
 ```
 
 See [INSTALL.md](INSTALL.md) for detailed setup instructions.
 
-## Interactive REPL
+## TUI Interface
 
-Running `envoy` opens the REPL with slash commands and natural language chat:
+Running `envoy` launches a full-screen Textual TUI with animated progress, MCP status, and toast notifications:
 
 ```
-markrelp · Mon 8:03am › /briefing
-⠋ 📊 Gathering data…
-
-markrelp · Mon 8:04am › prep for my 1:1 with jsmith
-⠋ 🧩 Loading skill…
-
-markrelp · Mon 8:05am › /digest 7
-⠋ 📧 Email…
+┌─ ✈ Envoy v3.1.0 ──────────────────────────────────────┐
+│ ● Outlook  ● Phonetool  ● Slack  ● TeamSnap           │
+│                                                         │
+│  ███████╗███╗   ██╗██╗   ██╗ ██████╗ ██╗   ██╗        │
+│  ██╔════╝████╗  ██║██║   ██║██╔═══██╗╚██╗ ██╔╝        │
+│  █████╗  ██╔██╗ ██║██║   ██║██║   ██║ ╚████╔╝         │
+│  ██╔══╝  ██║╚██╗██║╚██╗ ██╔╝██║   ██║  ╚██╔╝          │
+│  ███████╗██║ ╚████║ ╚████╔╝ ╚██████╔╝   ██║           │
+│  ╚══════╝╚═╝  ╚═══╝  ╚═══╝   ╚═════╝    ╚═╝          │
+│                                                         │
+│  › /briefing                                            │
+│  ⠹ 📊 Briefing…                                        │
+│                                                         │
+│ › Type a command or chat naturally…                     │
+│ markrelp  5:44 PM  │  🧠 opus 4  │  /help  ctrl+c quit│
+└─────────────────────────────────────────────────────────┘
 ```
 
-Type `/help` to see all commands. Most accept a number of days: `/digest 7`, `/catchup 3`, `/followup 14`.
+Falls back to a plain text REPL if Textual is unavailable. Type `/help` for commands. Most accept a number of days: `/digest 7`, `/catchup 3`.
 
 ## Features
 
@@ -108,7 +116,7 @@ Envoy can run autonomously on a schedule, checking your routines and alerting yo
 
 ## CLI Reference
 
-Running `envoy` with no arguments opens the REPL. Subcommands are available for scripting:
+Running `envoy` with no arguments opens the TUI. Subcommands are available for scripting:
 
 ```bash
 envoy digest --days 7 --email --todo
@@ -310,8 +318,11 @@ envoy/
 ├── envoy                    # Entrypoint (auto-installs venv)
 ├── cli.py                   # CLI commands → agent prompts
 ├── agent.py                 # Strands agent factory + system prompt
-├── repl.py                  # Interactive REPL with slash commands
-├── ui.py                    # Rich console rendering
+├── tui.py                   # Textual TUI (default interface)
+├── tui.css                  # TUI stylesheet
+├── dispatch.py              # Shared command dispatch (TUI + REPL)
+├── repl.py                  # Plain text REPL fallback
+├── ui.py                    # MCP health checks + model catalog
 ├── tools.py                 # Strands @tool definitions + worker routing
 ├── supervisor.py            # Parallel data gathering + cross-referencing
 ├── templates/
@@ -319,7 +330,7 @@ envoy/
 │   ├── skills/              # Bundled Agent Skills (8 skills)
 │   └── soul.md / envoy.md / process.md
 ├── agents/
-│   ├── base.py              # MCP connections, Bedrock client, AI invocation, run() helper
+│   ├── base.py              # MCP connections (persistent), Bedrock client, run() helper
 │   ├── workers/             # Domain-specific Strands worker agents
 │   │   ├── __init__.py      # Worker factory + shared infra
 │   │   ├── email_worker.py  # Email operations worker
