@@ -44,6 +44,27 @@ SPINNER_HINTS = {
 
 BRAILLE_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
+_FLAVOR = [
+    "Brewing insights",
+    "Connecting dots",
+    "Reading between the lines",
+    "Crunching context",
+    "Herding electrons",
+    "Consulting the oracle",
+    "Sifting signal from noise",
+    "Warming up the neurons",
+    "Doing the needful",
+    "Asking nicely",
+    "Pulling strings",
+    "Shaking the magic 8-ball",
+    "Channeling your chief of staff energy",
+    "Cross-referencing everything",
+    "Making it look easy",
+    "Thinking harder than usual",
+    "Almost there, probably",
+    "Summoning the cloud spirits",
+]
+
 
 def _get_alias():
     try:
@@ -95,20 +116,24 @@ class Spinner(Static):
 
     _frame: int = 0
     _hint: str = ""
+    _flavor_idx: int = 0
     _timer = None
 
     def render(self) -> Text:
         if not self._hint:
             return Text("")
         char = BRAILLE_FRAMES[self._frame % len(BRAILLE_FRAMES)]
+        flavor = _FLAVOR[self._flavor_idx % len(_FLAVOR)]
         t = Text(f"  {char} ", style="bold cyan")
         t.append(self._hint, style="dim italic")
-        t.append("…")
+        t.append(f"  ·  {flavor}…", style="dim")
         return t
 
     def start(self, hint: str) -> None:
+        import random
         self._hint = hint
         self._frame = 0
+        self._flavor_idx = random.randint(0, len(_FLAVOR) - 1)
         self.display = True
         self.refresh()
         if self._timer is None:
@@ -123,6 +148,8 @@ class Spinner(Static):
 
     def _tick(self) -> None:
         self._frame += 1
+        if self._frame % 20 == 0:  # rotate flavor every ~2s
+            self._flavor_idx += 1
         self.refresh()
 
 
