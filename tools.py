@@ -532,9 +532,10 @@ def current_time() -> str:
     especially for calendar operations, scheduling, or when the user asks about time."""
     from datetime import datetime, timezone, timedelta
     import time as _time
-    utc_offset = timedelta(seconds=-_time.timezone if _time.daylight == 0 else -_time.altzone)
+    is_dst = _time.localtime().tm_isdst > 0
+    utc_offset = timedelta(seconds=-_time.altzone if is_dst else -_time.timezone)
     now = datetime.now(timezone(utc_offset))
-    tz_name = _time.tzname[_time.daylight] if _time.daylight else _time.tzname[0]
+    tz_name = _time.tzname[1] if is_dst else _time.tzname[0]
     return now.strftime(f'%A, %B %d %Y at %I:%M %p {tz_name} (UTC%z)')
 
 
@@ -686,9 +687,10 @@ def productivity_worker(request: str) -> str:
 
 @tool
 def research_worker(request: str) -> str:
-    """Delegate research and lookup tasks: Phonetool profiles, Kingpin goals, Wiki pages,
-    Taskei tasks, Broadcast videos, tiny links, web search. Use for ANY internal lookup
-    or external web search request.
+    """Delegate research and lookup tasks: Phonetool profiles, Kingpin goals/projects/milestones
+    (view, list, filter by owner/team/year/status, update status, add comments, list teams),
+    Wiki pages, Taskei tasks, Broadcast videos, tiny links, web search.
+    Use for ANY internal lookup or external web search request.
 
     Args:
         request: Natural language description of what to look up

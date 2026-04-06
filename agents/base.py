@@ -68,6 +68,7 @@ _MCP_PARAM_DEFS = {
     "Slack":      {"command": "ai-community-slack-mcp", "args": []},
     "TeamSnap":   {"command": "node", "args": [os.path.join(_teamsnap_dir, "dist", "wrapper.js")], "env": _teamsnap_env},
     "SharePoint": {"command": "amazon-sharepoint-mcp", "args": [], "env": _node_quiet_env},
+    "Kingpin":    {"command": "kingpin-mcp", "args": []},
 }
 
 _mcp_params_cache = {}
@@ -83,7 +84,7 @@ def __getattr__(name):
     _aliases = {
         "OUTLOOK_PARAMS": "Outlook", "BUILDER_PARAMS": "Phonetool",
         "SLACK_PARAMS": "Slack", "TEAMSNAP_PARAMS": "TeamSnap",
-        "SHAREPOINT_PARAMS": "SharePoint",
+        "SHAREPOINT_PARAMS": "SharePoint", "KINGPIN_PARAMS": "Kingpin",
         "MCP_SERVERS": None,
     }
     if name in _aliases:
@@ -241,6 +242,7 @@ builder = _mcp_session("Phonetool")
 slack = _mcp_session("Slack")
 teamsnap = _mcp_session("TeamSnap")
 sharepoint = _mcp_session("SharePoint")
+kingpin = _mcp_session("Kingpin")
 
 
 # --- Shared MCP batch runner ---
@@ -258,7 +260,7 @@ async def mcp_batch(server_name: str, calls: list) -> list:
     Returns:
         List of result strings, one per call.
     """
-    sessions = {"Outlook": outlook, "Phonetool": builder, "Slack": slack, "TeamSnap": teamsnap}
+    sessions = {"Outlook": outlook, "Phonetool": builder, "Slack": slack, "TeamSnap": teamsnap, "Kingpin": kingpin}
     session_fn = sessions.get(server_name)
     if not session_fn:
         return [f"Unknown server: {server_name}"] * len(calls)
@@ -276,7 +278,7 @@ async def mcp_batch(server_name: str, calls: list) -> list:
 
 # --- Connection testing ---
 
-_session_fns = {"Outlook": None, "Phonetool": None, "Slack": None, "TeamSnap": None, "SharePoint": None}
+_session_fns = {"Outlook": None, "Phonetool": None, "Slack": None, "TeamSnap": None, "SharePoint": None, "Kingpin": None}
 
 def check_mcp_connections() -> Dict[str, bool]:
     """Test MCP server connectivity using persistent sessions.
@@ -286,7 +288,7 @@ def check_mcp_connections() -> Dict[str, bool]:
     # Lazy-bind session functions (avoids circular import at module level)
     if _session_fns["Outlook"] is None:
         _session_fns.update({"Outlook": outlook, "Phonetool": builder, "Slack": slack,
-                             "TeamSnap": teamsnap, "SharePoint": sharepoint})
+                             "TeamSnap": teamsnap, "SharePoint": sharepoint, "Kingpin": kingpin})
 
     async def _test_one(name, session_fn):
         try:

@@ -157,9 +157,13 @@ Suggest 2-3 concrete next steps. Examples:
     if process:
         prompt += f"\n## Process Memory\n{process}\n"
 
-    from datetime import datetime
-    now = datetime.now().strftime('%A, %B %d %Y at %I:%M %p').replace(' 0', ' ')
-    prompt += f"\n## Current Time (at session start)\n{now}\n⚠️ This timestamp is from session start and may be stale. Use the `current_time` tool for the actual current time when precision matters.\n"
+    from datetime import datetime, timezone, timedelta
+    import time as _time
+    is_dst = _time.localtime().tm_isdst > 0
+    utc_offset = timedelta(seconds=-_time.altzone if is_dst else -_time.timezone)
+    tz_name = _time.tzname[1] if is_dst else _time.tzname[0]
+    now = datetime.now(timezone(utc_offset)).strftime('%A, %B %d %Y at %I:%M %p').replace(' 0', ' ')
+    prompt += f"\n## Current Time (at session start)\n{now} {tz_name}\n⚠️ This timestamp is from session start and may be stale. Use the `current_time` tool for the actual current time when precision matters.\n"
 
     # Inject persistent memory
     try:

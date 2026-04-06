@@ -1,7 +1,7 @@
-"""Internal websites agent — Kingpin, Broadcast, Meetings, Wiki, Taskei, Tiny via builder-mcp."""
+"""Internal websites agent — Kingpin, Broadcast, Meetings, Wiki, Taskei, Tiny via builder-mcp + kingpin-mcp."""
 
 import asyncio
-from agents.base import builder
+from agents.base import builder, kingpin as kingpin_session
 
 
 async def _fetch(url: str) -> str:
@@ -16,14 +16,80 @@ async def _fetch_many(urls: list) -> str:
         return result.content[0].text if result.content else "No result."
 
 
-# --- Kingpin ---
+# --- Kingpin (direct MCP) ---
+
+def _kp_text(result) -> str:
+    return result.content[0].text if result.content else "No result."
+
 
 async def get_goal(goal_id: str) -> str:
-    return await _fetch(f"https://kingpin.amazon.com/#/items/{goal_id}")
+    async with kingpin_session() as s:
+        return _kp_text(await s.call_tool("get_goal", {"goal_id": goal_id}))
 
 
 async def get_goal_children(goal_id: str) -> str:
-    return await _fetch(f"https://kingpin.amazon.com/#/items/{goal_id}#Relationships")
+    async with kingpin_session() as s:
+        return _kp_text(await s.call_tool("get_relationships", {"goal_id": goal_id}))
+
+
+async def list_goals(owner: str = None, team_id: str = None, year: int = None,
+                     status: str = None, tags_any: list = None, limit: int = 100) -> str:
+    args = {}
+    if owner: args["owner"] = owner
+    if team_id: args["team_id"] = team_id
+    if year: args["year"] = year
+    if status: args["status"] = status
+    if tags_any: args["tags_any"] = tags_any
+    if limit != 100: args["limit"] = limit
+    async with kingpin_session() as s:
+        return _kp_text(await s.call_tool("list_goals", args))
+
+
+async def list_projects(owner: str = None, team_id: str = None, year: int = None,
+                        status: str = None, limit: int = 100) -> str:
+    args = {}
+    if owner: args["owner"] = owner
+    if team_id: args["team_id"] = team_id
+    if year: args["year"] = year
+    if status: args["status"] = status
+    if limit != 100: args["limit"] = limit
+    async with kingpin_session() as s:
+        return _kp_text(await s.call_tool("list_projects", args))
+
+
+async def list_milestones(owner: str = None, team_id: str = None, year: int = None,
+                          status: str = None, limit: int = 100) -> str:
+    args = {}
+    if owner: args["owner"] = owner
+    if team_id: args["team_id"] = team_id
+    if year: args["year"] = year
+    if status: args["status"] = status
+    if limit != 100: args["limit"] = limit
+    async with kingpin_session() as s:
+        return _kp_text(await s.call_tool("list_milestones", args))
+
+
+async def update_goal(goal_id: str, **kwargs) -> str:
+    args = {"goal_id": goal_id, **kwargs}
+    async with kingpin_session() as s:
+        return _kp_text(await s.call_tool("update_goal", args))
+
+
+async def add_comment(goal_id: str, message: str) -> str:
+    async with kingpin_session() as s:
+        return _kp_text(await s.call_tool("add_comment", {"goal_id": goal_id, "message": message}))
+
+
+async def list_teams() -> str:
+    async with kingpin_session() as s:
+        return _kp_text(await s.call_tool("list_teams", {}))
+
+
+async def get_goal_history(goal_id: str, fields: list = None) -> str:
+    args = {"goal_id": goal_id}
+    if fields: args["fields"] = fields
+    async with kingpin_session() as s:
+        return _kp_text(await s.call_tool("get_goal_history", args))
 
 
 # --- Broadcast ---
