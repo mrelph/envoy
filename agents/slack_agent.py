@@ -112,15 +112,18 @@ async def list_slack_drafts() -> str:
         return f"Error listing drafts: {e}"
 
 
-async def scan_raw(channels: List[str] = None, days: int = 7) -> str:
-    """Fetch raw Slack messages — DMs first (priority), then channels. Resolves user IDs and fetches thread replies."""
+async def scan_raw(channels: List[str] = None, days: int = 7, alias: str = "") -> str:
+    """Fetch raw Slack messages — DMs first (priority), then channels.
+    Resolves user IDs, fetches thread replies, adds timestamps, flags @mentions and own messages."""
     from datetime import timezone
-    oldest = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    import os
+    alias = alias or os.getenv("USER", "")
+    oldest_fallback = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
 
     try:
         async with slack() as session:
             if channels:
-                channel_ids = [(c, c, "channel") for c in channels]
+                channel_ids = [(c, c, "channel", oldest_fallback) for c in channels]
             else:
                 channel_ids = []
                 for ch_type in ["dm", "group_dm"]:
@@ -131,7 +134,8 @@ async def scan_raw(channels: List[str] = None, days: int = 7) -> str:
                         )
                         ch_data = json.loads(result.content[0].text) if result.content else {}
                         for c in ch_data.get('channels', []):
-                            channel_ids.append((c['id'], c.get('name', c['id']), ch_type))
+                            lr = c.get('last_read', '')
+                            channel_ids.append((c['id'], c.get('name', c['id']), ch_type, lr or oldest_fallback))
                     except Exception:
                         pass
                 try:
@@ -141,14 +145,15 @@ async def scan_raw(channels: List[str] = None, days: int = 7) -> str:
                     )
                     ch_data = json.loads(result.content[0].text) if result.content else {}
                     for c in ch_data.get('channels', []):
-                        channel_ids.append((c['id'], c.get('name', c['id']), "channel"))
+                        lr = c.get('last_read', '')
+                        channel_ids.append((c['id'], c.get('name', c['id']), "channel", lr or oldest_fallback))
                 except Exception:
                     pass
 
             if not channel_ids:
                 return "No Slack channels or DMs found to scan."
 
-            ch_only = [cid for cid, _, kind in channel_ids if kind == "channel"]
+            ch_only = [cid for cid, _, kind, _ in channel_ids if kind == "channel"]
             name_map = {}
             if ch_only:
                 info_result = await session.call_tool("batch_get_channel_info", arguments={"channelIds": ch_only})
@@ -156,12 +161,13 @@ async def scan_raw(channels: List[str] = None, days: int = 7) -> str:
                     if 'result' in item:
                         name_map[item['channelId']] = item['result'].get('name', item['channelId'])
 
-            batch = [{"channelId": cid, "oldest": oldest, "limit": 30} for cid, _, _ in channel_ids]
+            batch = [{"channelId": cid, "oldest": lr, "limit": 30}
+                     for cid, _, _, lr in channel_ids]
             result = await session.call_tool("batch_get_conversation_history", arguments={"channels": batch})
             raw = json.loads(result.content[0].text) if result.content else []
 
             lookup = {}
-            for cid, name, kind in channel_ids:
+            for cid, name, kind, _ in channel_ids:
                 lookup[cid] = (name_map.get(cid, name), kind)
 
             # Collect all user IDs for batch resolution
@@ -186,6 +192,14 @@ async def scan_raw(channels: List[str] = None, days: int = 7) -> str:
                 except Exception:
                     pass
 
+            # Identify current user's Slack ID by matching alias against resolved names
+            my_uid = ""
+            alias_lower = alias.lower()
+            for uid, name in user_names.items():
+                if alias_lower and alias_lower in name.lower():
+                    my_uid = uid
+                    break
+
             # Fetch thread replies (same session, up to 10)
             thread_lines = {}
             if threaded_msgs:
@@ -203,7 +217,8 @@ async def scan_raw(channels: List[str] = None, days: int = 7) -> str:
                                 r_name = user_names.get(r_uid, r_uid)
                                 r_text = r.get('text', '')[:300]
                                 if r_text:
-                                    reply_texts.append(f"    ↳ {r_name}: {r_text}")
+                                    r_tag = " [you]" if r_uid == my_uid else ""
+                                    reply_texts.append(f"    ↳ {r_name}{r_tag}: {r_text}")
                             if reply_texts:
                                 thread_lines[(cid, ts)] = "\n".join(reply_texts)
                 except Exception:
@@ -216,11 +231,30 @@ async def scan_raw(channels: List[str] = None, days: int = 7) -> str:
             text = msg.get('text', '')[:500]
             uid = msg.get('user', '?')
             name = user_names.get(uid, uid)
+            ts = msg.get('ts', '')
+
+            # Format timestamp
+            ts_str = ""
+            if ts:
+                try:
+                    dt = datetime.fromtimestamp(float(ts))
+                    ts_str = dt.strftime('%b %d %I:%M%p').replace(' 0', ' ').lower()
+                except Exception:
+                    pass
+
             if text:
-                lines.append(f"[{prefix}] {name}: {text}")
+                # Tag own messages and @mentions
+                is_me = uid == my_uid
+                is_mention = alias_lower and (f"<@{my_uid}>" in text or f"@{alias_lower}" in text.lower())
+                tag = ""
+                if is_me:
+                    tag = " [you]"
+                elif is_mention:
+                    tag = " ⚡@you"
+
+                lines.append(f"[{prefix}] ({ts_str}) {name}{tag}: {text}")
                 # Append thread replies if available
-                ts = msg.get('ts', '')
-                thread_key = (ch_id, ts)
+                thread_key = (ch_id, msg.get('ts', ''))
                 if thread_key in thread_lines:
                     lines.append(thread_lines[thread_key])
 
@@ -231,32 +265,39 @@ async def scan_raw(channels: List[str] = None, days: int = 7) -> str:
         return f"Error scanning Slack: {e}"
 
 
-async def scan(channels: List[str] = None, days: int = 7) -> str:
+async def scan(channels: List[str] = None, days: int = 7, alias: str = "") -> str:
     """Fetch + AI-analyze Slack messages."""
-    raw = await scan_raw(channels, days)
+    import os
+    alias = alias or os.getenv("USER", "")
+    raw = await scan_raw(channels, days, alias=alias)
     if raw.startswith("No ") or raw.startswith("Error"):
         return raw
 
-    prompt = f"""Analyze these Slack messages (pre-sorted by priority: 🔴 DM > 🟡 GroupDM > #channel).
+    prompt = f"""Analyze these Slack messages for {alias}. Messages are pre-sorted by priority: 🔴 DM > 🟡 GroupDM > #channel.
+
+Key markers in the data:
+- "[you]" = message sent BY {alias} (already handled — no action needed unless no reply came back)
+- "⚡@you" = {alias} was @mentioned (likely needs attention)
+- Timestamps show when each message was sent
 
 # Slack Scan Report
 
-## 🔴 Direct Messages (Action Required)
-- **DM from @user** — [what they need]
+## 🔴 Needs Your Reply
+DMs and @mentions where {alias} hasn't responded yet. Skip conversations where [you] already replied.
 
 ## ⚠️ Important Updates
-- **#channel** or **GroupDM** — [summary]
+Significant team/project updates {alias} should know about.
 
 ## 🔑 Key Discussions
-- **#channel** — [topic and status]
+Active threads worth following.
 
 ## 📋 FYI
-- **#channel** — [brief note]
+Low-priority noise — brief notes only.
 
 ## Summary
-[2-3 sentences]
+2-3 sentences: what needs action vs what's just informational.
 
-Skip empty sections. DMs always outrank channel noise. Only last {days} days.
+Skip empty sections. Prioritize: unanswered DMs > @mentions > channel activity.
 
 Messages:
 {raw[:8000]}"""

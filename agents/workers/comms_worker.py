@@ -9,6 +9,8 @@ def create():
     from agents import slack_agent as slack_mod
     from agents import workflows as wf
 
+    from agents.workers import _USER
+
     @tool
     def scan_channels(channels: str = "", days: int = 7) -> str:
         """Scan Slack channels for activity and action items. Resolves user names and includes thread replies.
@@ -17,7 +19,7 @@ def create():
             days: Days to look back
         """
         ch_list = [c.strip() for c in channels.split(",") if c.strip()] or None
-        return run(slack_mod.scan(ch_list, days))
+        return run(slack_mod.scan(ch_list, days, alias=_USER))
 
     @tool
     def send_message(recipient: str, message: str, thread_ts: str = "") -> str:

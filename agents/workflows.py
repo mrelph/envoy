@@ -43,7 +43,7 @@ async def _pto_catchup_async(alias: str, days: int) -> str:
     except Exception:
         pass
     try:
-        slack_data = await slack_agent.scan_raw(days=min(days, 7))
+        slack_data = await slack_agent.scan_raw(days=min(days, 7), alias=alias)
         if slack_data and not slack_data.startswith("No "):
             sections.append(f"SLACK ACTIVITY:\n{slack_data[:3000]}")
     except Exception:
@@ -66,6 +66,9 @@ async def _pto_catchup_async(alias: str, days: int) -> str:
         return "Couldn't gather any data for your catch-up. Check MCP connections."
 
     prompt = f"""You are briefing {alias} who has been out of office for {days} days.
+
+In Slack data: "[you]" = sent by {alias}, "⚡@you" = {alias} was @mentioned. Prioritize unanswered DMs and @mentions.
+
 # 🏖️ PTO Catch-Up — Last {days} Days
 ## 🔴 Needs Your Attention NOW
 ## 📊 Team Summary
@@ -90,11 +93,14 @@ def slack_catchup(alias: str = "", days: int = 3) -> str:
 
 
 async def _slack_catchup_async(alias: str, days: int) -> str:
-    raw = await slack_agent.scan_raw(days=days)
+    raw = await slack_agent.scan_raw(days=days, alias=alias)
     if raw.startswith("No ") or raw.startswith("Error"):
         return raw
 
     prompt = f"""Focused Slack catch-up for {alias} — last {days} days.
+
+Key markers: "[you]" = sent by {alias}, "⚡@you" = {alias} was @mentioned. Skip conversations {alias} already replied to.
+
 # Slack Catch-Up
 ## 🔴 Unread DMs Needing Reply
 ## ⚠️ @Mentions You Missed
@@ -347,7 +353,7 @@ async def _commitment_tracker_async(alias: str, days: int) -> str:
     except Exception:
         pass
     try:
-        slack_data = await slack_agent.scan_raw(days=min(days, 7))
+        slack_data = await slack_agent.scan_raw(days=min(days, 7), alias=alias)
         if slack_data and not slack_data.startswith("No "):
             sections.append(f"SLACK:\n{slack_data[:3000]}")
     except Exception:

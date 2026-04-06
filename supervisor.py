@@ -147,7 +147,7 @@ async def _gather_async(sources: list, days: int, alias: str) -> dict:
     if "email" in sources:
         tasks["emails"] = email.fetch_inbox(days=days, limit=50)
     if "slack" in sources:
-        tasks["slack"] = slack_agent.scan_raw(days=days)
+        tasks["slack"] = slack_agent.scan_raw(days=days, alias=alias)
     if "calendar" in sources:
         tasks["calendar"] = _wrap(calendar.get_events_raw(view="day" if days <= 1 else "week", days_ahead=days))
     if "todos" in sources:
