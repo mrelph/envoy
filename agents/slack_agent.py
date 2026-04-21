@@ -1,6 +1,7 @@
 """Slack agent — scan, search, DM, channel post, threads, mark read, reactions, drafts, files."""
 
 import json
+import re
 from datetime import datetime, timedelta
 from typing import List, Dict
 
@@ -17,13 +18,30 @@ async def resolve_user_ids(user_ids: List[str], session=None) -> Dict[str, str]:
     try:
         async def _resolve(s):
             result = await s.call_tool("batch_get_user_info", arguments={"users": unique})
-            data = json.loads(result.content[0].text) if result.content else []
+            raw = result.content[0].text if result.content else "[]"
+            data = json.loads(raw) if isinstance(raw, str) else raw
             mapping = {}
-            for item in data:
-                uid = item.get('userId', '')
-                info = item.get('result', {})
-                name = info.get('real_name') or info.get('display_name') or info.get('name') or uid
-                mapping[uid] = name
+            # Handle both list and dict response shapes
+            items = data if isinstance(data, list) else data.get('users', data.get('results', []))
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                # Try multiple key patterns for user ID
+                uid = item.get('userId') or item.get('user_id') or item.get('id') or ''
+                # Try nested result, or flat structure
+                info = item.get('result') or item.get('profile') or item
+                if isinstance(info, dict):
+                    name = (info.get('real_name') or info.get('realName')
+                            or info.get('display_name') or info.get('displayName')
+                            or info.get('name') or '')
+                else:
+                    name = ''
+                if uid and name:
+                    mapping[uid] = name
+            # Fill in any unresolved IDs
+            for uid in unique:
+                if uid not in mapping:
+                    mapping[uid] = uid
             return mapping
         if session:
             return await _resolve(session)
@@ -185,12 +203,7 @@ async def scan_raw(channels: List[str] = None, days: int = 7, alias: str = "") -
                         threaded_msgs.append((ch_id, msg['ts']))
 
             # Resolve user IDs to names (same session)
-            user_names = {}
-            if all_user_ids:
-                try:
-                    user_names = await resolve_user_ids(list(all_user_ids), session)
-                except Exception:
-                    pass
+            user_names = await resolve_user_ids(list(all_user_ids), session) if all_user_ids else {}
 
             # Identify current user's Slack ID by matching alias against resolved names
             my_uid = ""
@@ -216,6 +229,7 @@ async def scan_raw(channels: List[str] = None, days: int = 7, alias: str = "") -
                                 r_uid = r.get('user', '?')
                                 r_name = user_names.get(r_uid, r_uid)
                                 r_text = r.get('text', '')[:300]
+                                r_text = re.sub(r'<@(U[A-Z0-9]+)>', lambda m: f"@{user_names.get(m.group(1), m.group(1))}", r_text)
                                 if r_text:
                                     r_tag = " [you]" if r_uid == my_uid else ""
                                     reply_texts.append(f"    ↳ {r_name}{r_tag}: {r_text}")
@@ -227,11 +241,25 @@ async def scan_raw(channels: List[str] = None, days: int = 7, alias: str = "") -
         lines = []
         for ch_id, msg in all_messages:
             display, kind = lookup.get(ch_id, (ch_id, "channel"))
-            prefix = "🔴 DM" if kind == "dm" else ("🟡 GroupDM" if kind == "group_dm" else f"#{display}")
+            # For DMs, use the sender's resolved name instead of channel ID
+            if kind == "dm":
+                sender_uid = msg.get('user', '')
+                dm_name = user_names.get(sender_uid, display)
+                prefix = f"🔴 DM ({dm_name})"
+            elif kind == "group_dm":
+                prefix = "🟡 GroupDM"
+            else:
+                prefix = f"#{display}"
             text = msg.get('text', '')[:500]
             uid = msg.get('user', '?')
             name = user_names.get(uid, uid)
             ts = msg.get('ts', '')
+
+            # Resolve <@U...> mentions in message text
+            def _resolve_mention(m):
+                mentioned_uid = m.group(1)
+                return f"@{user_names.get(mentioned_uid, mentioned_uid)}"
+            text = re.sub(r'<@(U[A-Z0-9]+)>', _resolve_mention, text)
 
             # Format timestamp
             ts_str = ""

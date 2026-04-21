@@ -120,7 +120,11 @@ async def create_meeting(subject: str, start: str, end: str,
                          attendees: List[str] = None, location: str = "", body: str = "",
                          optional_attendees: List[str] = None, resources: List[str] = None,
                          recurrence: dict = None, reminder_minutes: int = None,
-                         show_as: str = "", is_all_day: bool = False) -> str:
+                         show_as: str = "", is_all_day: bool = False,
+                         is_online_meeting: bool = False, sensitivity: str = "",
+                         importance: str = "", categories: List[str] = None,
+                         response_requested: bool = True,
+                         allow_new_time_proposals: bool = True) -> str:
     try:
         async with outlook() as session:
             args = {"operation": "create", "subject": subject, "start": start, "end": end}
@@ -142,6 +146,18 @@ async def create_meeting(subject: str, start: str, end: str,
                 args["showAs"] = show_as
             if is_all_day:
                 args["isAllDay"] = True
+            if is_online_meeting:
+                args["isOnlineMeeting"] = True
+            if sensitivity:
+                args["sensitivity"] = sensitivity
+            if importance:
+                args["importance"] = importance
+            if categories:
+                args["categories"] = categories
+            if not response_requested:
+                args["responseRequested"] = False
+            if not allow_new_time_proposals:
+                args["allowNewTimeProposals"] = False
             result = await session.call_tool("calendar_meeting", arguments=args)
             return str(result.content[0].text) if result.content else "Meeting created."
     except Exception as e:
