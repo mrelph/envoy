@@ -214,6 +214,7 @@ class EnvoyApp(App):
         super().__init__()
         self._agent = None
         self._pending_prompt = None  # e.g. "models" → next input is interpreted as /models <args>
+        self._busy = False  # True while a command is in flight (prevents concurrent agent calls)
 
     def compose(self) -> ComposeResult:
         yield MCPBar(id="mcp-bar")
@@ -274,6 +275,11 @@ class EnvoyApp(App):
         t.append(raw, style="bold")
         out.write(t)
 
+        # Reject new input while a previous request is still running
+        if self._busy:
+            out.write(Text("  ⏳ Still working on your last request — wait for it to finish (or ctrl+c to quit).", style="yellow"))
+            return
+
         # If we're awaiting a follow-up answer (e.g. after /models), rewrite the input
         if self._pending_prompt == "models":
             lower = raw.strip().lower()
@@ -311,6 +317,7 @@ class EnvoyApp(App):
         self.query_one("#spinner", Spinner).start(hint)
         if bare_models:
             self._pending_prompt = "models"
+        self._busy = True
         self._run_command(raw, hint)
 
     @work(thread=True, exclusive=True, group="cmd")
@@ -320,8 +327,15 @@ class EnvoyApp(App):
             from agent import create_agent
             self._agent = create_agent()
 
-        result, handled = dispatch(raw, self._agent)
+        error = None
+        result = None
+        handled = True
+        try:
+            result, handled = dispatch(raw, self._agent)
+        except Exception as e:
+            error = e
         if worker.is_cancelled:
+            self._busy = False
             return
 
         # Log to observer learning loop
@@ -335,8 +349,16 @@ class EnvoyApp(App):
         def _show():
             # Stop spinner
             self.query_one("#spinner", Spinner).stop()
+            self._busy = False
 
             out = self.query_one("#output", RichLog)
+            if error is not None:
+                msg = str(error)
+                if "Concurrent invocations" in msg or "ConcurrencyException" in type(error).__name__:
+                    out.write(Text("  ⚠️  Agent was still busy. Try again in a moment.", style="yellow"))
+                else:
+                    out.write(Text(f"\n  ⚠️  {type(error).__name__}: {msg}\n", style="red"))
+                return
             if not result:
                 return
             text = str(result)
