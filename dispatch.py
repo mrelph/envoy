@@ -166,15 +166,51 @@ def dispatch(raw: str, agent):
 
 
 def _handle_models(arg: str) -> str:
-    """Show current model assignments, or update one via: /models <tier> <model_id>"""
+    """Show current model assignments, change via /models <tier> <model>, or /models refresh."""
     import json
     from agents.base import _load_models, MODEL_CATALOG, MODELS_FILE, DEFAULT_MODELS, reload_models
-    parts = arg.split() if arg else []
+    from ui import _fetch_model_catalog
 
+    parts = arg.split() if arg else []
+    tiers = list(DEFAULT_MODELS.keys())
+
+    # /models refresh → re-fetch Bedrock catalog
+    if len(parts) == 1 and parts[0].lower() == "refresh":
+        live = _fetch_model_catalog(refresh=True)
+        if not live:
+            return "⚠️ Could not fetch Bedrock catalog — check AWS credentials. Using static list."
+        return f"✓ Refreshed — {len(live)} models/profiles available. Run `/models` to see them."
+
+    # Unrecognized single arg
+    if len(parts) == 1:
+        return (f"Usage: `/models` (show) · `/models refresh` · "
+                f"`/models <tier#|name> <model#|id>`")
+
+    # Live catalog (merge with static fallback so nothing disappears if Bedrock is down)
+    live = _fetch_model_catalog(refresh=False)
+    if live:
+        catalog = live
+    else:
+        catalog = [(mid, name, desc) for mid, name, desc in MODEL_CATALOG]
+
+    # /models <tier> <model> → update (accepts tier name or #, model id or #)
     if len(parts) >= 2:
-        tier, model_id = parts[0].lower(), parts[1]
-        if tier not in DEFAULT_MODELS:
-            return f"Unknown tier '{tier}'. Valid: {', '.join(DEFAULT_MODELS)}"
+        tier_sel, model_sel = parts[0], parts[1]
+        # Resolve tier (numeric or name)
+        if tier_sel.isdigit() and 1 <= int(tier_sel) <= len(tiers):
+            tier = tiers[int(tier_sel) - 1]
+        elif tier_sel.lower() in DEFAULT_MODELS:
+            tier = tier_sel.lower()
+        else:
+            return f"Unknown tier '{tier_sel}'. Valid: {', '.join(tiers)} (or 1–{len(tiers)})"
+        # Resolve model (numeric index into catalog, or raw id)
+        if model_sel.isdigit() and 1 <= int(model_sel) <= len(catalog):
+            model_id = catalog[int(model_sel) - 1][0]
+        else:
+            model_id = model_sel
+            if not any(c[0] == model_id for c in catalog):
+                return (f"⚠️ '{model_id}' not in catalog. Saving anyway — "
+                        f"run `/models refresh` to verify. ")
         current = {}
         try:
             with open(MODELS_FILE) as f:
@@ -188,15 +224,21 @@ def _handle_models(arg: str) -> str:
         reload_models()
         return f"✓ {tier} → {model_id}"
 
+    # /models → show assignments + numbered catalog
     models = _load_models()
     lines = ["**Current Model Assignments**\n"]
-    for tier in DEFAULT_MODELS:
+    for i, tier in enumerate(tiers, 1):
         mid = models.get(tier, DEFAULT_MODELS[tier])
-        label = next((c[1] for c in MODEL_CATALOG if c[0] == mid), mid)
-        lines.append(f"- `{tier:<7}` {label}  *({mid})*")
-    lines.append("\n**Available Models**")
-    for mid, name, desc in MODEL_CATALOG:
-        lines.append(f"- **{name}** — {desc}  \n  `{mid}`")
-    lines.append("\n**Usage:** `/models <tier> <model_id>`")
-    lines.append("**Example:** `/models light us.amazon.nova-micro-v1:0`")
+        label = next((c[1] for c in catalog if c[0] == mid), mid)
+        lines.append(f"  `{i}` **{tier:<7}** → {label}  \n       *{mid}*")
+    lines.append(f"\n**Available Models** ({'live' if live else 'static fallback'} — {len(catalog)} total)\n")
+    for i, (mid, name, desc) in enumerate(catalog, 1):
+        short = (desc or '')[:60]
+        lines.append(f"  `{i:>3}` **{name}** — {short}  \n       `{mid}`")
+    lines.append("")
+    lines.append("**Change a tier:** `/models <tier#|name> <model#|id>`")
+    lines.append("**Examples:** `/models 3 5`  ·  `/models light us.amazon.nova-micro-v1:0`")
+    lines.append("**Refresh from Bedrock:** `/models refresh`")
+    lines.append("")
+    lines.append("*Tip: type just `<tier#> <model#>` (e.g. `3 5`) or `cancel` at the next prompt.*")
     return "\n".join(lines)

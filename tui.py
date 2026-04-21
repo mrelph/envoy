@@ -213,6 +213,7 @@ class EnvoyApp(App):
     def __init__(self):
         super().__init__()
         self._agent = None
+        self._pending_prompt = None  # e.g. "models" → next input is interpreted as /models <args>
 
     def compose(self) -> ComposeResult:
         yield MCPBar(id="mcp-bar")
@@ -273,6 +274,17 @@ class EnvoyApp(App):
         t.append(raw, style="bold")
         out.write(t)
 
+        # If we're awaiting a follow-up answer (e.g. after /models), rewrite the input
+        if self._pending_prompt == "models":
+            lower = raw.strip().lower()
+            if lower in ("", "cancel", "q", "quit", "exit"):
+                self._pending_prompt = None
+                out.write(Text("  Cancelled.", style="dim"))
+                return
+            raw = f"/models {raw.strip()}"
+            # Fall through to normal dispatch below; clear flag unless user stays in picker
+            self._pending_prompt = None
+
         # System commands
         cmd = raw.split()[0].lower() if raw.startswith("/") else None
         if cmd == "/help":
@@ -291,9 +303,14 @@ class EnvoyApp(App):
             out.write(Text("  Use 'envoy settings' from CLI to edit config.", style="dim"))
             return
 
+        # After a bare `/models`, arm follow-up so the next input is treated as args
+        bare_models = (cmd == "/models" and not raw.split()[1:])
+
         # Start animated spinner
         hint = _get_hint(raw)
         self.query_one("#spinner", Spinner).start(hint)
+        if bare_models:
+            self._pending_prompt = "models"
         self._run_command(raw, hint)
 
     @work(thread=True, exclusive=True, group="cmd")
