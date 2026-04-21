@@ -208,13 +208,21 @@ class EnvoyApp(App):
         Binding("ctrl+c", "quit", "Quit", show=False),
         Binding("f5", "refresh_mcp", "Refresh", show=False),
         Binding("escape", "focus_input", "", show=False),
+        Binding("ctrl+up", "history_prev", "Previous command", show=False),
+        Binding("ctrl+down", "history_next", "Next command", show=False),
     ]
+
+    HISTORY_FILE = CONFIG_DIR / "history"
+    HISTORY_MAX = 500
 
     def __init__(self):
         super().__init__()
         self._agent = None
         self._pending_prompt = None  # e.g. "models" → next input is interpreted as /models <args>
         self._busy = False  # True while a command is in flight (prevents concurrent agent calls)
+        self._history: list[str] = []
+        self._history_pos: int | None = None  # None = not browsing; else index into _history
+        self._history_draft: str = ""          # current typed text, restored when user walks past end
 
     def compose(self) -> ComposeResult:
         yield MCPBar(id="mcp-bar")
@@ -231,6 +239,7 @@ class EnvoyApp(App):
         out.write(Text())
         self.query_one("#spinner", Spinner).display = False
         self.query_one("#input", TextArea).focus()
+        self._load_history()
         self._init_agent()
 
     @work(thread=True, exclusive=True, group="init")
@@ -264,6 +273,9 @@ class EnvoyApp(App):
                 ta.clear()
                 return
             ta.clear()
+            self._push_history(raw)
+            self._history_pos = None
+            self._history_draft = ""
             self._submit(raw)
 
     def _submit(self, raw: str) -> None:
@@ -394,6 +406,61 @@ class EnvoyApp(App):
         self.call_later(_do_mwinit)
 
     # ── Helpers ──
+
+    def _load_history(self) -> None:
+        try:
+            if self.HISTORY_FILE.exists():
+                lines = self.HISTORY_FILE.read_text().splitlines()
+                self._history = [l for l in lines if l.strip()][-self.HISTORY_MAX:]
+        except Exception:
+            self._history = []
+
+    def _push_history(self, entry: str) -> None:
+        if not entry.strip():
+            return
+        # Dedupe consecutive entries
+        if self._history and self._history[-1] == entry:
+            return
+        self._history.append(entry)
+        self._history = self._history[-self.HISTORY_MAX:]
+        try:
+            self.HISTORY_FILE.parent.mkdir(exist_ok=True)
+            self.HISTORY_FILE.write_text("\n".join(self._history) + "\n")
+        except Exception:
+            pass
+
+    def _set_input_text(self, text: str) -> None:
+        ta = self.query_one("#input", TextArea)
+        ta.text = text
+        # Move cursor to end
+        try:
+            ta.move_cursor(ta.document.end)
+        except Exception:
+            pass
+
+    def action_history_prev(self) -> None:
+        """Ctrl+Up — older entry."""
+        if not self._history:
+            return
+        ta = self.query_one("#input", TextArea)
+        if self._history_pos is None:
+            self._history_draft = ta.text.rstrip("\n")
+            self._history_pos = len(self._history)
+        if self._history_pos > 0:
+            self._history_pos -= 1
+            self._set_input_text(self._history[self._history_pos])
+
+    def action_history_next(self) -> None:
+        """Ctrl+Down — newer entry; past the end restores the user's draft."""
+        if self._history_pos is None:
+            return
+        self._history_pos += 1
+        if self._history_pos >= len(self._history):
+            self._history_pos = None
+            self._set_input_text(self._history_draft)
+            self._history_draft = ""
+        else:
+            self._set_input_text(self._history[self._history_pos])
 
     def _show_help(self) -> None:
         out = self.query_one("#output", RichLog)
