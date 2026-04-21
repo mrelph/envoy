@@ -1,11 +1,10 @@
 """Command dispatch — shared between TUI and plain REPL.
 
-dispatch(raw_input, agent) → (prompt_for_agent, needs_input_field, input_label)
+dispatch(raw_input, agent) → (result_or_cmd, handled)
 
-If prompt_for_agent is a string, call agent(prompt_for_agent).
-If needs_input_field is set, the UI should collect that input first,
-then call dispatch() again with the full command.
-If prompt_for_agent is None, it was handled internally (returns result text).
+If handled is True, result_or_cmd is the final output text (caller just prints it).
+If handled is False, result_or_cmd is the raw cmd string — a system command the
+UI layer must handle itself (e.g., /help, /status, /settings, /exit).
 """
 
 import os
@@ -136,6 +135,9 @@ def dispatch(raw: str, agent):
         lines.append(f"\n{len(skills)} skills loaded from ~/.envoy/skills/ and ~/.agents/skills/")
         return ("\n".join(lines), True)
 
+    if cmd == "/models":
+        return (_handle_models(arg), True)
+
     # --- Commands needing an arg ---
     if cmd in ARG_COMMANDS and not arg:
         labels = {
@@ -156,8 +158,45 @@ def dispatch(raw: str, agent):
         return (agent(prompt), True)
 
     # --- System commands return None — caller handles ---
-    if cmd in ("/help", "/status", "/models", "/settings", "/backup", "/exit"):
+    if cmd in ("/help", "/status", "/settings", "/backup", "/exit"):
         return (cmd, False)  # signal to caller
 
     # --- Freeform natural language ---
     return (agent(stripped), True)
+
+
+def _handle_models(arg: str) -> str:
+    """Show current model assignments, or update one via: /models <tier> <model_id>"""
+    import json
+    from agents.base import _load_models, MODEL_CATALOG, MODELS_FILE, DEFAULT_MODELS, reload_models
+    parts = arg.split() if arg else []
+
+    if len(parts) >= 2:
+        tier, model_id = parts[0].lower(), parts[1]
+        if tier not in DEFAULT_MODELS:
+            return f"Unknown tier '{tier}'. Valid: {', '.join(DEFAULT_MODELS)}"
+        current = {}
+        try:
+            with open(MODELS_FILE) as f:
+                current = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            pass
+        current[tier] = model_id
+        os.makedirs(os.path.dirname(MODELS_FILE), exist_ok=True)
+        with open(MODELS_FILE, "w") as f:
+            json.dump(current, f, indent=2)
+        reload_models()
+        return f"✓ {tier} → {model_id}"
+
+    models = _load_models()
+    lines = ["**Current Model Assignments**\n"]
+    for tier in DEFAULT_MODELS:
+        mid = models.get(tier, DEFAULT_MODELS[tier])
+        label = next((c[1] for c in MODEL_CATALOG if c[0] == mid), mid)
+        lines.append(f"- `{tier:<7}` {label}  *({mid})*")
+    lines.append("\n**Available Models**")
+    for mid, name, desc in MODEL_CATALOG:
+        lines.append(f"- **{name}** — {desc}  \n  `{mid}`")
+    lines.append("\n**Usage:** `/models <tier> <model_id>`")
+    lines.append("**Example:** `/models light us.amazon.nova-micro-v1:0`")
+    return "\n".join(lines)

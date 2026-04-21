@@ -287,9 +287,6 @@ class EnvoyApp(App):
         if cmd == "/mwinit":
             self._run_mwinit()
             return
-        if cmd == "/models":
-            out.write(Text("  Use 'envoy --models' from CLI to edit models.", style="dim"))
-            return
         if cmd == "/settings":
             out.write(Text("  Use 'envoy settings' from CLI to edit config.", style="dim"))
             return

@@ -351,6 +351,11 @@ def manage_cron(action: str = "list", name: str = "", schedule: str = "", comman
         return None
 
     def _envoy_path():
+        import shutil
+        # Prefer installed binary on PATH (symlink survives repo moves)
+        found = shutil.which("envoy")
+        if found:
+            return found
         script = os.path.abspath(os.path.join(os.path.dirname(__file__), "envoy"))
         return script if os.path.exists(script) else "envoy"
 
@@ -387,12 +392,27 @@ Tell me which preset to add, or describe a custom schedule."""
         _ALLOWED_SUBCMDS = {"digest", "cleanup", "customers", "catchup", "slack-catchup", "yesterbox",
                             "cal-audit", "response-times", "followup", "commitments", "prep-1on1", "prep-meeting",
                             "heartbeat"}
-        _DANGEROUS_CHARS = set(";|&`$(){}!><")
-        first_word = command.strip().split()[0] if command.strip() else ""
+        _DANGEROUS_CHARS = set(";|&`$(){}!><\n")
+        tokens = command.strip().split()
+        if not tokens:
+            return "Rejected: empty command."
+        # Allow optional leading 'envoy' for users who copy from presets
+        if tokens[0] == "envoy":
+            tokens = tokens[1:]
+            command = " ".join(tokens)
+        first_word = tokens[0] if tokens else ""
         if first_word not in _ALLOWED_SUBCMDS:
             return f"Rejected: '{first_word}' is not a known envoy subcommand. Allowed: {', '.join(sorted(_ALLOWED_SUBCMDS))}"
         if any(c in command for c in _DANGEROUS_CHARS):
             return "Rejected: command contains unsafe shell characters."
+        if any(c in schedule for c in _DANGEROUS_CHARS):
+            return "Rejected: schedule contains unsafe shell characters."
+        # Cron schedule: 5 whitespace-separated fields of [0-9,*/-]
+        import re as _re
+        if not _re.fullmatch(r"[\d,*/\-\s]+", schedule) or len(schedule.split()) != 5:
+            return "Rejected: schedule must be 5 fields of numbers/*/-/, (e.g. '0 8 * * 1-5')."
+        if not _re.fullmatch(r"[A-Za-z0-9_\-]+", name):
+            return "Rejected: name may only contain letters, digits, '_' and '-'."
         exe = _envoy_path()
         full_cmd = f"{schedule}  {exe} {command}  {MARKER} {name}"
         crontab = _get_crontab()
@@ -405,6 +425,9 @@ Tell me which preset to add, or describe a custom schedule."""
     if action == "remove":
         if not name:
             return "Need name of job to remove. Use action='list' to see current jobs."
+        import re as _re
+        if not _re.fullmatch(r"[A-Za-z0-9_\-]+", name):
+            return "Rejected: name may only contain letters, digits, '_' and '-'."
         crontab = _get_crontab()
         lines = crontab.splitlines()
         filtered = [l for l in lines if f"{MARKER} {name}" not in l]

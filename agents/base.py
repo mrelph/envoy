@@ -100,11 +100,16 @@ MCP_CALL_TIMEOUT = 30  # seconds per MCP tool call
 
 
 class _TimeoutSession:
-    """Wraps an MCP ClientSession to add a timeout to every call_tool invocation."""
+    """Wraps an MCP ClientSession to add a timeout to every call_tool invocation.
+    
+    Also tracks transport health — on connection errors, marks the session as dead
+    so _mcp_session can reopen it on the next call.
+    """
     def __init__(self, session, name, timeout=MCP_CALL_TIMEOUT):
         self._session = session
         self._name = name
         self._timeout = timeout
+        self.dead = False
 
     async def call_tool(self, tool_name, arguments=None, **kwargs):
         try:
@@ -114,6 +119,15 @@ class _TimeoutSession:
             )
         except asyncio.TimeoutError:
             raise TimeoutError(f"{self._name}/{tool_name} timed out after {self._timeout}s")
+        except (BrokenPipeError, ConnectionError, EOFError) as e:
+            self.dead = True
+            raise
+        except Exception as e:
+            # anyio/mcp sometimes wraps transport errors — heuristic
+            msg = str(e).lower()
+            if any(k in msg for k in ("closed", "broken pipe", "transport", "eof")):
+                self.dead = True
+            raise
 
     def __getattr__(self, name):
         return getattr(self._session, name)
@@ -193,20 +207,38 @@ def _mcp_session(server_name):
     """
     @asynccontextmanager
     async def _ctx():
-        # Try cached session first
+        # Try cached session first — evict if flagged dead
         if server_name in _persistent:
-            try:
-                _, _, session = _persistent[server_name]
-                yield session
-                return
-            except Exception:
-                # Dead connection — clean up and reopen
+            _, _, cached = _persistent[server_name]
+            if getattr(cached, "dead", False):
                 entry = _persistent.pop(server_name, None)
                 if entry:
                     try:
                         await _close_persistent(entry)
                     except Exception:
                         pass
+            else:
+                try:
+                    yield cached
+                    # Post-yield: if caller's call_tool marked it dead, evict now
+                    if getattr(cached, "dead", False):
+                        entry = _persistent.pop(server_name, None)
+                        if entry:
+                            try:
+                                await _close_persistent(entry)
+                            except Exception:
+                                pass
+                    return
+                except Exception:
+                    # Caller raised — if transport is dead, evict for next call
+                    if getattr(cached, "dead", False):
+                        entry = _persistent.pop(server_name, None)
+                        if entry:
+                            try:
+                                await _close_persistent(entry)
+                            except Exception:
+                                pass
+                    raise
 
         # Open new persistent session
         logger = get_logger()

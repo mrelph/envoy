@@ -70,7 +70,7 @@ if [ -d "$SCRIPT_DIR/.git" ]; then
     fi
     if $run_check; then
         date +%s > "$UPDATE_STAMP"
-        # Fetch tags and compare against current version
+        # Fetch tags and compare against current version (non-blocking)
         (
             git -C "$SCRIPT_DIR" fetch --tags --quiet 2>/dev/null
             LATEST_TAG=$(git -C "$SCRIPT_DIR" tag -l 'v*' --sort=-version:refname 2>/dev/null | head -1)
@@ -86,9 +86,8 @@ if [ -d "$SCRIPT_DIR/.git" ]; then
                     fi
                 fi
             fi
-        ) &
-        UPDATE_PID=$!
-        wait $UPDATE_PID 2>/dev/null || true
+        ) </dev/null >/dev/null 2>&1 &
+        disown 2>/dev/null || true
     fi
 fi
 

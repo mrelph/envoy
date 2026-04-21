@@ -208,7 +208,6 @@ def _create_reasoning_callback_handler():
     state = {
         "step_number": 0,
         "started": False,
-        "user_input_summary": "",
         "seen_tools": set(),
     }
 
@@ -268,10 +267,6 @@ def _create_reasoning_callback_handler():
         except Exception:
             pass
 
-    def set_user_input(user_input: str):
-        state["user_input_summary"] = user_input or ""
-
-    reasoning_callback_handler.set_user_input = set_user_input
     return reasoning_callback_handler
 
 
@@ -314,6 +309,4 @@ def create_agent(session_id: str = "default"):
         session_manager=session_manager,
         callback_handler=callback_handler,
     )
-    # Attach the callback handler so callers can set user input
-    agent._reasoning_callback = callback_handler
     return agent

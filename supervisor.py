@@ -9,6 +9,7 @@ These give the Strands agent the ability to:
 import asyncio
 import json
 import os
+import threading
 from datetime import datetime
 from strands import tool
 from envoy_logger import get_logger
@@ -24,35 +25,40 @@ _context = {
     "last_report": "",       # last AI-generated report
     "ts": 0,                 # timestamp of last gather
 }
+_context_lock = threading.RLock()
 
 _CONTEXT_TTL = 1800  # 30 minutes
 
 
 def _next_ref(prefix: str) -> str:
     """Generate next reference ID like E1, E2, S1, S2, C1..."""
-    existing = [k for k in _context["items"] if k.startswith(prefix)]
-    return f"{prefix}{len(existing) + 1}"
+    with _context_lock:
+        existing = [k for k in _context["items"] if k.startswith(prefix)]
+        return f"{prefix}{len(existing) + 1}"
 
 
 def _store_item(prefix: str, summary: str, **data) -> str:
     """Store an item in context and return its reference ID."""
-    ref = _next_ref(prefix)
-    _context["items"][ref] = {"summary": summary, **data}
-    return ref
+    with _context_lock:
+        ref = _next_ref(prefix)
+        _context["items"][ref] = {"summary": summary, **data}
+        return ref
 
 
 def clear_context():
     """Clear all indexed items and reset timestamp."""
-    _context["items"].clear()
-    _context["last_email_bodies"].clear()
-    _context["last_report"] = ""
-    _context["ts"] = 0
+    with _context_lock:
+        _context["items"].clear()
+        _context["last_email_bodies"].clear()
+        _context["last_report"] = ""
+        _context["ts"] = 0
 
 
 def _check_ttl():
     """Clear stale context."""
-    if _context["ts"] and (_time.monotonic() - _context["ts"]) > _CONTEXT_TTL:
-        clear_context()
+    with _context_lock:
+        if _context["ts"] and (_time.monotonic() - _context["ts"]) > _CONTEXT_TTL:
+            clear_context()
 
 
 def get_context() -> dict:
@@ -61,7 +67,8 @@ def get_context() -> dict:
 
 
 def set_context(key: str, value):
-    _context[key] = value
+    with _context_lock:
+        _context[key] = value
 
 
 @tool
@@ -77,9 +84,11 @@ def gather(sources: str = "email,slack,calendar,todos", days: int = 1, alias: st
     alias = alias or os.getenv("USER", "")
     source_list = [s.strip().lower() for s in sources.split(",")]
 
-    # Clear previous context for fresh gather
-    clear_context()
-    _context["ts"] = _time.monotonic()
+    # Only wipe stale context; preserve refs from recent prior gather in same turn
+    with _context_lock:
+        if _context["ts"] and (_time.monotonic() - _context["ts"]) > _CONTEXT_TTL:
+            clear_context()
+        _context["ts"] = _time.monotonic()
 
     results = run(_gather_async(source_list, days, alias))
 
