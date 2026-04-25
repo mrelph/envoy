@@ -494,5 +494,21 @@ def routine(action, order):
         console.print(Markdown(suggest_routines()))
 
 
+@cli.command()
+@click.option('--interval', '-i', default=60, type=int, help='Poll interval in seconds')
+@click.option('--once', is_flag=True, help='Run one pass and exit (for testing)')
+def watch(interval, once):
+    """Long-running background watcher — reacts to Slack/email events in near-real-time."""
+    from agents.watcher import run_watcher
+    console.print(run_watcher(interval=interval, once=once))
+
+
+@cli.command()
+def doctor():
+    """Health check — MCP connections, AWS credentials, config, models, memory, skills."""
+    from dispatch import _run_doctor
+    console.print(Markdown(_run_doctor()))
+
+
 if __name__ == '__main__':
     cli()

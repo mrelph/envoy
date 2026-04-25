@@ -112,11 +112,15 @@ async def _gather_context(days: int = 1) -> str:
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
+    failed_sources = []
     for item in results:
         if isinstance(item, Exception):
+            failed_sources.append(f"unknown: {item}")
             continue
         name, data = item
-        if data and not str(data).startswith("Error"):
+        if data and str(data).startswith("Error"):
+            failed_sources.append(name)
+        elif data:
             if isinstance(data, list):
                 if data and isinstance(data[0], dict) and "subject" in data[0]:
                     text = "\n".join(f"- {e['from']}: {e['subject']} ({e['date']}) [id:{e.get('conversationId','')}]"
@@ -129,6 +133,8 @@ async def _gather_context(days: int = 1) -> str:
                 text = str(data)[:2000]
             sections.append(f"### {name}\n{text}")
 
+    if failed_sources:
+        sections.append(f"### unavailable_sources\n{', '.join(failed_sources)} — data from these sources is MISSING, do not assume anything about them")
     return "\n\n".join(sections) if sections else "No data available."
 
 

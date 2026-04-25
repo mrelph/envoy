@@ -5,7 +5,7 @@ from agents.base import run
 from agents.workers import _model
 
 
-def create():
+def create(session_mgr=None):
     from agents import slack_agent as slack_mod
     from agents import workflows as wf
 
@@ -89,9 +89,24 @@ def create():
         fn = ops.get(operation)
         return fn() if fn else f"Unknown operation: {operation}"
 
+    @tool
+    def shared_context(operation: str = "read", key: str = "", value: str = "") -> str:
+        """Read or post shared context visible to all workers.
+        Args:
+            operation: 'read' to get context, 'post' to share
+            key: Context key
+            value: Context value (for post)
+        """
+        from agents.workers import read_context, post_context
+        if operation == "post" and key:
+            post_context(key, value, source="comms")
+            return f"Posted to shared context: {key}"
+        return read_context(key)
+
     return Agent(
         model=_model("medium"),
-        system_prompt="You are a Slack and communications specialist. You scan channels (with user name resolution and thread context), send messages (DMs, channels, threaded replies), search, add reactions, manage drafts, download files, and delegate to EAs. Be concise.",
-        tools=[scan_channels, send_message, mark_read, search_messages, send_to_ea, slack_extras],
+        system_prompt="You are a Slack and communications specialist. You scan channels (with user name resolution and thread context), send messages (DMs, channels, threaded replies), search, add reactions, manage drafts, download files, and delegate to EAs. Be concise. Use shared_context to post important findings for other workers.",
+        tools=[scan_channels, send_message, mark_read, search_messages, send_to_ea, slack_extras, shared_context],
         callback_handler=None,
+        **({"session_manager": session_mgr} if session_mgr else {}),
     )

@@ -113,6 +113,7 @@ Envoy can run autonomously on a schedule, checking your routines and alerting yo
 | `envoy routine list` | `/routines` | View your routines |
 | `envoy routine add` | `/routine` | Add a new routine |
 | `envoy routine suggest` | `/suggest-routines` | AI-suggested routines |
+| `envoy watch` | — | Long-running background watcher — reacts to Slack events in near-real-time |
 
 ## CLI Reference
 
@@ -309,7 +310,6 @@ Skills follow the [Agent Skills](https://agentskills.io) open standard:
 - Memory files enforce 2MB size limits with automatic pruning
 - Email deletion moves to Deleted Items (recoverable)
 - MCP server stderr suppressed to prevent information leakage
-- Demo mode masks all PII (names, emails, aliases)
 
 ## Project Structure
 
@@ -342,6 +342,7 @@ envoy/
 │   ├── skills.py            # Agent Skills loader (agentskills.io)
 │   ├── workflows.py         # Compound commands (digest, catchup, etc.)
 │   ├── heartbeat.py         # Autonomous heartbeat + routines
+│   ├── watcher.py           # Long-running background watcher (envoy watch)
 │   ├── email.py             # Email: send/reply/draft (CC/BCC), read, classify, flag, attachments
 │   ├── slack_agent.py       # Slack: scan, send, reactions, drafts, files, Lists
 │   ├── calendar.py          # Calendar: view, create, shared calendars

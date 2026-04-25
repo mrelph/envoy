@@ -63,6 +63,7 @@ COMMANDS = {
     "/settings":  ("Edit personality and config",          None),
     "/skills":    ("List configured skills",               None),
     "/backup":    ("Back up config, memory, and state",    None),
+    "/doctor":    ("Health check — MCP, AWS, config, memory", None),
     "/exit":      ("Exit Envoy",                           None),
 }
 
@@ -86,7 +87,7 @@ COMMAND_GROUPS = [
     ("Actions", ["/reply", "/ea", "/book", "/findtime", "/search", "/sharepoint"]),
     ("Reviews", ["/eod", "/weekly", "/cron"]),
     ("Heartbeat", ["/routine", "/routines", "/heartbeat", "/suggest-routines"]),
-    ("System", ["/status", "/mwinit", "/models", "/skills", "/settings", "/backup", "/help", "/exit"]),
+    ("System", ["/doctor", "/status", "/mwinit", "/models", "/skills", "/settings", "/backup", "/help", "/exit"]),
 ]
 
 
@@ -123,6 +124,9 @@ def dispatch(raw: str, agent):
     if cmd == "/suggest-routines":
         from agents.heartbeat import suggest_routines
         return (suggest_routines(), True)
+
+    if cmd == "/doctor":
+        return (_run_doctor(), True)
 
     if cmd == "/skills":
         from agents.skills import get_skills
@@ -163,6 +167,170 @@ def dispatch(raw: str, agent):
 
     # --- Freeform natural language ---
     return (agent(stripped), True)
+
+
+def _run_doctor() -> str:
+    """Comprehensive health check — MCP, AWS, config, models, memory, skills."""
+    import json
+    from pathlib import Path
+
+    lines = ["# 🩺 Envoy Doctor\n"]
+    ok_count = 0
+    warn_count = 0
+    err_count = 0
+
+    def _ok(msg):
+        nonlocal ok_count; ok_count += 1; lines.append(f"  ✅ {msg}")
+    def _warn(msg):
+        nonlocal warn_count; warn_count += 1; lines.append(f"  ⚠️  {msg}")
+    def _err(msg):
+        nonlocal err_count; err_count += 1; lines.append(f"  ❌ {msg}")
+
+    # --- MCP Connections ---
+    lines.append("\n## MCP Servers")
+    try:
+        from agents.base import check_mcp_connections
+        status = check_mcp_connections()
+        for name, connected in status.items():
+            if connected:
+                _ok(name)
+            elif name in ("Outlook", "Phonetool"):
+                _err(f"{name} — not connected (core functionality affected)")
+            else:
+                _warn(f"{name} — not connected")
+    except Exception as e:
+        _err(f"Could not check MCP: {e}")
+
+    # --- AWS / Bedrock ---
+    lines.append("\n## AWS Credentials")
+    try:
+        import boto3
+        sts = boto3.client('sts', region_name='us-west-2')
+        identity = sts.get_caller_identity()
+        _ok(f"Authenticated as {identity.get('Arn', 'unknown')[:80]}")
+    except Exception as e:
+        _err(f"AWS credentials invalid — run `aws login` or check .env ({e})")
+
+    # --- Models ---
+    lines.append("\n## AI Models")
+    try:
+        from agents.base import _load_models, DEFAULT_MODELS
+        models = _load_models()
+        models_file = Path.home() / ".envoy" / "models.json"
+        customized = models_file.exists()
+        for tier in DEFAULT_MODELS:
+            mid = models.get(tier, DEFAULT_MODELS[tier])
+            is_default = mid == DEFAULT_MODELS[tier]
+            label = f"{tier}: {mid.split('.')[-1][:30]}"
+            if is_default:
+                _ok(f"{label} (default)")
+            else:
+                _ok(f"{label} (custom)")
+        if not customized:
+            lines.append("  ℹ️  Using defaults — run `/models` to customize")
+    except Exception as e:
+        _warn(f"Could not load models: {e}")
+
+    # --- Config Files ---
+    lines.append("\n## Configuration")
+    config_dir = Path.home() / ".envoy"
+    for name, required_fields in [
+        ("soul.md", ["Agent name"]),
+        ("envoy.md", ["Alias"]),
+        ("process.md", []),
+    ]:
+        path = config_dir / name
+        if not path.exists():
+            _warn(f"{name} — missing (run `envoy init`)")
+            continue
+        content = path.read_text()
+        size = len(content)
+        empty_fields = [f for f in required_fields if f"{f}:" in content and not content.split(f"{f}:")[1].split("\n")[0].strip()]
+        if empty_fields:
+            _warn(f"{name} ({size:,} chars) — empty fields: {', '.join(empty_fields)}")
+        else:
+            _ok(f"{name} ({size:,} chars)")
+
+    # --- Knowledge Folder ---
+    try:
+        from agents.export import _configured_folders
+        folders = _configured_folders()
+        if folders.get("knowledge"):
+            _ok(f"Knowledge Folder: {folders['knowledge']}")
+        else:
+            lines.append("  ℹ️  No Knowledge Folder configured (optional — for vault/second-brain)")
+        if folders.get("exports"):
+            _ok(f"Exports Folder: {folders['exports']}")
+    except Exception:
+        pass
+
+    # --- Memory ---
+    lines.append("\n## Memory")
+    try:
+        from agents.memory2 import ENTRIES_FILE, ENTITIES_FILE, SUMMARY_FILE, _load_entries, known_entities
+        entries = _load_entries(days=14)
+        entities = known_entities()
+        entry_size = Path(ENTRIES_FILE).stat().st_size if Path(ENTRIES_FILE).exists() else 0
+        _ok(f"{len(entries)} entries (last 14d), {len(entities)} entities, {entry_size:,} bytes on disk")
+        if entry_size > 1_500_000:
+            _warn(f"Memory file large ({entry_size:,} bytes) — run compression")
+        summary_exists = Path(SUMMARY_FILE).exists()
+        if summary_exists:
+            import json as _json
+            summaries = _json.loads(Path(SUMMARY_FILE).read_text())
+            _ok(f"{len(summaries)} entity summaries")
+        else:
+            lines.append("  ℹ️  No compressed summaries yet (created automatically)")
+    except Exception as e:
+        _warn(f"Memory check failed: {e}")
+
+    # --- Skills ---
+    lines.append("\n## Skills")
+    try:
+        from agents.skills import get_skills
+        skills = get_skills()
+        if skills:
+            _ok(f"{len(skills)} skills: {', '.join(skills.keys())}")
+        else:
+            lines.append("  ℹ️  No skills installed — add to ~/.envoy/skills/")
+    except Exception as e:
+        _warn(f"Skills check failed: {e}")
+
+    # --- Routines ---
+    try:
+        from agents.heartbeat import get_routines
+        routines = get_routines()
+        routine_count = routines.count("\n- ")
+        if routine_count:
+            _ok(f"{routine_count} heartbeat routines")
+        else:
+            lines.append("  ℹ️  No routines — use `/routine` to add one")
+    except Exception:
+        pass
+
+    # --- Cron ---
+    try:
+        import subprocess
+        crontab = subprocess.run(["crontab", "-l"], capture_output=True, text=True).stdout
+        envoy_jobs = [l for l in crontab.splitlines() if "# envoy:" in l]
+        if envoy_jobs:
+            _ok(f"{len(envoy_jobs)} cron jobs")
+        else:
+            lines.append("  ℹ️  No cron jobs — use `/cron` to schedule automation")
+    except Exception:
+        pass
+
+    # --- Summary ---
+    total = ok_count + warn_count + err_count
+    lines.append(f"\n---\n**{ok_count}** ✅  **{warn_count}** ⚠️  **{err_count}** ❌  ({total} checks)")
+    if err_count:
+        lines.append("\nFix ❌ items first — they affect core functionality.")
+    elif warn_count:
+        lines.append("\nLooking good! Address ⚠️ items when convenient.")
+    else:
+        lines.append("\nAll systems healthy. 🚀")
+
+    return "\n".join(lines)
 
 
 def _handle_models(arg: str) -> str:

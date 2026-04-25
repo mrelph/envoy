@@ -29,17 +29,6 @@ if [ ! -f "$VENV_PYTHON" ]; then
     echo ""
 fi
 
-# Demo mode: envoy --demo or ENVOY_DEMO=1
-new_args=()
-for arg in "$@"; do
-    if [ "$arg" = "--demo" ]; then
-        export ENVOY_DEMO=1
-    else
-        new_args+=("$arg")
-    fi
-done
-set -- "${new_args[@]}"
-
 # Ensure Midway auth is fresh (no more than once per hour)
 MWINIT_STAMP="$SCRIPT_DIR/.mwinit_last"
 if command -v mwinit &>/dev/null; then

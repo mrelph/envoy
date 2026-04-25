@@ -235,8 +235,9 @@ async def scan_raw(channels: List[str] = None, days: int = 7, alias: str = "") -
                                     reply_texts.append(f"    ↳ {r_name}{r_tag}: {r_text}")
                             if reply_texts:
                                 thread_lines[(cid, ts)] = "\n".join(reply_texts)
-                except Exception:
-                    pass
+                except Exception as e:
+                    from envoy_logger import get_logger
+                    get_logger().log_warning(f"Thread fetch failed: {e}")
 
         lines = []
         for ch_id, msg in all_messages:

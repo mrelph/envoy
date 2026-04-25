@@ -15,7 +15,7 @@ def _format_html(text: str) -> str:
     return "".join(f"<p>{p}</p>" for p in paragraphs) if paragraphs else f"<p>{text}</p>"
 
 
-def create():
+def create(session_mgr=None):
     from agents import email as email_mod
     from agents import workflows as wf
 
@@ -190,9 +190,24 @@ def create():
         run(email_mod.email_digest(body, _USER, 0))
         return f"Email sent to {_USER}@amazon.com"
 
+    @tool
+    def shared_context(operation: str = "read", key: str = "", value: str = "") -> str:
+        """Read or post shared context visible to all workers.
+        Args:
+            operation: 'read' to get context (key=specific or empty=all), 'post' to share context
+            key: Context key (e.g. 'urgent_emails', 'person:alias')
+            value: Context value (for post)
+        """
+        from agents.workers import read_context, post_context
+        if operation == "post" and key:
+            post_context(key, value, source="email")
+            return f"Posted to shared context: {key}"
+        return read_context(key)
+
     return Agent(
         model=_model("medium"),
-        system_prompt="You are an email specialist. You fetch, search, classify, send, and manage emails. Be concise and action-oriented.",
-        tools=[inbox, read_email, search_email, send_email, reply_email, forward_email, manage_email, cleanup, delete, customer_scan, digest, send_to_self],
+        system_prompt="You are an email specialist. You fetch, search, classify, send, and manage emails. Be concise and action-oriented. Use shared_context to post important findings (urgent emails, key people) for other workers.",
+        tools=[inbox, read_email, search_email, send_email, reply_email, forward_email, manage_email, cleanup, delete, customer_scan, digest, send_to_self, shared_context],
         callback_handler=None,
+        **({"session_manager": session_mgr} if session_mgr else {}),
     )

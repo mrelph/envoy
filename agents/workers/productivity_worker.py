@@ -5,7 +5,7 @@ from agents.base import run
 from agents.workers import _USER, _model
 
 
-def create():
+def create(session_mgr=None):
     from agents import todo as todo_mod, tickets as tix_mod, memory2 as mem_mod
     from agents import workflows as wf
 
@@ -87,9 +87,24 @@ def create():
         from tools import manage_cron
         return manage_cron(action=action, name=name, schedule=schedule, command=command)
 
+    @tool
+    def shared_context(operation: str = "read", key: str = "", value: str = "") -> str:
+        """Read or post shared context visible to all workers.
+        Args:
+            operation: 'read' to get context, 'post' to share
+            key: Context key
+            value: Context value (for post)
+        """
+        from agents.workers import read_context, post_context
+        if operation == "post" and key:
+            post_context(key, value, source="productivity")
+            return f"Posted to shared context: {key}"
+        return read_context(key)
+
     return Agent(
         model=_model("medium"),
-        system_prompt="You are a productivity specialist. You manage to-dos (list, add with due dates/importance, complete, update, delete), scan tickets, maintain memory, and manage cron jobs. For briefings, EOD summaries, and weekly reviews, tell the user to use /briefing, /eod, or /weekly commands. Be action-oriented.",
-        tools=[todo_items, tickets, remember_item, cron_jobs],
+        system_prompt="You are a productivity specialist. You manage to-dos (list, add with due dates/importance, complete, update, delete), scan tickets, maintain memory, and manage cron jobs. For briefings, EOD summaries, and weekly reviews, tell the user to use /briefing, /eod, or /weekly commands. Be action-oriented. Use shared_context to post important findings for other workers.",
+        tools=[todo_items, tickets, remember_item, cron_jobs, shared_context],
         callback_handler=None,
+        **({"session_manager": session_mgr} if session_mgr else {}),
     )

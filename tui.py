@@ -203,6 +203,7 @@ class EnvoyApp(App):
 
     CSS_PATH = "tui.css"
     TITLE = f"Envoy v{VERSION}"
+    ALLOW_SELECT = True
 
     BINDINGS = [
         Binding("ctrl+c", "quit", "Quit", show=False),
@@ -349,14 +350,6 @@ class EnvoyApp(App):
         if worker.is_cancelled:
             self._busy = False
             return
-
-        # Log to observer learning loop
-        try:
-            from agents.observer import observe, maybe_analyze
-            observe(raw[:300], str(result)[:300] if result else "", domain="command")
-            maybe_analyze()
-        except Exception:
-            pass
 
         def _show():
             # Stop spinner

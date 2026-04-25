@@ -1,26 +1,15 @@
 """Envoy Strands tools — supervisor tools that route to worker agents."""
 import os
 import re
-import hashlib
-import functools
 from strands import tool
 from envoy_logger import logged_tool
-from agents.base import outlook, builder, invoke_ai, check_mcp_connections, _load_models, MODEL_CATALOG, MODELS_FILE, mcp_batch, get_token_usage, format_token_usage, reset_token_usage, run
+from agents.base import builder, invoke_ai, check_mcp_connections, _load_models, MODEL_CATALOG, MODELS_FILE, get_token_usage, format_token_usage, reset_token_usage, run
 from agents import email, slack_agent, calendar, todo, tickets, memory2 as memory, teamsnap_agent, people, internal, export
 from agents import workflows as wf
 from agents.workers import get_worker
 from agents.skills import get_skills, activate as activate_skill_fn
 
 _USER = os.environ.get('USER', '')
-
-
-def _outlook_tool(tool_name: str, args: dict) -> str:
-    """Direct MCP call to Outlook — used by worker agents."""
-    async def _call():
-        async with outlook() as session:
-            result = await session.call_tool(tool_name, args)
-            return result.content[0].text if result.content else "No result."
-    return run(_call())
 
 
 def _check_replies_combined() -> str:
@@ -43,107 +32,25 @@ def _check_replies_combined() -> str:
         return "⚠️ Slack MCP unavailable — could only check email replies."
 
 
-
-async def _outlook_batch(calls: list) -> list:
-    """Run multiple Outlook MCP calls in a single session."""
-    return await mcp_batch("Outlook", calls)
-
-
-# --- Demo mode masking ---
-
-_DEMO_MODE = os.environ.get("ENVOY_DEMO", "").strip().lower() in ("1", "true", "yes")
-
-_FAKE_FIRST = [
-    "Alex", "Jordan", "Morgan", "Casey", "Riley", "Quinn", "Avery", "Taylor",
-    "Skyler", "Dakota", "Reese", "Finley", "Rowan", "Sage", "Blair", "Drew",
-    "Emery", "Harper", "Kendall", "Logan", "Parker", "Peyton", "Sawyer", "Tatum",
-]
-_FAKE_LAST = [
-    "Chen", "Patel", "Kim", "Santos", "Müller", "Nakamura", "Okafor", "Johansson",
-    "Rivera", "Kowalski", "Tanaka", "Gupta", "Larsson", "Moreau", "Novak", "Reyes",
-    "Fischer", "Sharma", "Dubois", "Yamamoto", "Costa", "Petrov", "Andersen", "Ortiz",
-]
-_FAKE_DOMAINS = [
-    "acmecorp.com", "globex.io", "initech.co", "umbrella.net", "waynetech.org",
-    "starkindustries.com", "oscorp.io", "lexcorp.net", "cyberdyne.co", "soylent.org",
-]
-
-def _demo_hash(text: str) -> int:
-    """Deterministic hash so same input always maps to same fake output."""
-    return int(hashlib.md5(text.lower().encode()).hexdigest(), 16)
-
-def _fake_name(real: str) -> str:
-    h = _demo_hash(real)
-    return f"{_FAKE_FIRST[h % len(_FAKE_FIRST)]} {_FAKE_LAST[(h >> 8) % len(_FAKE_LAST)]}"
-
-def _fake_alias(real: str) -> str:
-    name = _fake_name(real)
-    return name.split()[0].lower() + name.split()[1].lower()[:3]
-
-def _fake_email(real: str) -> str:
-    local = real.split("@")[0] if "@" in real else real
-    h = _demo_hash(local)
-    alias = _fake_alias(local)
-    domain = _FAKE_DOMAINS[h % len(_FAKE_DOMAINS)]
-    return f"{alias}@{domain}"
-
-def _mask_output(text: str) -> str:
-    """Replace real PII patterns with deterministic fakes."""
-    if not text:
-        return text
-
-    # Cache replacements for consistency
-    seen = {}
-
-    def _replace_email(m):
-        orig = m.group(0)
-        if orig not in seen:
-            seen[orig] = _fake_email(orig)
-        return seen[orig]
-
-    def _replace_alias_ref(m):
-        """Replace @alias patterns."""
-        orig = m.group(1)
-        if orig not in seen:
-            seen[orig] = _fake_alias(orig)
-        return f"@{seen[orig]}"
-
-    # Emails: user@amazon.com, user@domain.com
-    text = re.sub(r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+', _replace_email, text)
-
-    # @alias mentions (Slack-style)
-    text = re.sub(r'@([a-z]{2,12})\b', _replace_alias_ref, text)
-
-    # Slack channel IDs (C/D/G followed by alphanumeric)
-    text = re.sub(r'\b([CDG][A-Z0-9]{8,12})\b',
-                  lambda m: f"C{''.join(format(_demo_hash(m.group(1)) >> i & 0xF, 'X') for i in range(10))}",
-                  text)
-
-    # Conversation IDs (long base64-ish strings that look like email thread IDs)
-    text = re.sub(r'(AAQ[A-Za-z0-9+/=]{20,})',
-                  lambda m: f"AAQkDemo{''.join(format(_demo_hash(m.group(1)) >> i & 0xF, 'X') for i in range(16))}==",
-                  text)
-
-    # Phone numbers
-    text = re.sub(r'\b\d{3}[-.]?\d{3}[-.]?\d{4}\b', '555-867-5309', text)
-
-    # Building codes (SEA54, PDX12, etc.)
-    text = re.sub(r'\b([A-Z]{3})\d{1,3}(?:-\d{2}\.\d{3})?\b',
-                  lambda m: f"HQ{_demo_hash(m.group(0)) % 99:02d}", text)
-
-    return text
-
-def _demo_wrap(t):
-    """If demo mode is on, wrap the tool's inner function to mask output."""
-    if not _DEMO_MODE:
-        return t
-    orig_func = t._tool_func
-    @functools.wraps(orig_func)
-    def masked(*args, **kwargs):
-        result = orig_func(*args, **kwargs)
-        return _mask_output(str(result)) if isinstance(result, str) else result
-    t._tool_func = masked
-    return t
+def _config_has_similar(path: str, new_rule: str, threshold: float = 0.6) -> str:
+    """Check if a config file already has a similar rule. Returns the existing rule or ''."""
+    if not os.path.exists(path):
+        return ""
+    new_words = set(new_rule.lower().split())
+    if len(new_words) < 2:
+        return ""
+    for line in open(path):
+        line = line.strip()
+        if not line.startswith("- "):
+            continue
+        existing = line[2:].strip()
+        existing_words = set(existing.lower().split())
+        if not existing_words:
+            continue
+        overlap = len(new_words & existing_words) / max(len(new_words | existing_words), 1)
+        if overlap >= threshold:
+            return existing
+    return ""
 
 
 @tool
@@ -156,6 +63,9 @@ def update_soul(rule: str) -> str:
         rule: The rule or personality directive to add (will be appended)
     """
     path = os.path.expanduser("~/.envoy/soul.md")
+    existing = _config_has_similar(path, rule)
+    if existing:
+        return f"⚠️ Similar rule already exists: \"{existing}\"\nNo change made. Use `/settings` to edit manually."
     with open(path, "a") as f:
         f.write(f"\n- {rule}\n")
     return f"✅ Updated soul: {rule}\n⚠️ This change persists across sessions. Use `/settings` to review."
@@ -171,6 +81,9 @@ def update_envoy(preference: str) -> str:
         preference: The preference to add (will be appended)
     """
     path = os.path.expanduser("~/.envoy/envoy.md")
+    existing = _config_has_similar(path, preference)
+    if existing:
+        return f"⚠️ Similar preference already exists: \"{existing}\"\nNo change made. Use `/settings` to edit manually."
     with open(path, "a") as f:
         f.write(f"\n- {preference}\n")
     return f"✅ Updated preferences: {preference}\n⚠️ This change persists across sessions. Use `/settings` to review."
@@ -189,6 +102,9 @@ def update_process(rule: str, section: str = "General") -> str:
     """
     path = os.path.expanduser("~/.envoy/process.md")
     header = f"## {section}"
+    existing = _config_has_similar(path, rule)
+    if existing:
+        return f"⚠️ Similar rule already exists: \"{existing}\"\nNo change made. Use `/settings` to edit manually."
     if not os.path.exists(path):
         # Bootstrap from template
         tmpl = os.path.join(os.path.dirname(__file__), "templates", "process.md")
@@ -289,6 +205,80 @@ def teamsnap_availability(event_id: str) -> str:
         event_id: TeamSnap event ID
     """
     return run(teamsnap_agent.get_availability(event_id))
+
+
+@tool
+def teamsnap_event_detail(event_id: str) -> str:
+    """Get full details for a TeamSnap event — location, uniform, arrival time, notes.
+
+    Args:
+        event_id: TeamSnap event ID
+    """
+    return run(teamsnap_agent.get_event_detail(event_id))
+
+
+@tool
+def teamsnap_location(event_id: str) -> str:
+    """Get location details for a TeamSnap event — address, map link, parking notes.
+
+    Args:
+        event_id: TeamSnap event ID
+    """
+    return run(teamsnap_agent.get_location(event_id))
+
+
+@tool
+def teamsnap_contacts(team_id: str = "", member_id: str = "") -> str:
+    """Get parent/guardian contact info (phone, email) for a TeamSnap team or member.
+
+    Args:
+        team_id: TeamSnap team ID (all contacts on team)
+        member_id: TeamSnap member ID (contacts for one player)
+    """
+    return run(teamsnap_agent.get_contacts(team_id, member_id))
+
+
+@tool
+def teamsnap_announcements(team_id: str) -> str:
+    """Get recent team announcements and broadcasts from TeamSnap.
+
+    Args:
+        team_id: TeamSnap team ID
+    """
+    return run(teamsnap_agent.get_announcements(team_id))
+
+
+@tool
+def teamsnap_rsvp(event_id: str, member_id: str, status: str) -> str:
+    """Set RSVP for a TeamSnap event. Status must be yes, no, or maybe.
+
+    Args:
+        event_id: TeamSnap event ID
+        member_id: TeamSnap member ID
+        status: RSVP status — yes, no, or maybe
+    """
+    return run(teamsnap_agent.set_availability(event_id, member_id, status))
+
+
+@tool
+def teamsnap_assignments(team_id: str = "", event_id: str = "") -> str:
+    """Get volunteer/snack/carpool assignments for a TeamSnap team or event.
+
+    Args:
+        team_id: TeamSnap team ID (all assignments)
+        event_id: TeamSnap event ID (assignments for one event)
+    """
+    return run(teamsnap_agent.get_assignments(team_id, event_id))
+
+
+@tool
+def teamsnap_standings(team_id: str) -> str:
+    """Get win/loss record and division standings for a TeamSnap team.
+
+    Args:
+        team_id: TeamSnap team ID
+    """
+    return run(teamsnap_agent.get_standings(team_id))
 
 
 @tool
@@ -408,10 +398,9 @@ Tell me which preset to add, or describe a custom schedule."""
         if any(c in schedule for c in _DANGEROUS_CHARS):
             return "Rejected: schedule contains unsafe shell characters."
         # Cron schedule: 5 whitespace-separated fields of [0-9,*/-]
-        import re as _re
-        if not _re.fullmatch(r"[\d,*/\-\s]+", schedule) or len(schedule.split()) != 5:
+        if not re.fullmatch(r"[\d,*/\-\s]+", schedule) or len(schedule.split()) != 5:
             return "Rejected: schedule must be 5 fields of numbers/*/-/, (e.g. '0 8 * * 1-5')."
-        if not _re.fullmatch(r"[A-Za-z0-9_\-]+", name):
+        if not re.fullmatch(r"[A-Za-z0-9_\-]+", name):
             return "Rejected: name may only contain letters, digits, '_' and '-'."
         exe = _envoy_path()
         full_cmd = f"{schedule}  {exe} {command}  {MARKER} {name}"
@@ -425,8 +414,7 @@ Tell me which preset to add, or describe a custom schedule."""
     if action == "remove":
         if not name:
             return "Need name of job to remove. Use action='list' to see current jobs."
-        import re as _re
-        if not _re.fullmatch(r"[A-Za-z0-9_\-]+", name):
+        if not re.fullmatch(r"[A-Za-z0-9_\-]+", name):
             return "Rejected: name may only contain letters, digits, '_' and '-'."
         crontab = _get_crontab()
         lines = crontab.splitlines()
@@ -617,8 +605,19 @@ def analyze_patterns(days: int = 7) -> str:
 @tool
 def get_observer_insights() -> str:
     """Get a summary of what the observer has learned — recent observations and patterns."""
-    from agents.observer import get_insights
-    return get_insights()
+    entries = memory._load_entries(days=7)
+    observations = [e for e in entries if e.get("type") == "observation"]
+    if not observations:
+        return "No observations recorded yet."
+    domains = {}
+    for e in observations:
+        for ent in e.get("entities", []):
+            domains[ent] = domains.get(ent, 0) + 1
+    domain_summary = ", ".join(f"{k}: {v}" for k, v in sorted(domains.items(), key=lambda x: -x[1])[:10])
+    recent = "\n".join(
+        f"- {e['ts'][:16]} {e['text'][:100]}" for e in observations[-20:]
+    )
+    return f"## Observer Insights\n\n**{len(observations)} observations** (last 7 days): {domain_summary}\n\n### Recent\n{recent}"
 
 
 @tool
@@ -646,12 +645,6 @@ def _delegate(worker_name: str, request: str, _retries: int = 1) -> str:
             response = str(result.message) if hasattr(result, 'message') else str(result)
             try:
                 memory.remember(f"[{worker_name}] {request[:200]} → {response[:200]}", entry_type="observation")
-            except Exception:
-                pass
-            try:
-                from agents.observer import observe, maybe_analyze
-                observe(request[:300], response[:300], domain=worker_name)
-                maybe_analyze()
             except Exception:
                 pass
             return response
@@ -828,4 +821,4 @@ try:
 except ImportError:
     pass
 
-ALL_TOOLS = [logged_tool(_demo_wrap(t)) for t in _ALL_TOOLS_RAW] if _DEMO_MODE else [logged_tool(t) for t in _ALL_TOOLS_RAW]
+ALL_TOOLS = [logged_tool(t) for t in _ALL_TOOLS_RAW]

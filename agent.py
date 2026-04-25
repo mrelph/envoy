@@ -166,11 +166,14 @@ Suggest 2-3 concrete next steps. Examples:
     now = datetime.now(timezone(utc_offset)).strftime('%A, %B %d %Y at %I:%M %p').replace(' 0', ' ')
     prompt += f"\n## Current Time (at session start)\n{now} {tz_name}\n⚠️ This timestamp is from session start and may be stale. Use the `current_time` tool for the actual current time when precision matters.\n"
 
-    # Inject persistent memory
+    # Inject persistent memory (capped to avoid bloating system prompt)
     try:
         from agents.memory2 import recall
         mem = recall()
         if mem:
+            # Cap at ~1K tokens (~4K chars) — detailed recall available via recall_memory tool
+            if len(mem) > 4000:
+                mem = mem[:4000] + "\n\n_(Memory truncated — use `recall_memory` tool for full details)_"
             prompt += f"\n{mem}\n"
     except Exception:
         pass
@@ -190,11 +193,6 @@ When a task matches a skill's description, call the activate_skill tool with the
 """
     except Exception:
         pass
-
-    # Mask system prompt in demo mode
-    if os.environ.get("ENVOY_DEMO", "").strip().lower() in ("1", "true", "yes"):
-        from tools import _mask_output
-        prompt = _mask_output(prompt)
 
     return prompt
 

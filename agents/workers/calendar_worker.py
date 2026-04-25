@@ -5,7 +5,7 @@ from agents.base import run
 from agents.workers import _model
 
 
-def create():
+def create(session_mgr=None):
     from agents import calendar as cal_mod
 
     @tool
@@ -248,6 +248,20 @@ def create():
             args["recurrence"] = rec
         return args
 
+    @tool
+    def shared_context(operation: str = "read", key: str = "", value: str = "") -> str:
+        """Read or post shared context visible to all workers.
+        Args:
+            operation: 'read' to get context, 'post' to share
+            key: Context key
+            value: Context value (for post)
+        """
+        from agents.workers import read_context, post_context
+        if operation == "post" and key:
+            post_context(key, value, source="calendar")
+            return f"Posted to shared context: {key}"
+        return read_context(key)
+
     return Agent(
         model=_model("light"),
         system_prompt=(
@@ -256,9 +270,11 @@ def create():
             "(categories, sensitivity, show-as status, importance). "
             "Use block_time for personal blocks and OOO. "
             "Use create_event for meetings with attendees. "
+            "Use shared_context to post conflicts or important scheduling info for other workers. "
             "Return structured data."
         ),
         tools=[view_calendar, create_event, update_event, delete_event,
-               search_events, find_time, find_room, shared_calendars, block_time],
+               search_events, find_time, find_room, shared_calendars, block_time, shared_context],
         callback_handler=None,
+        **({"session_manager": session_mgr} if session_mgr else {}),
     )

@@ -9,6 +9,7 @@ These give the Strands agent the ability to:
 import asyncio
 import json
 import os
+import re
 import threading
 from datetime import datetime
 from strands import tool
@@ -77,17 +78,34 @@ def gather(sources: str = "email,slack,calendar,todos", days: int = 1, alias: st
     Each item gets a ref like [E1], [S1], [C1] that the user can reference in follow-ups.
 
     Args:
-        sources: Comma-separated list of: email, slack, calendar, todos, tickets, team, bosses
+        sources: Comma-separated list of: email, slack, calendar, todos, tickets, team, bosses, vault
         days: Number of days to look back
         alias: User alias (defaults to $USER)
     """
+    return gather_data(sources, days, alias)
+
+
+def gather_data(sources: str = "email,slack,calendar,todos", days: int = 1, alias: str = "") -> str:
+    """Core gather logic — callable by both the @tool and workflows directly."""
     alias = alias or os.getenv("USER", "")
     source_list = [s.strip().lower() for s in sources.split(",")]
 
-    # Only wipe stale context; preserve refs from recent prior gather in same turn
+    # Only wipe stale context; preserve refs from recent gathers in same session
     with _context_lock:
         if _context["ts"] and (_time.monotonic() - _context["ts"]) > _CONTEXT_TTL:
             clear_context()
+        elif _context["items"]:
+            # Subsequent gather in same session — clear only refs for sources
+            # we're about to re-fetch, so we don't get stale duplicates
+            prefix_map = {"email": "E", "slack": "S", "calendar": "C",
+                          "todos": "T", "tickets": "K", "team": "P", "bosses": "P",
+                          "vault": "V"}
+            for src in source_list:
+                pfx = prefix_map.get(src)
+                if pfx:
+                    stale = [k for k in _context["items"] if k.startswith(pfx)]
+                    for k in stale:
+                        del _context["items"][k]
         _context["ts"] = _time.monotonic()
 
     results = run(_gather_async(source_list, days, alias))
@@ -96,7 +114,12 @@ def gather(sources: str = "email,slack,calendar,todos", days: int = 1, alias: st
     sections = []
     for key, value in results.items():
         if value and not str(value).startswith("Error") and not str(value).startswith("⚠️"):
-            sections.append(f"## {key.upper()}\n{value}")
+            header = key.upper()
+            if key == "slack":
+                header = "SLACK (format: [ref] [channel/DM (sender)] (time) sender: message)"
+            elif key == "vault":
+                header = "VAULT (personal knowledge base — wiki pages and recent log entries)"
+            sections.append(f"## {header}\n{value}")
 
     # Cross-reference: find entities that appear in multiple sources
     xref = _cross_reference(results)
@@ -147,6 +170,24 @@ def _cross_reference(results: dict) -> str:
     return "These people/topics appear across multiple sources — likely connected threads:\n" + "\n".join(lines)
 
 
+async def _fetch_vault() -> str:
+    """Read wiki/index.md and wiki/log.md from the configured Knowledge Folder."""
+    from agents.export import _configured_folders
+    folder = _configured_folders().get("knowledge", "")
+    if not folder:
+        return ""
+    from agents import sharepoint_agent as sp
+    parts = []
+    for page in ("wiki/index.md", "wiki/log.md"):
+        try:
+            text = await sp.read_file(f"/personal/{os.getenv('USER', '')}_amazon_com/Documents/{folder}/{page}", inline=True)
+            if text and not text.startswith("Error") and not text.startswith("Could not"):
+                parts.append(f"### {page}\n{text[:3000]}")
+        except Exception:
+            pass
+    return "\n\n".join(parts) if parts else ""
+
+
 async def _gather_async(sources: list, days: int, alias: str) -> dict:
     """Run data fetches in parallel."""
     from agents import email, slack_agent, calendar, todo, tickets, people
@@ -167,6 +208,8 @@ async def _gather_async(sources: list, days: int, alias: str) -> dict:
         tasks["people"] = people.get_direct_reports(alias)
     if "bosses" in sources:
         tasks["people"] = people.get_management_chain(alias)
+    if "vault" in sources:
+        tasks["vault"] = _fetch_vault()
 
     results = {}
     gathered = await asyncio.gather(
@@ -216,10 +259,21 @@ async def _gather_async(sources: list, days: int, alias: str) -> dict:
                 lines = []
                 for line in text.splitlines():
                     line = line.strip()
-                    if line and ("[" in line or line.startswith("🔴") or line.startswith("🟡")):
-                        ref = _store_item("S", line[:200], type="slack", raw=line)
+                    if not line:
+                        continue
+                    if line.startswith("    ↳"):
+                        # Thread reply — attach to previous message, don't index separately
+                        lines.append(line)
+                        continue
+                    if "[" in line or line.startswith("🔴") or line.startswith("🟡"):
+                        # Extract sender name from format: [prefix] (ts) Name: text
+                        sender = ""
+                        m = re.search(r'\)\s+(.+?)(?:\s+\[you\]|\s+⚡@you)?:\s', line)
+                        if m:
+                            sender = m.group(1)
+                        ref = _store_item("S", line[:300], type="slack", raw=line, sender=sender)
                         lines.append(f"[{ref}] {line}")
-                    elif line:
+                    else:
                         lines.append(line)
                 results[name] = "\n".join(lines)
             elif name == "todos" and text:
@@ -238,6 +292,16 @@ async def _gather_async(sources: list, days: int, alias: str) -> dict:
                     line = line.strip()
                     if line and line.startswith("- "):
                         ref = _store_item("K", line[:200], type="ticket", raw=line)
+                        lines.append(f"[{ref}] {line}")
+                    elif line:
+                        lines.append(line)
+                results[name] = "\n".join(lines)
+            elif name == "vault" and text:
+                lines = []
+                for line in text.splitlines():
+                    line = line.strip()
+                    if line and (line.startswith("- ") or line.startswith("[[") or "]]" in line):
+                        ref = _store_item("V", line[:300], type="vault", raw=line)
                         lines.append(f"[{ref}] {line}")
                     elif line:
                         lines.append(line)

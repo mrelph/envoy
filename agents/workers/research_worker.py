@@ -5,7 +5,7 @@ from agents.base import run
 from agents.workers import _model
 
 
-def create():
+def create(session_mgr=None):
     from agents import internal
 
     @tool
@@ -143,10 +143,25 @@ def create():
             for r in results
         )
 
+    @tool
+    def shared_context(operation: str = "read", key: str = "", value: str = "") -> str:
+        """Read or post shared context visible to all workers.
+        Args:
+            operation: 'read' to get context, 'post' to share
+            key: Context key
+            value: Context value (for post)
+        """
+        from agents.workers import read_context, post_context
+        if operation == "post" and key:
+            post_context(key, value, source="research")
+            return f"Posted to shared context: {key}"
+        return read_context(key)
+
     return Agent(
         model=_model("medium"),
-        system_prompt="You are a research specialist. You look up people, Kingpin goals/projects/milestones (list, view, update, comment), wiki pages, Taskei tasks, Broadcast videos, resolve links, and search the web. Return data concisely.",
+        system_prompt="You are a research specialist. You look up people, Kingpin goals/projects/milestones (list, view, update, comment), wiki pages, Taskei tasks, Broadcast videos, resolve links, and search the web. Return data concisely. Use shared_context to post important findings for other workers.",
         tools=[lookup_person, kingpin, kingpin_list, kingpin_update, kingpin_comment, kingpin_teams,
-               wiki, taskei, broadcast, tiny, web_search],
+               wiki, taskei, broadcast, tiny, web_search, shared_context],
         callback_handler=None,
+        **({"session_manager": session_mgr} if session_mgr else {}),
     )

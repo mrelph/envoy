@@ -116,3 +116,43 @@ Overall assessment: Solid, coherent project. Clean layered architecture (supervi
 6. Fix `_get_hint` ordering so `prep-*` wins over `meeting`/`calendar`.
 7. Guard `_context` with a `threading.Lock`, or scope it by session.
 8. Centralize `~/.envoy` paths into a single `paths.py`.
+
+---
+
+## Session Log — 2026-04-23
+
+Progress against the April 20 review, plus new work.
+
+### Completed
+
+**Demo mode removal** — fully deleted (user decision, no longer needed).
+- `tools.py`: removed `_DEMO_MODE`, `_FAKE_FIRST/LAST/DOMAINS`, `_demo_hash`, `_fake_name`, `_fake_alias`, `_fake_email`, `_mask_output`, `_demo_wrap`. Dropped unused `re`, `hashlib`, `functools` imports. Simplified `ALL_TOOLS` assignment to a single comprehension.
+- `agent.py`: removed the demo-mode prompt masking block in `_build_system_prompt`.
+- `envoy` wrapper: removed `--demo` flag / `ENVOY_DEMO=1` export.
+- `README.md`: dropped the demo-mode bullet from the Security section.
+- This resolves items **#10** (`_demo_wrap` patches `_tool_func` in place) and **#15** (`_mask_output` leaks via supervisor synthesis) from the original review — no longer applicable.
+
+**Watcher / background agent** — new feature, closes ROADMAP item #4 (Proactive notifications).
+- `agents/watcher.py` (new, ~130 lines) — long-running daemon with clean SIGINT/SIGTERM handling.
+- `cli.py` — added `envoy watch [--interval N] [--once]` subcommand.
+- Uses the Slack MCP directly (`list_channels` with `unreadOnly: true`) — no new transport, no socket-mode client. Reuses the persistent MCP session layer.
+- Content-hash dedup against `~/.envoy/watcher_state.json` — skips tick silently if nothing changed.
+- Runs heartbeat routines on an internal 15-minute cadence to avoid AI spam even with short poll intervals.
+- Groups alerts into a single Slack DM per tick.
+- README updated: `envoy watch` listed under Heartbeat & Routines; `agents/watcher.py` added to Project Structure.
+
+### Still open from original review
+
+High priority that remains:
+- **#1** REPL out of sync with TUI (`/mwinit` still missing in REPL; `/models` now works via dispatch but agent isn't reloaded after change).
+- **#5** `invoke_ai` has no `ExpiredTokenException` handling — long-running sessions (including the new watcher) will fail silently past ~1h token lifetime. *Newly relevant given the watcher.*
+- **#11** Double observer/memory writes in `_delegate` + TUI command path.
+- **#12** Agent-tier default is Opus; sonnet is the right default for a supervisor.
+
+Medium / low priority: items #6 (cron exec path — partially addressed via `shutil.which`), #9, #17, #18, #19, #21–28 still open.
+
+### Notes for next session
+
+- The watcher makes **#5 (ExpiredTokenException)** a blocker for real daemon deployment. That should be the next fix.
+- Watcher has no systemd/launchd unit file yet — leave to user for their deployment host.
+- Consider adding an `_check_email()` to the watcher tick (new unread from VIPs via Outlook MCP) — ~20 lines using the same pattern as `_check_slack`.

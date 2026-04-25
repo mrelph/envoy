@@ -71,6 +71,23 @@ _MCP_PARAM_DEFS = {
     "Kingpin":    {"command": "kingpin-mcp", "args": []},
 }
 
+# Optional user overrides: ~/.envoy/mcp.json
+# Format matches standard mcpServers convention:
+#   { "MyServer": { "command": "my-mcp", "args": ["--flag"], "env": {"KEY": "val"} } }
+# Entries override built-ins by name; new names are added.
+_user_mcp_path = os.path.join(os.path.expanduser("~"), ".envoy", "mcp.json")
+if os.path.exists(_user_mcp_path):
+    try:
+        import json as _json
+        with open(_user_mcp_path) as _f:
+            for _name, _def in _json.load(_f).items():
+                if "env" in _def:
+                    _def["env"] = {**os.environ, **_def["env"]}
+                _MCP_PARAM_DEFS[_name] = _def
+    except Exception as _e:
+        import sys
+        print(f"⚠ Failed to load {_user_mcp_path}: {_e}", file=sys.stderr)
+
 _mcp_params_cache = {}
 
 def _get_params(name):
@@ -171,6 +188,27 @@ def run(coro):
 # keep sessions alive and reuse them. Closed on process exit.
 
 _persistent = {}  # server_name → (stdio_cm, session_cm, session)
+
+
+def _cleanup_persistent():
+    """Close all persistent MCP sessions on process exit."""
+    loop = _loop
+    if not loop or not loop.is_running():
+        return
+    entries = [_persistent.pop(name) for name in list(_persistent) if name in _persistent]
+    if not entries:
+        return
+    async def _close_all():
+        await asyncio.gather(*[_close_persistent(e) for e in entries], return_exceptions=True)
+    try:
+        future = asyncio.run_coroutine_threadsafe(_close_all(), loop)
+        future.result(timeout=8)
+    except Exception:
+        pass
+
+
+import atexit
+atexit.register(_cleanup_persistent)
 
 
 async def _open_persistent(server_name):

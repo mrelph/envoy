@@ -45,6 +45,44 @@ _ALIAS_RE = re.compile(r'\b([a-z]{2,12})@amazon\.com\b|@([a-z]{2,12})\b')
 _PROJECT_RE = re.compile(r'\b(KP-\d+|SIM-\d+|[A-Z][a-z]+-\d+)\b')
 _TOPIC_RE = re.compile(r'\b(Q[1-4]\s*\d{4}|Q[1-4]\b|[A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)+)\b')
 
+# Words that look like entities (capitalized) but aren't people/projects
+_ENTITY_STOPWORDS = frozenset({
+    # Determiners, prepositions, conjunctions
+    'the', 'this', 'that', 'these', 'those', 'from', 'with', 'about', 'into',
+    'after', 'before', 'between', 'through', 'during', 'without', 'within',
+    'also', 'just', 'only', 'some', 'each', 'every', 'both', 'either',
+    # Common verbs (often start sentences in notes)
+    'reply', 'send', 'sent', 'check', 'update', 'updated', 'follow', 'review',
+    'reviewed', 'added', 'removed', 'created', 'deleted', 'moved', 'fixed',
+    'done', 'completed', 'cancelled', 'scheduled', 'shared', 'forwarded',
+    'replied', 'asked', 'told', 'said', 'noted', 'mentioned', 'discussed',
+    'approved', 'rejected', 'assigned', 'resolved', 'closed', 'opened',
+    'flagged', 'marked', 'scanned', 'fetched', 'searched', 'found',
+    'need', 'needs', 'should', 'could', 'would', 'will', 'can', 'may',
+    'keep', 'skip', 'ignore', 'decline', 'accept', 'confirm', 'cancel',
+    # Common nouns in agent context
+    'email', 'emails', 'slack', 'meeting', 'meetings', 'calendar', 'inbox',
+    'action', 'actions', 'todo', 'todos', 'ticket', 'tickets', 'digest',
+    'report', 'briefing', 'summary', 'response', 'message', 'messages',
+    'thread', 'channel', 'channels', 'draft', 'drafts', 'attachment',
+    'subject', 'body', 'sender', 'recipient', 'reply', 'forward',
+    'priority', 'urgent', 'important', 'critical', 'blocked', 'pending',
+    'status', 'progress', 'deadline', 'milestone', 'goal', 'project',
+    'team', 'manager', 'direct', 'reports', 'customer', 'customers',
+    'error', 'warning', 'success', 'failed', 'unavailable', 'available',
+    'worker', 'agent', 'envoy', 'heartbeat', 'routine', 'pattern',
+    'observation', 'context', 'memory', 'process', 'config', 'settings',
+    # Days and months
+    'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday',
+    'january', 'february', 'march', 'april', 'may', 'june',
+    'july', 'august', 'september', 'october', 'november', 'december',
+    'today', 'tomorrow', 'yesterday', 'week', 'month', 'year',
+    # Tech/Amazon terms
+    'amazon', 'aws', 'sim', 'phonetool', 'kingpin', 'wiki', 'taskei',
+    'sharepoint', 'onedrive', 'outlook', 'teams', 'zoom', 'chime',
+    'jira', 'quip', 'broadcast', 'cron', 'api', 'mcp', 'bedrock',
+})
+
 
 def _extract_entities(text: str) -> List[str]:
     """Extract people, project IDs, and topics from text. Fast, no AI."""
@@ -62,13 +100,8 @@ def _extract_entities(text: str) -> List[str]:
     for i, w in enumerate(words):
         clean = w.strip('.,!?:;()[]"\'')
         if clean and clean[0].isupper() and len(clean) > 2 and i > 0:
-            # Skip common non-name words
-            if clean.lower() not in ('the', 'this', 'that', 'from', 'with', 'about',
-                                      'email', 'slack', 'meeting', 'monday', 'tuesday',
-                                      'wednesday', 'thursday', 'friday', 'saturday', 'sunday',
-                                      'january', 'february', 'march', 'april', 'may', 'june',
-                                      'july', 'august', 'september', 'october', 'november', 'december',
-                                      'action', 'todo', 'inbox', 'calendar', 'digest', 'report'):
+            # Skip common non-name words — verbs, nouns, adjectives, time, tech terms
+            if clean.lower() not in _ENTITY_STOPWORDS:
                 entities.add(clean.lower())
     return sorted(entities)
 
@@ -216,6 +249,10 @@ def _recall_by_query(query: str, limit: int) -> str:
         parts.extend(f"- {e['ts'][:16]} [{e['type']}] {e['text']}" for e in matches)
 
     if not parts:
+        # Fallback: search the vault (Knowledge Folder) if configured
+        vault_result = _search_vault(query)
+        if vault_result:
+            return f"## Memory: {query}\n\n*(from vault)*\n{vault_result}"
         return f"No memory entries found for '{query}'."
 
     return f"## Memory: {query}\n\n" + "\n".join(parts)
@@ -328,6 +365,7 @@ def compress(force: bool = False) -> str:
         lines = [f"  - {e['ts'][:10]} [{e['type']}] {e['text']}" for e in general[-10:]]
         sections.append(f"**_general** (prev: {prev or 'none'})\n" + "\n".join(lines))
 
+    compression_ok = False
     try:
         raw = invoke_ai(
             "Compress these memory entries into per-entity summaries. "
@@ -343,8 +381,12 @@ def compress(force: bool = False) -> str:
         new_summaries = json.loads(raw)
         # Merge with existing (new overwrites old)
         existing.update(new_summaries)
+        compression_ok = True
     except Exception:
         pass  # keep existing summaries on failure
+
+    if not compression_ok:
+        return f"Compression failed — kept all {len(old_entries) + len(recent)} entries intact."
 
     # Cap total entities in summary
     if len(existing) > 100:
@@ -487,6 +529,23 @@ def migrate_old_memory():
         os.rename(old_monthly, old_monthly + ".migrated")
 
     return f"Migrated {migrated} entries from old format." if migrated else "Nothing to migrate."
+
+
+def _search_vault(query: str) -> str:
+    """Search the Knowledge Folder vault for a query. Returns matching content or ''."""
+    try:
+        from agents.export import _configured_folders
+        folder = _configured_folders().get("knowledge", "")
+        if not folder:
+            return ""
+        from agents.base import run
+        from agents import sharepoint_agent as sp
+        result = run(sp.search(f"{query} path:\"{folder}/wiki\"", row_limit=5))
+        if result and not result.startswith("No results") and not result.startswith("Error"):
+            return result[:3000]
+    except Exception:
+        pass
+    return ""
 
 
 # Auto-migrate old format on first import (idempotent — renames files after migration)

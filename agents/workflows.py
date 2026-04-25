@@ -6,68 +6,74 @@ follow_up_tracker, one_on_one_prep, commitment_tracker, meeting_prep,
 yesterbox, send_to_ea, recommend_responses, learn_response
 """
 
+import asyncio
 import json
 import os
 from datetime import datetime, timedelta
 from typing import List, Dict
 
-from envoy_logger import get_logger
-from agents.base import invoke_ai, MCPConnectionError, outlook, parse_email_search_result, run
-from agents import people, email, slack_agent, calendar, todo, tickets, memory2 as memory
+from agents.base import invoke_ai, run
 
 _USER = os.getenv('USER', '')
 
 
+def _worker_gather(**tasks) -> dict:
+    """Delegate data-gathering tasks to workers in parallel.
+
+    Each kwarg is name → (worker_name, request_str).
+    Returns {name: result_str} with all results.
+    """
+    from agents.workers import get_worker
+
+    async def _run_one(name, worker_name, request):
+        try:
+            result = get_worker(worker_name)(request)
+            return name, str(result.message) if hasattr(result, 'message') else str(result)
+        except Exception as e:
+            return name, f"⚠️ {worker_name} unavailable: {e}"
+
+    async def _run_all():
+        coros = [_run_one(n, wn, req) for n, (wn, req) in tasks.items()]
+        results = await asyncio.gather(*coros, return_exceptions=True)
+        out = {}
+        for r in results:
+            if isinstance(r, tuple):
+                out[r[0]] = r[1]
+            elif isinstance(r, Exception):
+                out[str(r)] = f"⚠️ Error: {r}"
+        return out
+
+    return run(_run_all())
+
+
+async def _read_bodies_parallel(session, emails, limit=15):
+    """Read email bodies in parallel via asyncio.gather instead of sequential loop."""
+    async def _read_one(e):
+        try:
+            result = await session.call_tool("email_read", arguments={
+                "conversationId": e['conversationId'], "format": "text"
+            })
+            body = str(result.content[0].text) if result.content else ""
+            if body:
+                e['full_body'] = body[:1500]
+        except Exception:
+            pass
+    targets = [e for e in emails[:limit] if e.get('conversationId')]
+    if targets:
+        await asyncio.gather(*[_read_one(e) for e in targets])
+
+
 def pto_catchup(alias: str = "", days: int = 5) -> str:
     alias = alias or _USER
-    return run(_pto_catchup_async(alias, days))
-
-
-async def _pto_catchup_async(alias: str, days: int) -> str:
-    sections = []
-    try:
-        raw = generate_digest(alias, days)
-        sections.append(f"TEAM EMAIL ACTIVITY:\n{raw[:3000]}")
-    except Exception:
-        pass
-    try:
-        raw = generate_digest(alias, days, vip_mode=True)
-        sections.append(f"LEADERSHIP ACTIVITY:\n{raw[:3000]}")
-    except Exception:
-        pass
-    try:
-        emails = await email.fetch_inbox(days=days, limit=50)
-        if emails:
-            sections.append("YOUR INBOX:\n" + "\n".join(
-                f"- {e['from']}: {e['subject']} ({e['date']})" for e in emails[:30]))
-    except Exception:
-        pass
-    try:
-        slack_data = await slack_agent.scan_raw(days=min(days, 7), alias=alias)
-        if slack_data and not slack_data.startswith("No "):
-            sections.append(f"SLACK ACTIVITY:\n{slack_data[:3000]}")
-    except Exception:
-        pass
-    try:
-        customers = await email.scan_customer_emails(alias, days)
-        if customers:
-            sections.append(f"CUSTOMER EMAILS:\n{customers[:2000]}")
-    except Exception:
-        pass
-    try:
-        todos_raw = await todo.fetch_todos_full()
-        if todos_raw:
-            sections.append(f"OPEN TO-DO ITEMS:\n{todos_raw[:1500]}")
-    except Exception:
-        pass
-
-    combined = "\n\n---\n\n".join(s for s in sections if s)
-    if not combined:
+    from supervisor import gather_data
+    gathered = gather_data(sources="email,slack,calendar,todos,tickets", days=days, alias=alias)
+    if not gathered or gathered == "No data gathered from any source.":
         return "Couldn't gather any data for your catch-up. Check MCP connections."
 
     prompt = f"""You are briefing {alias} who has been out of office for {days} days.
 
 In Slack data: "[you]" = sent by {alias}, "⚡@you" = {alias} was @mentioned. Prioritize unanswered DMs and @mentions.
+IMPORTANT: Preserve reference IDs like [E1], [S3], [C2] in your output so the user can drill into specific items.
 
 # 🏖️ PTO Catch-Up — Last {days} Days
 ## 🔴 Needs Your Attention NOW
@@ -75,31 +81,28 @@ In Slack data: "[you]" = sent by {alias}, "⚡@you" = {alias} was @mentioned. Pr
 ## 🌟 Leadership Focus
 ## 📬 Key Emails to Read
 ## 💬 Slack Highlights
-## 🤝 Customer Activity
 ## ✅ To-Do Status
 ## 📋 Recommended First Day Back Plan
 
 Data:
-{combined[:15000]}"""
+{gathered[:15000]}"""
     try:
-        return invoke_ai(prompt, max_tokens=10000, tier="heavy")
+        return invoke_ai(prompt, max_tokens=10000, tier="medium")
     except Exception as e:
-        return f"# PTO Catch-Up\n\n**Error:** {e}\n\n{combined}"
+        return f"# PTO Catch-Up\n\n**Error:** {e}\n\n{gathered[:3000]}"
 
 
 def slack_catchup(alias: str = "", days: int = 3) -> str:
     alias = alias or _USER
-    return run(_slack_catchup_async(alias, days))
-
-
-async def _slack_catchup_async(alias: str, days: int) -> str:
-    raw = await slack_agent.scan_raw(days=days, alias=alias)
-    if raw.startswith("No ") or raw.startswith("Error"):
-        return raw
+    from supervisor import gather_data
+    gathered = gather_data(sources="slack", days=days, alias=alias)
+    if not gathered or gathered == "No data gathered from any source.":
+        return "No Slack data available."
 
     prompt = f"""Focused Slack catch-up for {alias} — last {days} days.
 
 Key markers: "[you]" = sent by {alias}, "⚡@you" = {alias} was @mentioned. Skip conversations {alias} already replied to.
+IMPORTANT: Preserve reference IDs like [S1], [S2] in your output so the user can drill into specific items.
 
 # Slack Catch-Up
 ## 🔴 Unread DMs Needing Reply
@@ -108,9 +111,9 @@ Key markers: "[you]" = sent by {alias}, "⚡@you" = {alias} was @mentioned. Skip
 ## 📋 Summary & Recommended Actions
 
 Messages:
-{raw[:10000]}"""
+{gathered[:10000]}"""
     try:
-        return invoke_ai(prompt, max_tokens=8000, tier="heavy")
+        return invoke_ai(prompt, max_tokens=8000, tier="medium")
     except Exception as e:
         return f"# Slack Catch-Up\n\n**Error:** {e}\n"
 
@@ -121,9 +124,12 @@ def calendar_audit(alias: str = "", days: int = 5) -> str:
 
 
 async def _calendar_audit_async(alias: str, days: int) -> str:
-    raw, _ = await calendar.get_events_raw(view="week", days_ahead=days)
-    if raw.startswith("No calendar"):
-        return raw
+    data = _worker_gather(
+        calendar=("calendar", f"Show my calendar for the next {days} days"),
+    )
+    raw = data.get("calendar", "")
+    if not raw or raw.startswith("⚠️"):
+        return raw or "No calendar data available."
 
     prompt = f"""Analyze {alias}'s calendar for the next {days} days.
 # Calendar Audit
@@ -136,7 +142,7 @@ async def _calendar_audit_async(alias: str, days: int) -> str:
 Events:
 {raw[:10000]}"""
     try:
-        return invoke_ai(prompt, max_tokens=8000, tier="heavy")
+        return invoke_ai(prompt, max_tokens=8000, tier="light")
     except Exception as e:
         return f"# Calendar Audit\n\n**Error:** {e}\n"
 
@@ -149,26 +155,14 @@ def response_time_tracker(alias: str = "", days: int = 7) -> str:
 async def _response_time_async(alias: str, days: int) -> str:
     start_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
     end_date = datetime.now().strftime('%Y-%m-%d')
-    sections = []
-    async with outlook() as session:
-        result = await session.call_tool("email_search", arguments={
-            "query": f"from:{alias}@amazon.com", "startDate": start_date,
-            "endDate": end_date, "limit": 100
-        })
-        sent = parse_email_search_result(result)
-        if sent:
-            sections.append("SENT:\n" + "\n".join(
-                f"- To: {e['to']} | {e['subject']} | {e['date']}" for e in sent[:50]))
-        result = await session.call_tool("email_search", arguments={
-            "query": f"to:{alias}@amazon.com", "startDate": start_date,
-            "endDate": end_date, "limit": 100
-        })
-        received = parse_email_search_result(result)
-        if received:
-            sections.append("RECEIVED:\n" + "\n".join(
-                f"- From: {e['from']} | {e['subject']} | {e['date']}" for e in received[:50]))
 
-    combined = "\n\n".join(sections)
+    # Delegate data gathering to email worker
+    data = _worker_gather(
+        sent=("email", f"Search sent emails from:{alias}@amazon.com between {start_date} and {end_date}, limit 100. List each with To, Subject, Date."),
+        received=("email", f"Search emails to:{alias}@amazon.com between {start_date} and {end_date}, limit 100. List each with From, Subject, Date."),
+    )
+
+    combined = "\n\n".join(f"{k.upper()}:\n{v}" for k, v in data.items() if v and not v.startswith("⚠️"))
     if not combined:
         return "No email data found."
 
@@ -183,7 +177,7 @@ async def _response_time_async(alias: str, days: int) -> str:
 Data:
 {combined[:10000]}"""
     try:
-        return invoke_ai(prompt, max_tokens=8000, tier="heavy")
+        return invoke_ai(prompt, max_tokens=8000, tier="light")
     except Exception as e:
         return f"Error: {e}"
 
@@ -196,35 +190,16 @@ def follow_up_tracker(alias: str = "", days: int = 7) -> str:
 async def _follow_up_tracker_async(alias: str, days: int) -> str:
     start_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
     end_date = datetime.now().strftime('%Y-%m-%d')
-    async with outlook() as session:
-        sent_result = await session.call_tool("email_search", arguments={
-            "query": f"from:{alias}@amazon.com", "startDate": start_date,
-            "endDate": end_date, "limit": 50
-        })
-        sent = parse_email_search_result(sent_result)
-        # Read full bodies for sent emails to understand what was asked
-        for e in sent[:15]:
-            if e.get('conversationId'):
-                try:
-                    read_result = await session.call_tool("email_read", arguments={
-                        "conversationId": e['conversationId'], "format": "text"
-                    })
-                    body_text = str(read_result.content[0].text) if read_result.content else ""
-                    if body_text:
-                        e['full_body'] = body_text[:1000]
-                except Exception:
-                    pass
-        inbox_result = await session.call_tool("email_search", arguments={
-            "query": f"to:{alias}@amazon.com", "startDate": start_date,
-            "endDate": end_date, "limit": 100
-        })
-        inbox = parse_email_search_result(inbox_result)
 
-    if not sent:
+    data = _worker_gather(
+        sent=("email", f"Search sent emails from:{alias}@amazon.com between {start_date} and {end_date}, limit 50. For each, read the full body and include it. List with To, Subject, Date, Body."),
+        inbox=("email", f"Search emails to:{alias}@amazon.com between {start_date} and {end_date}, limit 100. List with From, Subject, Date."),
+    )
+
+    sent_text = data.get("sent", "")
+    inbox_text = data.get("inbox", "")
+    if not sent_text or sent_text.startswith("⚠️"):
         return "No sent emails found."
-
-    sent_text = "\n".join(f"- To: {e['to']} | {e['subject']} | {e['date']} | {e.get('full_body', e['snippet'])[:400]}" for e in sent[:30])
-    inbox_text = "\n".join(f"- From: {e['from']} | {e['subject']} | {e['date']}" for e in inbox[:50])
 
     prompt = f"""Scan {alias}'s sent emails for unanswered threads.
 Compare sent subjects/recipients against inbox replies.
@@ -241,7 +216,7 @@ SENT:
 INBOX (for cross-reference):
 {inbox_text}"""
     try:
-        return invoke_ai(prompt, max_tokens=8000, tier="heavy")
+        return invoke_ai(prompt, max_tokens=8000, tier="medium")
     except Exception as e:
         return f"Error: {e}"
 
@@ -252,52 +227,23 @@ def one_on_one_prep(person_alias: str, alias: str = "") -> str:
 
 
 async def _one_on_one_prep_async(person_alias: str, alias: str) -> str:
+    # Delegate data gathering to workers in parallel
+    data = _worker_gather(
+        profile=("research", f"Look up {person_alias} on Phonetool — role, team, manager, tenure"),
+        emails=("email", f"Search emails between {alias}@amazon.com and {person_alias}@amazon.com from the last 14 days. List each with From, To, Subject, Date."),
+        calendar=("calendar", f"Show my calendar for the next 5 days"),
+        todos=("productivity", f"List my to-do items"),
+    )
+
     sections = []
-    # Phonetool profile
-    try:
-        from agents.base import builder
-        async with builder() as session:
-            result = await session.call_tool("ReadInternalWebsites",
-                arguments={"inputs": [f"https://phonetool.amazon.com/users/{person_alias}"]})
-            profile = str(result.content[0].text) if result.content else ""
-            if profile:
-                sections.append(f"PROFILE:\n{profile[:2000]}")
-    except Exception:
-        pass
-    # Recent email threads
-    try:
-        start_date = (datetime.now() - timedelta(days=14)).strftime('%Y-%m-%d')
-        end_date = datetime.now().strftime('%Y-%m-%d')
-        async with outlook() as session:
-            result = await session.call_tool("email_search", arguments={
-                "query": f"from:{person_alias}@amazon.com to:{alias}@amazon.com",
-                "startDate": start_date, "endDate": end_date, "limit": 20
-            })
-            emails = parse_email_search_result(result)
-            result2 = await session.call_tool("email_search", arguments={
-                "query": f"from:{alias}@amazon.com to:{person_alias}@amazon.com",
-                "startDate": start_date, "endDate": end_date, "limit": 20
-            })
-            emails += parse_email_search_result(result2)
-        if emails:
-            sections.append("RECENT EMAILS:\n" + "\n".join(
-                f"- {e['from']} → {e['to']}: {e['subject']} ({e['date']})" for e in emails[:20]))
-    except Exception:
-        pass
-    # Shared todos
-    try:
-        todos_raw = await todo.fetch_todos_full()
-        if todos_raw and person_alias.lower() in todos_raw.lower():
-            sections.append(f"SHARED TO-DOS:\n{todos_raw[:1000]}")
-    except Exception:
-        pass
-    # Upcoming shared meetings
-    try:
-        raw_cal, _ = await calendar.get_events_raw(view="week", days_ahead=5)
-        if not raw_cal.startswith("No calendar") and person_alias.lower() in raw_cal.lower():
-            sections.append(f"SHARED MEETINGS:\n{raw_cal[:1000]}")
-    except Exception:
-        pass
+    for key, val in data.items():
+        if val and not val.startswith("⚠️"):
+            sections.append(f"{key.upper()}:\n{val[:2000]}")
+
+    # Filter calendar/todos to only include items mentioning the person
+    for key in ("calendar", "todos"):
+        if key in data and person_alias.lower() not in data[key].lower():
+            sections = [s for s in sections if not s.startswith(key.upper())]
 
     combined = "\n\n".join(s for s in sections if s)
     if not combined:
@@ -314,7 +260,7 @@ async def _one_on_one_prep_async(person_alias: str, alias: str) -> str:
 Data:
 {combined[:10000]}"""
     try:
-        return invoke_ai(prompt, max_tokens=8000, tier="heavy")
+        return invoke_ai(prompt, max_tokens=8000, tier="medium")
     except Exception as e:
         return f"Error: {e}"
 
@@ -325,39 +271,18 @@ def commitment_tracker(alias: str = "", days: int = 7) -> str:
 
 
 async def _commitment_tracker_async(alias: str, days: int) -> str:
-    sections = []
     start_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
     end_date = datetime.now().strftime('%Y-%m-%d')
-    try:
-        async with outlook() as session:
-            result = await session.call_tool("email_search", arguments={
-                "query": f"from:{alias}@amazon.com", "startDate": start_date,
-                "endDate": end_date, "limit": 50
-            })
-            sent = parse_email_search_result(result)
-            if sent:
-                # Read full bodies for commitment detection (up to 15)
-                for e in sent[:15]:
-                    if e.get('conversationId'):
-                        try:
-                            read_result = await session.call_tool("email_read", arguments={
-                                "conversationId": e['conversationId'], "format": "text"
-                            })
-                            body_text = str(read_result.content[0].text) if read_result.content else ""
-                            if body_text:
-                                e['full_body'] = body_text[:1000]
-                        except Exception:
-                            pass
-                sections.append("SENT EMAILS:\n" + "\n".join(
-                    f"- To: {e['to']} | {e['subject']} | {e['date']} | {e.get('full_body', e['snippet'])[:500]}" for e in sent[:30]))
-    except Exception:
-        pass
-    try:
-        slack_data = await slack_agent.scan_raw(days=min(days, 7), alias=alias)
-        if slack_data and not slack_data.startswith("No "):
-            sections.append(f"SLACK:\n{slack_data[:3000]}")
-    except Exception:
-        pass
+
+    data = _worker_gather(
+        sent=("email", f"Search sent emails from:{alias}@amazon.com between {start_date} and {end_date}, limit 50. For each, read the full body and include it. List with To, Subject, Date, Body."),
+        slack=("comms", f"Scan my Slack channels for the last {min(days, 7)} days. Show messages I sent, especially any commitments or promises."),
+    )
+
+    sections = []
+    for key, val in data.items():
+        if val and not val.startswith("⚠️"):
+            sections.append(f"{key.upper()}:\n{val[:3000]}")
 
     combined = "\n\n".join(s for s in sections if s)
     if not combined:
@@ -376,7 +301,7 @@ Look for: "I'll send", "by Friday", "action on me", "will follow up", deadlines,
 Data:
 {combined[:10000]}"""
     try:
-        return invoke_ai(prompt, max_tokens=8000, tier="heavy")
+        return invoke_ai(prompt, max_tokens=8000, tier="medium")
     except Exception as e:
         return f"Error: {e}"
 
@@ -387,13 +312,15 @@ def meeting_prep(meeting_subject: str = "", alias: str = "") -> str:
 
 
 async def _meeting_prep_async(meeting_subject: str, alias: str) -> str:
-    # Find the meeting
-    raw_cal, _ = await calendar.get_events_raw(view="week", days_ahead=5)
-    if raw_cal.startswith("No calendar"):
+    # Get calendar data via worker
+    cal_data = _worker_gather(
+        calendar=("calendar", f"Show my calendar for the next 5 days"),
+    )
+    raw_cal = cal_data.get("calendar", "")
+    if not raw_cal or raw_cal.startswith("⚠️"):
         return "No upcoming meetings found."
 
     if not meeting_subject:
-        # Use next meeting
         target = raw_cal.split('\n')[0] if raw_cal else ""
     else:
         matches = [l for l in raw_cal.split('\n') if meeting_subject.lower() in l.lower()]
@@ -402,43 +329,24 @@ async def _meeting_prep_async(meeting_subject: str, alias: str) -> str:
     if not target:
         return f"Meeting '{meeting_subject}' not found in upcoming calendar."
 
+    # Gather attendee profiles and related emails via workers in parallel
+    gather_tasks = {"meeting": ("calendar", f"Tell me about this meeting: {target}")}
+
+    # Extract potential attendee aliases from the meeting line
+    attendees = [w.replace('@amazon.com', '') for w in target.split() if '@' in w]
+    if attendees:
+        gather_tasks["attendees"] = ("research", f"Look up these people on Phonetool: {', '.join(attendees[:5])}")
+
+    keywords = [w for w in target.split() if len(w) > 3][:3]
+    if keywords:
+        gather_tasks["emails"] = ("email", f"Search emails for: {' '.join(keywords)}, limit 10")
+
+    data = _worker_gather(**gather_tasks)
+
     sections = [f"MEETING:\n{target}"]
-
-    # Look up attendees
-    try:
-        from agents.base import builder
-        attendees = []
-        for word in target.split():
-            if '@' in word or word.endswith('@amazon.com'):
-                attendees.append(word.replace('@amazon.com', ''))
-        for att in attendees[:5]:
-            try:
-                async with builder() as session:
-                    result = await session.call_tool("ReadInternalWebsites",
-                        arguments={"inputs": [f"https://phonetool.amazon.com/users/{att}"]})
-                    profile = str(result.content[0].text)[:500] if result.content else ""
-                    if profile:
-                        sections.append(f"ATTENDEE {att}:\n{profile}")
-            except Exception:
-                pass
-    except Exception:
-        pass
-
-    # Related emails
-    try:
-        keywords = [w for w in target.split() if len(w) > 3][:3]
-        if keywords:
-            query = " ".join(keywords)
-            async with outlook() as session:
-                result = await session.call_tool("email_search", arguments={
-                    "query": query, "limit": 10
-                })
-                emails = parse_email_search_result(result)
-                if emails:
-                    sections.append("RELATED EMAILS:\n" + "\n".join(
-                        f"- {e['from']}: {e['subject']}" for e in emails[:10]))
-    except Exception:
-        pass
+    for key, val in data.items():
+        if val and not val.startswith("⚠️") and key != "meeting":
+            sections.append(f"{key.upper()}:\n{val[:2000]}")
 
     combined = "\n\n".join(s for s in sections if s)
     prompt = f"""Generate a meeting prep brief for {alias}.
@@ -452,50 +360,25 @@ async def _meeting_prep_async(meeting_subject: str, alias: str) -> str:
 Data:
 {combined[:8000]}"""
     try:
-        return invoke_ai(prompt, max_tokens=8000, tier="heavy")
+        return invoke_ai(prompt, max_tokens=8000, tier="medium")
     except Exception as e:
         return f"Error: {e}"
 
 
 def yesterbox(alias: str = "", days: int = 1) -> str:
     alias = alias or _USER
-    return run(_yesterbox_async(alias, days))
-
-
-async def _yesterbox_async(alias: str, days: int) -> str:
-    """Yesterbox: process yesterday's emails with AI triage — reads full bodies."""
-    start_date = (datetime.now() - timedelta(days=days+1)).strftime('%Y-%m-%d')
-    end_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
-    async with outlook() as session:
-        result = await session.call_tool("email_search", arguments={
-            "query": f"to:{alias}@amazon.com", "folder": "inbox",
-            "startDate": start_date, "endDate": end_date, "limit": 100
-        })
-        emails = parse_email_search_result(result)
-
-        # Read full bodies for top emails (up to 15) for better triage
-        for e in emails[:15]:
-            if e.get('conversationId'):
-                try:
-                    read_result = await session.call_tool("email_read", arguments={
-                        "conversationId": e['conversationId'], "format": "text"
-                    })
-                    body_text = str(read_result.content[0].text) if read_result.content else ""
-                    if body_text:
-                        e['full_body'] = body_text[:1500]
-                except Exception:
-                    pass
-
-    if not emails:
+    from supervisor import gather_data
+    gathered = gather_data(sources="email,slack", days=days, alias=alias)
+    if not gathered or gathered == "No data gathered from any source.":
         return "No emails from yesterday to process."
 
-    email_list = "\n".join(
-        f"[{i}] From: {e['from']} | Subject: {e['subject']} | Date: {e['date']}\nBody: {e.get('full_body', e['snippet'])[:800]}"
-        for i, e in enumerate(emails))
+    start_date = (datetime.now() - timedelta(days=days+1)).strftime('%Y-%m-%d')
+    end_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
 
     prompt = f"""Yesterbox triage for {alias} — emails from {start_date} to {end_date}.
+IMPORTANT: Preserve reference IDs like [E1], [S3] in your output so the user can drill into specific items.
 
-# Yesterbox — {len(emails)} emails
+# Yesterbox
 
 ## 🔴 Reply Now (< 2 min each)
 [Quick replies needed — draft a suggested response for each]
@@ -510,12 +393,12 @@ async def _yesterbox_async(alias: str, days: int) -> str:
 [Read-only, FYI, already handled]
 
 ## 📊 Summary
-Total: {len(emails)} | Estimated processing time: [X minutes]
+Total emails | Estimated processing time: [X minutes]
 
-Emails:
-{email_list[:10000]}"""
+Data:
+{gathered[:10000]}"""
     try:
-        return invoke_ai(prompt, max_tokens=10000, tier="heavy")
+        return invoke_ai(prompt, max_tokens=10000, tier="medium")
     except Exception as e:
         return f"Error: {e}"
 
@@ -565,72 +448,20 @@ def recommend_responses(alias: str = "", days: int = 3) -> str:
 
 
 async def _recommend_responses_async(alias: str, days: int) -> str:
-    messages = []
-    try:
-        async with outlook() as session:
-            start_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
-            end_date = datetime.now().strftime('%Y-%m-%d')
-            result = await session.call_tool("email_search", arguments={
-                "query": f"to:{alias}@amazon.com", "folder": "inbox",
-                "startDate": start_date, "endDate": end_date, "limit": 30
-            })
-            for e in parse_email_search_result(result):
-                msg = {"medium": "email", "from": e.get("from", ""),
-                    "subject": e.get("subject", ""), "preview": e.get("snippet", ""),
-                    "date": e.get("date", ""), "conversation_id": e.get("conversationId", "")}
-                # Read full body for better response drafting (up to 10)
-                if len(messages) < 10 and e.get("conversationId"):
-                    try:
-                        read_result = await session.call_tool("email_read", arguments={
-                            "conversationId": e['conversationId'], "format": "text"
-                        })
-                        body_text = str(read_result.content[0].text) if read_result.content else ""
-                        if body_text:
-                            msg["preview"] = body_text[:1000]
-                    except Exception:
-                        pass
-                messages.append(msg)
-    except Exception as ex:
-        messages.append({"medium": "email", "error": str(ex)})
+    data = _worker_gather(
+        emails=("email", f"Search emails to:{alias}@amazon.com in inbox from the last {days} days, limit 30. For the first 10, read the full body. List with From, Subject, Date, Body."),
+        slack_dms=("comms", f"Show my unread Slack DMs and group DMs from the last {days} days. Include message text and sender."),
+    )
 
-    try:
-        from datetime import timezone
-        oldest = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-        from agents.base import slack as slack_ctx
-        async with slack_ctx() as session:
-            for ch_type in ["dm", "group_dm"]:
-                try:
-                    result = await session.call_tool("list_channels",
-                        arguments={"channelTypes": [ch_type], "unreadOnly": True, "limit": 15})
-                    ch_data = json.loads(result.content[0].text) if result.content else {}
-                    ch_ids = [c['id'] for c in ch_data.get('channels', [])]
-                    if not ch_ids:
-                        continue
-                    batch = [{"channelId": cid, "oldest": oldest, "limit": 10} for cid in ch_ids]
-                    hist = await session.call_tool("batch_get_conversation_history", arguments={"channels": batch})
-                    raw = json.loads(hist.content[0].text) if hist.content else []
-                    for item in raw:
-                        for msg in item.get('result', {}).get('messages', []):
-                            text = msg.get('text', '')
-                            if text:
-                                messages.append({
-                                    "medium": "slack_dm" if ch_type == "dm" else "slack_group_dm",
-                                    "from": msg.get('user', '?'), "preview": text[:500],
-                                    "channel_id": item.get('channelId', ''), "thread_ts": msg.get('ts', '')})
-                except Exception:
-                    pass
-    except Exception as ex:
-        messages.append({"medium": "slack", "error": str(ex)})
+    sections = []
+    for key, val in data.items():
+        if val and not val.startswith("⚠️"):
+            sections.append(f"{key.upper()}:\n{val[:3000]}")
 
-    if not messages or all("error" in m for m in messages):
+    if not sections:
         return f"No direct messages found in the last {days} days."
 
-    msg_text = ""
-    for i, m in enumerate(messages):
-        if "error" in m:
-            continue
-        msg_text += f"[{i}] ({m['medium']}) From: {m.get('from','')} | {m.get('subject','')}\n"
-        msg_text += f"    {m.get('preview','')[:300]}\n\n"
+    msg_text = "\n\n".join(sections)
 
     patterns = _load_response_patterns()
     patterns_section = f"\n## RESPONSE HISTORY\n{patterns[:3000]}\n" if patterns else ""
@@ -646,7 +477,7 @@ For each message needing a response:
 Messages:
 {msg_text[:6000]}"""
     try:
-        return invoke_ai(prompt, max_tokens=8000, tier="heavy")
+        return invoke_ai(prompt, max_tokens=8000, tier="medium")
     except Exception as e:
         return f"Error: {e}"
 
@@ -654,10 +485,6 @@ Messages:
 # --- Send to EA ---
 
 def send_to_ea(message: str, ea_alias: str = None, category: str = "task") -> str:
-    return run(_send_to_ea_async(message, ea_alias, category))
-
-
-async def _send_to_ea_async(message: str, ea_alias: str = None, category: str = "task") -> str:
     if not ea_alias:
         ea_alias = os.environ.get("ENVOY_EA_ALIAS", "")
     if not ea_alias:
@@ -670,4 +497,7 @@ async def _send_to_ea_async(message: str, ea_alias: str = None, category: str = 
         "info": f"[{get_name()}] FYI",
     }
     subject = subject_map.get(category, f"[{get_name()}] Request")
-    return await email.send_email([f"{ea_alias}@amazon.com"], subject, message)
+    data = _worker_gather(
+        send=("email", f"Send an email to {ea_alias}@amazon.com with subject '{subject}' and body: {message}"),
+    )
+    return data.get("send", "Failed to send.")

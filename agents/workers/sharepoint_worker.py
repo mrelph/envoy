@@ -6,7 +6,7 @@ from agents.base import run
 from agents.workers import _model
 
 
-def create():
+def create(session_mgr=None):
     from agents import sharepoint_agent as sp
 
     @tool
@@ -136,9 +136,24 @@ Document content:
 {text}"""
         return invoke_ai(prompt, max_tokens=8000, tier="heavy")
 
+    @tool
+    def shared_context(operation: str = "read", key: str = "", value: str = "") -> str:
+        """Read or post shared context visible to all workers.
+        Args:
+            operation: 'read' to get context, 'post' to share
+            key: Context key
+            value: Context value (for post)
+        """
+        from agents.workers import read_context, post_context
+        if operation == "post" and key:
+            post_context(key, value, source="sharepoint")
+            return f"Posted to shared context: {key}"
+        return read_context(key)
+
     return Agent(
         model=_model("medium"),
-        system_prompt="You are a SharePoint/OneDrive specialist. You search content, browse and read files, upload documents, and manage SharePoint lists. When site_url is provided, target that team site; otherwise default to the user's personal OneDrive. For document summarization or analysis, ALWAYS use sp_analyze instead of sp_read.",
-        tools=[sp_search, sp_files, sp_read, sp_write, sp_lists, sp_manage, sp_analyze],
+        system_prompt="You are a SharePoint/OneDrive specialist. You search content, browse and read files, upload documents, and manage SharePoint lists. When site_url is provided, target that team site; otherwise default to the user's personal OneDrive. For document summarization or analysis, ALWAYS use sp_analyze instead of sp_read. Use shared_context to post important findings for other workers.",
+        tools=[sp_search, sp_files, sp_read, sp_write, sp_lists, sp_manage, sp_analyze, shared_context],
         callback_handler=None,
+        **({"session_manager": session_mgr} if session_mgr else {}),
     )

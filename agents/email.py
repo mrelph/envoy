@@ -122,18 +122,21 @@ def classify_emails(emails: List[Dict], user_alias: str) -> List[Dict]:
     if not emails:
         return []
     try:
-        # Read full bodies for emails where preview is ambiguous (batch up to 20)
+        # Read full bodies for emails where preview is ambiguous (parallel, up to 15)
         from agents.base import run
         async def _enrich():
             async with outlook() as session:
-                for e in emails[:20]:
-                    if e.get('conversationId') and len(e.get('snippet', '')) < 100:
-                        try:
-                            body = await read_full_thread(e['conversationId'], session)
-                            if body:
-                                e['full_body'] = body[:1000]
-                        except Exception:
-                            pass
+                async def _read_one(e):
+                    try:
+                        body = await read_full_thread(e['conversationId'], session)
+                        if body:
+                            e['full_body'] = body[:1000]
+                    except Exception:
+                        pass
+                import asyncio
+                targets = [e for e in emails[:15] if e.get('conversationId') and len(e.get('snippet', '')) < 100]
+                if targets:
+                    await asyncio.gather(*[_read_one(e) for e in targets])
         try:
             run(_enrich())
         except Exception:
