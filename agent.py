@@ -269,6 +269,30 @@ def _create_reasoning_callback_handler():
     return reasoning_callback_handler
 
 
+def _supports_prompt_caching(model_id: str) -> bool:
+    """Bedrock prompt caching is only supported on Claude and Nova model families."""
+    return "anthropic.claude" in model_id or "amazon.nova" in model_id
+
+
+def _system_prompt_for_model(text: str, model_id: str):
+    """Wrap the system prompt in a cachePoint block when the model supports caching.
+
+    Returns either a plain string (no caching) or a list of SystemContentBlock items
+    with a trailing cachePoint marker, which tells Bedrock to cache everything before
+    it. Cached for ~5 min idle; saves the system-prompt token cost on follow-up turns.
+    """
+    if not _supports_prompt_caching(model_id):
+        return text
+    try:
+        from strands.types.content import SystemContentBlock
+    except ImportError:
+        return text
+    return [
+        SystemContentBlock(text=text),
+        SystemContentBlock(cachePoint={"type": "default"}),
+    ]
+
+
 def create_agent(session_id: str = "default"):
     """Create a Envoy Strands agent with personality, soul, and session persistence."""
     CONFIG_DIR.mkdir(exist_ok=True)
@@ -303,9 +327,32 @@ def create_agent(session_id: str = "default"):
 
     agent = Agent(
         model=model,
-        system_prompt=_build_system_prompt(),
+        system_prompt=_system_prompt_for_model(_build_system_prompt(), agent_model_id),
         tools=ALL_TOOLS,
         session_manager=session_manager,
         callback_handler=callback_handler,
     )
     return agent
+
+
+# --- Singleton accessor ---
+# Callers (TUI, REPL, dispatch) should fetch the agent via get_agent() rather
+# than holding a long-lived reference. After reload_agent() is invoked (e.g.
+# from /models when model assignments change, or from /settings after a soul
+# edit), the next get_agent() rebuilds with the fresh config.
+
+_AGENT_INSTANCE = None
+
+
+def get_agent(session_id: str = "default"):
+    """Return the cached agent, creating it lazily on first call."""
+    global _AGENT_INSTANCE
+    if _AGENT_INSTANCE is None:
+        _AGENT_INSTANCE = create_agent(session_id)
+    return _AGENT_INSTANCE
+
+
+def reload_agent() -> None:
+    """Drop the cached agent so the next get_agent() rebuilds it."""
+    global _AGENT_INSTANCE
+    _AGENT_INSTANCE = None

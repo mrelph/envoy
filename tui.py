@@ -245,8 +245,8 @@ class EnvoyApp(App):
 
     @work(thread=True, exclusive=True, group="init")
     def _init_agent(self) -> None:
-        from agent import create_agent
-        self._agent = create_agent()
+        from agent import get_agent
+        self._agent = get_agent()
         name = "Envoy"
         try:
             from agents.base import agent_name
@@ -336,9 +336,10 @@ class EnvoyApp(App):
     @work(thread=True, exclusive=True, group="cmd")
     def _run_command(self, raw: str, hint: str) -> None:
         worker = get_current_worker()
-        if self._agent is None:
-            from agent import create_agent
-            self._agent = create_agent()
+        # Always fetch via get_agent() — picks up a fresh instance after
+        # reload_agent() (e.g. triggered by /models tier changes).
+        from agent import get_agent
+        self._agent = get_agent()
 
         error = None
         result = None

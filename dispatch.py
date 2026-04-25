@@ -390,6 +390,10 @@ def _handle_models(arg: str) -> str:
         with open(MODELS_FILE, "w") as f:
             json.dump(current, f, indent=2)
         reload_models()
+        # Drop the cached supervisor agent so it picks up the new tier on next
+        # call. Without this, the running session keeps the previous BedrockModel.
+        from agent import reload_agent
+        reload_agent()
         return f"✓ {tier} → {model_id}"
 
     # /models → show assignments + numbered catalog

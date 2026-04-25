@@ -481,8 +481,55 @@ def format_token_usage() -> str:
     return "\n".join(lines)
 
 
+_CRED_EXPIRY_CODES = {
+    "ExpiredTokenException", "ExpiredToken",
+    "UnrecognizedClientException", "InvalidClientTokenId",
+}
+
+
+def _is_expired_credentials_error(e: Exception) -> bool:
+    """True for AWS auth/expiry errors that warrant a one-shot credential refresh."""
+    try:
+        from botocore.exceptions import ClientError
+    except ImportError:
+        return False
+    if not isinstance(e, ClientError):
+        return False
+    code = e.response.get("Error", {}).get("Code", "")
+    return code in _CRED_EXPIRY_CODES
+
+
 def invoke_ai(prompt: str, max_tokens: int = 10000, tier: str = "heavy") -> str:
-    """Call Bedrock with the given prompt. Handles thinking models."""
+    """Call Bedrock with the given prompt. Handles thinking models.
+
+    On AWS credential-expiry errors, reloads .env, drops the cached client, and
+    retries once. Keeps long-running sessions (heartbeat cron, watcher daemon)
+    working past the ~1h STS token TTL without a manual restart.
+    """
+    try:
+        return _invoke_ai_once(prompt, max_tokens, tier)
+    except Exception as e:
+        if not _is_expired_credentials_error(e):
+            raise
+        global _bedrock_client
+        _bedrock_client = None
+        try:
+            load_dotenv(os.path.expanduser("~/.envoy/.env"), override=True)
+            load_dotenv(override=True)
+        except Exception:
+            pass
+        try:
+            code = e.response.get("Error", {}).get("Code", "")
+            get_logger().log("WARNING", "ai_credentials_refresh",
+                             "Bedrock credentials expired — refreshing and retrying once",
+                             model_id=model_for(tier), error_code=code)
+        except Exception:
+            pass
+        return _invoke_ai_once(prompt, max_tokens, tier)
+
+
+def _invoke_ai_once(prompt: str, max_tokens: int, tier: str) -> str:
+    """Single Bedrock invocation. Extracted so invoke_ai can retry once on auth refresh."""
     bedrock = _get_bedrock_client()
     model_id = model_for(tier)
     logger = get_logger()

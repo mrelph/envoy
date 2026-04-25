@@ -2,7 +2,7 @@
 
 import os
 import sys
-from agent import create_agent
+from agent import get_agent, reload_agent
 from dispatch import COMMANDS, COMMAND_GROUPS, dispatch
 
 
@@ -21,7 +21,7 @@ def run_interactive():
         pass
 
     print("  Loading agent…", end="", flush=True)
-    agent = create_agent()
+    agent = get_agent()
     print(" ready.\n")
 
     while True:
@@ -60,7 +60,8 @@ def run_interactive():
         if stripped.lower() == "/settings":
             from init_cmd import run_settings
             run_settings()
-            agent = create_agent()
+            reload_agent()
+            agent = get_agent()
             continue
 
         if stripped.lower() == "/backup":
@@ -68,6 +69,17 @@ def run_interactive():
             run_backup()
             continue
 
+        if stripped.lower() == "/mwinit":
+            import subprocess
+            print("  Launching mwinit — check your browser…")
+            subprocess.run(["mwinit", "-o"])
+            from agents.base import _persistent
+            _persistent.clear()
+            print("  ✓ Midway refreshed")
+            continue
+
+        # Refresh in case /models (or another path) called reload_agent().
+        agent = get_agent()
         result, handled = dispatch(stripped, agent)
         if handled and result:
             print(f"\n{result}\n")
