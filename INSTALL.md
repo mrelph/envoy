@@ -7,7 +7,7 @@
 - **MCP servers** installed and in PATH:
   - `builder-mcp` — Phonetool access
   - `aws-outlook-mcp` — Outlook email, calendar, to-do
-  - `ai-community-slack-mcp` — Slack integration (optional)
+  - `slack-mcp` — Slack integration (optional)
   - `amazon-sharepoint-mcp` — SharePoint/OneDrive (optional)
 - **Midway auth** — `mwinit` (auto-refreshed on each run)
 

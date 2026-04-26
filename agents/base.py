@@ -65,7 +65,8 @@ _outlook_env = {**os.environ, "OUTLOOK_MCP_ENABLE_WRITES": "true"}
 _MCP_PARAM_DEFS = {
     "Outlook":    {"command": "aws-outlook-mcp", "args": [], "env": _outlook_env},
     "Phonetool":  {"command": "builder-mcp", "args": []},
-    "Slack":      {"command": "ai-community-slack-mcp", "args": []},
+    "Slack":      {"command": "slack-mcp", "args": []},
+    "Slack_fallback": {"command": "ai-community-slack-mcp", "args": []},
     "TeamSnap":   {"command": "node", "args": [os.path.join(_teamsnap_dir, "dist", "wrapper.js")], "env": _teamsnap_env},
     "SharePoint": {"command": "amazon-sharepoint-mcp", "args": [], "env": _node_quiet_env},
     "Kingpin":    {"command": "kingpin-mcp", "args": []},
@@ -122,13 +123,67 @@ class _TimeoutSession:
     Also tracks transport health — on connection errors, marks the session as dead
     so _mcp_session can reopen it on the next call.
     """
+
+    # Translation map: old ai-community-slack-mcp tool names → new slack-mcp equivalents.
+    # Entries are (new_tool_name, args_transform_fn | None, is_batch_expand).
+    # None transform means arguments pass through unchanged.
+    # is_batch_expand=True means the transform returns a list of (tool, args) to call sequentially.
+    _SLACK_TOOL_MAP = {
+        "batch_get_conversation_history": ("batch_get_messages", lambda a: {
+            "channels": [
+                {"channel": ch.get("channelId", ch.get("channel", "")),
+                 **({"since": ch["oldest"]} if "oldest" in ch else {}),
+                 **({"limit": ch["limit"]} if "limit" in ch else {})}
+                for ch in a.get("channels", [])
+            ]
+        }, False),
+        "batch_get_thread_replies": ("batch_get_threads", lambda a: {
+            "threads": [
+                {"channel": th.get("channelId", th.get("channel", "")),
+                 "threadTs": th.get("threadTs", "")}
+                for th in a.get("threads", [])
+            ]
+        }, False),
+        "batch_get_channel_info": ("get_channel", None, True),  # expand batch
+        "batch_get_user_info": ("lookup_user", None, True),  # expand batch
+        "batch_set_last_read": ("set_last_read", None, True),  # expand batch
+        "create_draft": ("post_draft", lambda a: {
+            "channel": a.get("channelId", a.get("channel", "")),
+            "text": a.get("text", ""),
+            **({"replyTo": a["threadTs"]} if "threadTs" in a else {}),
+        }, False),
+        "download_file_content": ("download_file", lambda a: {
+            "fileId": a.get("file", a.get("fileId", "")),
+        }, False),
+        "get_channel_sections": ("list_my_channels", lambda a: {
+            "compactOutput": False,
+        }, False),
+        "list_channels": ("list_channels", None, True),  # expand: filter list_my_channels
+        "lists_items_info": ("get_list_content", lambda a: {
+            "listId": a.get("list_id", a.get("listId", "")),
+        }, False),
+        "lists_items_list": ("get_list_content", lambda a: {
+            "listId": a.get("list_id", a.get("listId", "")),
+            **({"maxRecords": a["limit"]} if "limit" in a else {}),
+        }, False),
+        "open_conversation": ("open_dm_channel", lambda a: {
+            "userIds": ",".join(a["users"]) if isinstance(a.get("users"), list) else a.get("users", ""),
+        }, False),
+        "reaction_tool": ("add_reaction", lambda a: {
+            "channel": a.get("channelId", a.get("channel", "")),
+            "timestamp": a.get("timestamp", ""),
+            "emoji": a.get("emoji", "eyes"),
+        }, False),
+    }
+
     def __init__(self, session, name, timeout=MCP_CALL_TIMEOUT):
         self._session = session
         self._name = name
         self._timeout = timeout
         self.dead = False
 
-    async def call_tool(self, tool_name, arguments=None, **kwargs):
+    async def _call_one(self, tool_name, arguments=None, **kwargs):
+        """Single MCP call with timeout and health tracking."""
         try:
             return await asyncio.wait_for(
                 self._session.call_tool(tool_name, arguments, **kwargs),
@@ -140,11 +195,102 @@ class _TimeoutSession:
             self.dead = True
             raise
         except Exception as e:
-            # anyio/mcp sometimes wraps transport errors — heuristic
             msg = str(e).lower()
             if any(k in msg for k in ("closed", "broken pipe", "transport", "eof")):
                 self.dead = True
             raise
+
+    async def _expand_batch(self, old_name, new_name, arguments, **kwargs):
+        """Expand a batch call into sequential single calls, returning a combined result."""
+        import json as _json
+        from types import SimpleNamespace
+
+        results = []
+        if old_name == "batch_get_channel_info":
+            for cid in (arguments or {}).get("channelIds", []):
+                try:
+                    r = await self._call_one(new_name, {"channel": cid}, **kwargs)
+                    text = r.content[0].text if r.content else "{}"
+                    results.append({"channelId": cid, "result": _json.loads(text) if isinstance(text, str) else text})
+                except Exception:
+                    results.append({"channelId": cid, "result": {"name": cid}})
+        elif old_name == "batch_get_user_info":
+            for uid in (arguments or {}).get("users", []):
+                try:
+                    r = await self._call_one(new_name, {"query": uid}, **kwargs)
+                    text = r.content[0].text if r.content else "{}"
+                    data = _json.loads(text) if isinstance(text, str) else text
+                    results.append({"userId": uid, "result": data if isinstance(data, dict) else {"name": uid}})
+                except Exception:
+                    results.append({"userId": uid, "result": {"name": uid}})
+        elif old_name == "batch_set_last_read":
+            for ch in (arguments or {}).get("channels", []):
+                cid = ch.get("channelId", "")
+                ts = ch.get("ts") or ch.get("tsIso", "")
+                try:
+                    await self._call_one(new_name, {"channel": cid, "timestamp": ts}, **kwargs)
+                except Exception:
+                    pass
+            results = [{"ok": True}]
+        elif old_name == "list_channels":
+            # Emulate old list_channels using list_my_channels + list_channels (DM types)
+            args = arguments or {}
+            ch_types = args.get("channelTypes", [])
+            unread_only = args.get("unreadOnly", False)
+            limit = args.get("limit", 100)
+            try:
+                r = await self._call_one("list_my_channels", {"compactOutput": False}, **kwargs)
+                text = r.content[0].text if r.content else "{}"
+                data = _json.loads(text) if isinstance(text, str) else text
+                # list_my_channels returns sections with channels — flatten
+                channels = []
+                if isinstance(data, dict):
+                    for section in data.get("sections", [data]):
+                        for ch in (section.get("channels", []) if isinstance(section, dict) else []):
+                            if isinstance(ch, dict):
+                                channels.append(ch)
+                    # Also check top-level channels key
+                    if not channels and "channels" in data:
+                        channels = data["channels"]
+                elif isinstance(data, list):
+                    channels = data
+                # Filter by type and unread
+                filtered = []
+                for ch in channels:
+                    if unread_only and not ch.get("unread_count", 0) and not ch.get("mention_count", 0):
+                        continue
+                    ch_is_dm = ch.get("is_im", False)
+                    ch_is_mpim = ch.get("is_mpim", False)
+                    if "dm" in ch_types and ch_is_dm:
+                        filtered.append(ch)
+                    elif "group_dm" in ch_types and ch_is_mpim:
+                        filtered.append(ch)
+                    elif "public_and_private" in ch_types and not ch_is_dm and not ch_is_mpim:
+                        filtered.append(ch)
+                    elif not ch_types:
+                        filtered.append(ch)
+                payload = _json.dumps({"channels": filtered[:limit]})
+                content_item = SimpleNamespace(type="text", text=payload)
+                return SimpleNamespace(content=[content_item])
+            except Exception:
+                results = {"channels": []}
+                payload = _json.dumps(results)
+
+        # Wrap in MCP-like response shape
+        payload = _json.dumps(results)
+        content_item = SimpleNamespace(type="text", text=payload)
+        return SimpleNamespace(content=[content_item])
+
+    async def call_tool(self, tool_name, arguments=None, **kwargs):
+        actual_name, actual_args = tool_name, arguments
+        if self._name == "Slack" and tool_name in self._SLACK_TOOL_MAP:
+            new_name, transform, is_batch = self._SLACK_TOOL_MAP[tool_name]
+            if is_batch:
+                return await self._expand_batch(tool_name, new_name, arguments, **kwargs)
+            actual_name = new_name
+            if transform and arguments:
+                actual_args = transform(arguments)
+        return await self._call_one(actual_name, actual_args, **kwargs)
 
     def __getattr__(self, name):
         return getattr(self._session, name)
@@ -301,6 +447,31 @@ def _mcp_session(server_name):
                             server_name=server_name, tool_name="initialize", error_description=str(e))
             except Exception:
                 pass
+            # Slack fallback: if primary slack-mcp fails, try ai-community-slack-mcp
+            if server_name == "Slack" and "Slack_fallback" in _MCP_PARAM_DEFS:
+                try:
+                    logger.log("DEBUG", "mcp_request",
+                               "Slack primary failed, trying fallback (ai-community-slack-mcp)",
+                               server_name="Slack_fallback", tool_name="initialize", argument_keys=[])
+                except Exception:
+                    pass
+                try:
+                    stdio_cm, session_cm, session = await _open_persistent("Slack_fallback")
+                    # Store under "Slack" so all callers use it transparently
+                    session._name = "Slack"  # keep name consistent for translation bypass
+                    session._SLACK_TOOL_MAP = {}  # disable translation — fallback uses old names
+                    _persistent[server_name] = (stdio_cm, session_cm, session)
+                    try:
+                        logger.log("DEBUG", "mcp_response",
+                                   "Slack connected via fallback (ai-community-slack-mcp)",
+                                   server_name="Slack_fallback", tool_name="initialize", response_size_bytes=0)
+                    except Exception:
+                        pass
+                    yield session
+                    return
+                except Exception as e2:
+                    _persistent.pop(server_name, None)
+                    raise MCPConnectionError(f"Slack MCP unavailable (primary and fallback): {e}; {e2}") from e
             if server_name == "Slack":
                 raise MCPConnectionError(f"Slack MCP unavailable: {e}") from e
             raise

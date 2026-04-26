@@ -270,7 +270,7 @@ When gathering data from multiple sources, Envoy automatically extracts entities
 |---|---|
 | `builder-mcp` | Phonetool, Kingpin, Wiki, Taskei, Broadcast, Meetings |
 | `aws-outlook-mcp` | Email, calendar, to-do |
-| `ai-community-slack-mcp` | Slack channels, DMs, search |
+| `slack-mcp` | Slack channels, DMs, search |
 | `amazon-sharepoint-mcp` | SharePoint/OneDrive files and lists |
 
 ### AI Models

@@ -27,17 +27,28 @@ async def resolve_user_ids(user_ids: List[str], session=None) -> Dict[str, str]:
                 if not isinstance(item, dict):
                     continue
                 # Try multiple key patterns for user ID
-                uid = item.get('userId') or item.get('user_id') or item.get('id') or ''
+                uid = (item.get('userId') or item.get('user_id')
+                       or item.get('id') or item.get('user') or '')
                 # Try nested result, or flat structure
                 info = item.get('result') or item.get('profile') or item
                 if isinstance(info, dict):
                     name = (info.get('real_name') or info.get('realName')
+                            or info.get('real_name_normalized')
                             or info.get('display_name') or info.get('displayName')
+                            or info.get('display_name_normalized')
                             or info.get('name') or '')
                 else:
                     name = ''
                 if uid and name:
                     mapping[uid] = name
+                elif not uid and name:
+                    # If no uid key found but we have a name, try matching by position
+                    pass
+            # If nothing resolved, log the first item shape for debugging
+            if not mapping and items:
+                from envoy_logger import get_logger
+                sample = str(items[0])[:500]
+                get_logger().log_warning(f"batch_get_user_info unrecognized shape: {sample}")
             # Fill in any unresolved IDs
             for uid in unique:
                 if uid not in mapping:
@@ -47,7 +58,9 @@ async def resolve_user_ids(user_ids: List[str], session=None) -> Dict[str, str]:
             return await _resolve(session)
         async with slack() as s:
             return await _resolve(s)
-    except Exception:
+    except Exception as e:
+        from envoy_logger import get_logger
+        get_logger().log_warning(f"resolve_user_ids failed: {e}")
         return {uid: uid for uid in unique}
 
 
@@ -194,10 +207,22 @@ async def scan_raw(channels: List[str] = None, days: int = 7, alias: str = "") -
             threaded_msgs = []
             for item in raw:
                 ch_id = item.get('channelId', '')
-                for msg in item.get('result', {}).get('messages', []):
+                msgs = item.get('result', {}).get('messages', [])
+                # Also check if MCP returns messages at top level
+                if not msgs and isinstance(item.get('messages'), list):
+                    msgs = item['messages']
+                for msg in msgs:
                     uid = msg.get('user', '')
                     if uid:
                         all_user_ids.add(uid)
+                    # Some MCP versions embed sender info — extract user ID from it
+                    if not uid and msg.get('sender'):
+                        sender = msg['sender']
+                        if isinstance(sender, dict):
+                            uid = sender.get('id', '')
+                            if uid:
+                                all_user_ids.add(uid)
+                                msg['user'] = uid  # normalize for downstream
                     all_messages.append((ch_id, msg))
                     if msg.get('reply_count', 0) > 0 and msg.get('ts'):
                         threaded_msgs.append((ch_id, msg['ts']))
@@ -254,6 +279,11 @@ async def scan_raw(channels: List[str] = None, days: int = 7, alias: str = "") -
             text = msg.get('text', '')[:500]
             uid = msg.get('user', '?')
             name = user_names.get(uid, uid)
+            # Fallback: if MCP enriched the message with a sender_name field, use it
+            if name == uid or name == '?':
+                name = (msg.get('sender_name') or msg.get('senderName')
+                        or msg.get('username') or msg.get('bot_profile', {}).get('name', '')
+                        or name)
             ts = msg.get('ts', '')
 
             # Resolve <@U...> mentions in message text
