@@ -187,6 +187,8 @@ class StatusBar(Static):
         t.append("  │  ", style="dim")
         t.append("/help", style="bold green")
         t.append(" commands  ", style="dim")
+        t.append("ctrl+y", style="bold")
+        t.append(" copy  ", style="dim")
         t.append("ctrl+c", style="bold")
         t.append(" quit", style="dim")
         return t
@@ -207,6 +209,7 @@ class EnvoyApp(App):
 
     BINDINGS = [
         Binding("ctrl+c", "quit", "Quit", show=False),
+        Binding("ctrl+y", "copy_output", "Copy selection", show=False),
         Binding("f5", "refresh_mcp", "Refresh", show=False),
         Binding("escape", "focus_input", "", show=False),
         Binding("ctrl+up", "history_prev", "Previous command", show=False),
@@ -258,7 +261,10 @@ class EnvoyApp(App):
             Text(f"  ✓ {name} ready\n", style="green"),
         )
 
-    def on_click(self) -> None:
+    def on_click(self, event) -> None:
+        # Don't steal focus from output — let users select/copy text
+        if self.query_one("#output", RichLog).is_mouse_over:
+            return
         self.query_one("#input", TextArea).focus()
 
     # ── Input handling ──
@@ -475,6 +481,15 @@ class EnvoyApp(App):
 
     def action_focus_input(self) -> None:
         self.query_one("#input", TextArea).focus()
+
+    def action_copy_output(self) -> None:
+        """Copy selected text (or last output) to clipboard."""
+        text = self.screen.get_selected_text()
+        if text:
+            self.copy_to_clipboard(text)
+            self.notify("Copied to clipboard", timeout=2)
+        else:
+            self.notify("Select text first (click + drag in output), then Ctrl+Y", timeout=3)
 
 
 def run_tui():

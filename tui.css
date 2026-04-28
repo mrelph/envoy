@@ -19,6 +19,10 @@ Screen {
     scrollbar-size: 0 0;
 }
 
+#output:focus {
+    border: none;
+}
+
 #spinner {
     height: 1;
     background: black;
