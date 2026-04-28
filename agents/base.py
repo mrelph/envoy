@@ -285,8 +285,9 @@ class _TimeoutSession:
                 for ch in channels:
                     if unread_only and not ch.get("unread_count", 0) and not ch.get("mention_count", 0):
                         continue
-                    ch_is_dm = ch.get("is_im", False)
-                    ch_is_mpim = ch.get("is_mpim", False)
+                    ch_id = ch.get("id", ch.get("name", ""))
+                    ch_is_dm = ch.get("is_im", False) or ch_id.startswith("D")
+                    ch_is_mpim = ch.get("is_mpim", False) or (ch_id.startswith("G") and not ch.get("is_channel", False))
                     if "dm" in ch_types and ch_is_dm:
                         filtered.append(ch)
                     elif "group_dm" in ch_types and ch_is_mpim:

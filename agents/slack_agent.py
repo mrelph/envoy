@@ -206,25 +206,29 @@ async def scan_raw(channels: List[str] = None, days: int = 7, alias: str = "") -
             all_messages = []
             threaded_msgs = []
             for item in raw:
-                ch_id = item.get('channelId', '')
-                msgs = item.get('result', {}).get('messages', [])
-                # Also check if MCP returns messages at top level
-                if not msgs and isinstance(item.get('messages'), list):
-                    msgs = item['messages']
+                ch_id = item.get('channelId', item.get('requestedChannel', ''))
+                msgs = item.get('result', {}).get('messages', item.get('messages', []))
                 for msg in msgs:
-                    uid = msg.get('user', '')
+                    # Normalize user field: slack-mcp returns user as object, old MCP as string
+                    user_field = msg.get('user', '')
+                    if isinstance(user_field, dict):
+                        uid = user_field.get('id', '')
+                        msg['_user_id'] = uid
+                        msg['_user_name'] = (user_field.get('realName') or user_field.get('name') or '')
+                    else:
+                        uid = user_field
+                        msg['_user_id'] = uid
+                        msg['_user_name'] = ''
                     if uid:
                         all_user_ids.add(uid)
-                    # Some MCP versions embed sender info — extract user ID from it
-                    if not uid and msg.get('sender'):
-                        sender = msg['sender']
-                        if isinstance(sender, dict):
-                            uid = sender.get('id', '')
-                            if uid:
-                                all_user_ids.add(uid)
-                                msg['user'] = uid  # normalize for downstream
+                    # Normalize ts: slack-mcp uses replyToken (channel:ts), old MCP uses ts
+                    if not msg.get('ts') and msg.get('replyToken'):
+                        parts = msg['replyToken'].split(':')
+                        if len(parts) == 2:
+                            msg['ts'] = parts[1]
                     all_messages.append((ch_id, msg))
-                    if msg.get('reply_count', 0) > 0 and msg.get('ts'):
+                    reply_count = msg.get('reply_count', msg.get('replyCount', 0))
+                    if reply_count > 0 and msg.get('ts'):
                         threaded_msgs.append((ch_id, msg['ts']))
 
             # Resolve user IDs to names (same session)
@@ -269,21 +273,19 @@ async def scan_raw(channels: List[str] = None, days: int = 7, alias: str = "") -
             display, kind = lookup.get(ch_id, (ch_id, "channel"))
             # For DMs, use the sender's resolved name instead of channel ID
             if kind == "dm":
-                sender_uid = msg.get('user', '')
-                dm_name = user_names.get(sender_uid, display)
+                sender_uid = msg.get('_user_id', '')
+                dm_name = user_names.get(sender_uid, msg.get('_user_name', '') or display)
                 prefix = f"🔴 DM ({dm_name})"
             elif kind == "group_dm":
                 prefix = "🟡 GroupDM"
             else:
                 prefix = f"#{display}"
             text = msg.get('text', '')[:500]
-            uid = msg.get('user', '?')
-            name = user_names.get(uid, uid)
-            # Fallback: if MCP enriched the message with a sender_name field, use it
-            if name == uid or name == '?':
-                name = (msg.get('sender_name') or msg.get('senderName')
-                        or msg.get('username') or msg.get('bot_profile', {}).get('name', '')
-                        or name)
+            # Strip slack-mcp datamarking: <slack-user-content> tags and \ue000 space replacements
+            text = re.sub(r'</?slack-user-content[^>]*>', '', text)
+            text = text.replace('\ue000', ' ')
+            uid = msg.get('_user_id', '')
+            name = msg.get('_user_name', '') or user_names.get(uid, uid)
             ts = msg.get('ts', '')
 
             # Resolve <@U...> mentions in message text
