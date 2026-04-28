@@ -661,6 +661,14 @@ def _delegate(worker_name: str, request: str, _retries: int = 1) -> str:
             last_err = e
             print(f"[{worker_name}] attempt {attempt+1} failed: {e}", file=sys.stderr)
             if attempt < _retries:
+                # Clear corrupted session if Bedrock rejects the message history
+                err_msg = str(e)
+                if "ValidationException" in err_msg and "toolResult" in err_msg:
+                    import shutil
+                    for base in ["/tmp/strands/sessions", os.path.expanduser("~/.envoy/sessions/workers")]:
+                        sess_dir = os.path.join(base, f"session_worker-{worker_name}")
+                        if os.path.isdir(sess_dir):
+                            shutil.rmtree(sess_dir, ignore_errors=True)
                 from agents.workers import _workers
                 _workers.pop(worker_name, None)
     return f"⚠️ {worker_name} worker unavailable: {last_err}. Other sources may still have the information you need."
