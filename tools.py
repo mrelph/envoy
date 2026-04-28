@@ -3,13 +3,22 @@ import os
 import re
 from strands import tool
 from envoy_logger import logged_tool
-from agents.base import builder, invoke_ai, check_mcp_connections, _load_models, MODEL_CATALOG, MODELS_FILE, get_token_usage, format_token_usage, reset_token_usage, run
+from agents.base import outlook, builder, invoke_ai, check_mcp_connections, _load_models, MODEL_CATALOG, MODELS_FILE, get_token_usage, format_token_usage, reset_token_usage, run
 from agents import email, slack_agent, calendar, todo, tickets, memory2 as memory, teamsnap_agent, people, internal, export
 from agents import workflows as wf
 from agents.workers import get_worker
 from agents.skills import get_skills, activate as activate_skill_fn
 
 _USER = os.environ.get('USER', '')
+
+
+def _outlook_tool(tool_name: str, args: dict) -> str:
+    """Direct MCP call to Outlook — used by worker agents."""
+    async def _call():
+        async with outlook() as session:
+            result = await session.call_tool(tool_name, args)
+            return result.content[0].text if result.content else "No result."
+    return run(_call())
 
 
 def _check_replies_combined() -> str:

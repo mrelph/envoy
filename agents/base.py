@@ -117,6 +117,26 @@ def __getattr__(name):
 MCP_CALL_TIMEOUT = 30  # seconds per MCP tool call
 
 
+import re as _re
+
+_UNTRUSTED_PREFIX_RE = _re.compile(r'^<untrusted_content[^>]*>\n?')
+_UNTRUSTED_SUFFIX_RE = _re.compile(r'\n?</untrusted_content[^>]*>.*', _re.DOTALL)
+_SAFETY_DIRECTIVE_RE = _re.compile(r'^\[CONTENT SAFETY DIRECTIVE\].*?^---\n', _re.DOTALL | _re.MULTILINE)
+
+
+def strip_mcp_wrapper(text: str) -> str:
+    """Strip MCP safety wrappers from responses.
+    
+    Handles:
+    - <untrusted_content_xxx>...</untrusted_content_xxx> (Outlook MCP)
+    - [CONTENT SAFETY DIRECTIVE]...--- (Slack MCP)
+    """
+    text = _UNTRUSTED_PREFIX_RE.sub('', text)
+    text = _UNTRUSTED_SUFFIX_RE.sub('', text)
+    text = _SAFETY_DIRECTIVE_RE.sub('', text)
+    return text
+
+
 class _TimeoutSession:
     """Wraps an MCP ClientSession to add a timeout to every call_tool invocation.
     
@@ -185,10 +205,16 @@ class _TimeoutSession:
     async def _call_one(self, tool_name, arguments=None, **kwargs):
         """Single MCP call with timeout and health tracking."""
         try:
-            return await asyncio.wait_for(
+            result = await asyncio.wait_for(
                 self._session.call_tool(tool_name, arguments, **kwargs),
                 timeout=self._timeout,
             )
+            # Strip <untrusted_content> wrappers from all text content
+            if result and result.content:
+                for item in result.content:
+                    if hasattr(item, 'text') and isinstance(item.text, str):
+                        item.text = strip_mcp_wrapper(item.text)
+            return result
         except asyncio.TimeoutError:
             raise TimeoutError(f"{self._name}/{tool_name} timed out after {self._timeout}s")
         except (BrokenPipeError, ConnectionError, EOFError) as e:
@@ -826,21 +852,19 @@ def parse_email_search_result(result, extra_fields=None) -> List[Dict]:
         return emails
     content = str(result.content[0].text)
     try:
-        outer = json.loads(content)
-        if 'content' in outer and len(outer['content']) > 0:
-            inner_text = outer['content'][0].get('text', '{}')
-            data = json.loads(inner_text)
-            if data.get('success') and 'content' in data:
-                for email in data['content'].get('emails', []):
-                    entry = {
-                        'conversationId': email.get('conversationId', ''),
-                        'from': ', '.join(email.get('senders', [])),
-                        'to': ', '.join(email.get('recipients', [])),
-                        'subject': email.get('topic', ''),
-                        'date': email.get('lastDeliveryTime', ''),
-                        'snippet': email.get('preview', ''),
-                    }
-                    emails.append(entry)
+        data = json.loads(content)
+        # Direct format: {"success": true, "content": {"emails": [...]}}
+        if data.get('success') and isinstance(data.get('content'), dict):
+            for email in data['content'].get('emails', []):
+                entry = {
+                    'conversationId': email.get('conversationId', ''),
+                    'from': ', '.join(email.get('senders', [])),
+                    'to': ', '.join(email.get('recipients', [])),
+                    'subject': email.get('topic', ''),
+                    'date': email.get('lastDeliveryTime', ''),
+                    'snippet': email.get('preview', ''),
+                }
+                emails.append(entry)
     except Exception as e:
         get_logger().log_error(f"Error parsing email data: {e}")
     return emails
@@ -853,10 +877,10 @@ def parse_todo_response(result) -> dict:
         return {}
     raw = str(result.content[0].text)
     try:
-        outer = json.loads(raw)
-        if 'content' in outer and outer['content']:
-            inner = json.loads(outer['content'][0].get('text', '{}'))
-            return inner.get('content', inner)
-        return outer
+        data = json.loads(raw)
+        # Direct format: {"success": true, "content": {...}}
+        if isinstance(data.get('content'), dict):
+            return data['content']
+        return data
     except (json.JSONDecodeError, KeyError, IndexError):
         return {}
