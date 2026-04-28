@@ -281,9 +281,12 @@ class _TimeoutSession:
                 elif isinstance(data, list):
                     channels = data
                 # Filter by type and unread
+                # slack-mcp's list_my_channels may not include unread_count —
+                # if no channel has the field, skip the unread filter entirely
+                has_unread_data = any("unread_count" in ch for ch in channels)
                 filtered = []
                 for ch in channels:
-                    if unread_only and not ch.get("unread_count", 0) and not ch.get("mention_count", 0):
+                    if unread_only and has_unread_data and not ch.get("unread_count", 0) and not ch.get("mention_count", 0):
                         continue
                     ch_id = ch.get("id", ch.get("name", ""))
                     ch_is_dm = ch.get("is_im", False) or ch_id.startswith("D")

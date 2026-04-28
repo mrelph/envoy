@@ -192,10 +192,18 @@ async def scan_raw(channels: List[str] = None, days: int = 7, alias: str = "") -
                     if 'result' in item:
                         name_map[item['channelId']] = item['result'].get('name', item['channelId'])
 
-            batch = [{"channelId": cid, "oldest": lr, "limit": 30}
-                     for cid, _, _, lr in channel_ids]
-            result = await session.call_tool("batch_get_conversation_history", arguments={"channels": batch})
-            raw = json.loads(result.content[0].text) if result.content else []
+            all_batch = [{"channelId": cid, "oldest": lr, "limit": 30}
+                         for cid, _, _, lr in channel_ids]
+            # slack-mcp limits batch_get_messages to 20 channels per call
+            raw = []
+            for i in range(0, len(all_batch), 20):
+                chunk = all_batch[i:i+20]
+                result = await session.call_tool("batch_get_conversation_history", arguments={"channels": chunk})
+                text = result.content[0].text if result.content else "[]"
+                try:
+                    raw.extend(json.loads(text) if isinstance(json.loads(text), list) else [])
+                except (json.JSONDecodeError, TypeError):
+                    pass
 
             lookup = {}
             for cid, name, kind, _ in channel_ids:
