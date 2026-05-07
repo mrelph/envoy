@@ -92,6 +92,46 @@ _workers = {}
 WORKER_NAMES = ["email", "comms", "calendar", "productivity", "research", "sharepoint"]
 
 
+# Map worker names to relevant process.md sections
+_WORKER_SECTIONS = {
+    "email": ["Email", "Safety & Confirmations"],
+    "comms": ["Slack", "Safety & Confirmations"],
+    "calendar": ["Calendar", "Safety & Confirmations"],
+    "productivity": ["Tickets", "General", "Safety & Confirmations"],
+    "research": ["General"],
+    "sharepoint": ["SharePoint", "General"],
+}
+
+
+def _load_process_rules(worker_name: str) -> str:
+    """Load relevant process.md sections for a worker's system prompt."""
+    path = Path.home() / ".envoy" / "process.md"
+    if not path.exists():
+        return ""
+    sections = _WORKER_SECTIONS.get(worker_name, [])
+    if not sections:
+        return ""
+    content = path.read_text()
+    rules = []
+    for section_name in sections:
+        header = f"## {section_name}"
+        if header not in content:
+            continue
+        # Extract lines between this header and the next ## header
+        start = content.index(header) + len(header)
+        rest = content[start:]
+        end = rest.find("\n## ")
+        block = rest[:end] if end != -1 else rest
+        # Collect non-empty, non-comment lines
+        for line in block.splitlines():
+            line = line.strip()
+            if line and line.startswith("- ") and not line.startswith("<!-- "):
+                rules.append(line)
+    if not rules:
+        return ""
+    return "\n\nProcess rules (learned from user corrections):\n" + "\n".join(rules)
+
+
 def get_worker(name: str):
     """Get or create a worker agent by name."""
     if name not in _workers:
@@ -114,4 +154,9 @@ def _import_create(module_name: str, worker_name: str):
     """Import a worker module and call its create() with session manager."""
     import importlib
     mod = importlib.import_module(f"agents.workers.{module_name}")
-    return mod.create(session_mgr=_session_manager(worker_name))
+    agent = mod.create(session_mgr=_session_manager(worker_name))
+    # Inject relevant process.md rules into the worker's system prompt
+    rules = _load_process_rules(worker_name)
+    if rules and hasattr(agent, 'system_prompt') and isinstance(agent.system_prompt, str):
+        agent.system_prompt = agent.system_prompt + rules
+    return agent

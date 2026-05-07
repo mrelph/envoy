@@ -271,7 +271,11 @@ def create(session_mgr=None):
             "Use block_time for personal blocks and OOO. "
             "Use create_event for meetings with attendees. "
             "Use shared_context to post conflicts or important scheduling info for other workers. "
-            "Return structured data."
+            "Return structured data.\n\n"
+            "CRITICAL: NEVER guess or construct email addresses from a person's name. "
+            "Only use attendee emails that appear in existing calendar events you have read, "
+            "or that the user explicitly provides. If you need someone's email for an invite "
+            "and don't have it, say so — the supervisor will look it up via Phonetool."
         ),
         tools=[view_calendar, create_event, update_event, delete_event,
                search_events, find_time, find_room, shared_calendars, block_time, shared_context],

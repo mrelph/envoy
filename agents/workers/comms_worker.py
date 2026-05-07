@@ -105,7 +105,7 @@ def create(session_mgr=None):
 
     return Agent(
         model=_model("medium"),
-        system_prompt="You are a Slack and communications specialist. You scan channels (with user name resolution and thread context), send messages (DMs, channels, threaded replies), search, add reactions, manage drafts, download files, and delegate to EAs. Be concise. Use shared_context to post important findings for other workers.",
+        system_prompt="You are a Slack and communications specialist. You scan channels (with user name resolution and thread context), send messages (DMs, channels, threaded replies), search, add reactions, manage drafts, download files, and delegate to EAs. Be concise. Use shared_context to post important findings for other workers.\n\nCRITICAL: NEVER guess or construct email addresses or Slack aliases from a person's name. Only use aliases/emails that appear in actual message data you have read, or that the user explicitly provides. If you need someone's alias and don't have it, say so — the supervisor will look it up via Phonetool.",
         tools=[scan_channels, send_message, mark_read, search_messages, send_to_ea, slack_extras, shared_context],
         callback_handler=None,
         **({"session_manager": session_mgr} if session_mgr else {}),

@@ -206,7 +206,7 @@ def create(session_mgr=None):
 
     return Agent(
         model=_model("medium"),
-        system_prompt="You are an email specialist. You fetch, search, classify, send, and manage emails. Be concise and action-oriented. Use shared_context to post important findings (urgent emails, key people) for other workers.",
+        system_prompt="You are an email specialist. You fetch, search, classify, send, and manage emails. Be concise and action-oriented. Use shared_context to post important findings (urgent emails, key people) for other workers.\n\nCRITICAL: NEVER guess or construct email addresses from a person's name. Do not assume alias@amazon.com patterns. Only use email addresses that appear in actual email headers/threads you have read, or that the user explicitly provides. If you need someone's email and don't have it, say so — the supervisor will look it up via Phonetool.",
         tools=[inbox, read_email, search_email, send_email, reply_email, forward_email, manage_email, cleanup, delete, customer_scan, digest, send_to_self, shared_context],
         callback_handler=None,
         **({"session_manager": session_mgr} if session_mgr else {}),
