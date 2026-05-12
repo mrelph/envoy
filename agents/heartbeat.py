@@ -214,7 +214,30 @@ Respond with ONLY the alerts or ALL_CLEAR. No preamble."""
     if not quiet:
         print(message)
 
+    # --- Weekly learning loop (piggybacks on heartbeat, rate-limited internally) ---
+    _run_weekly_learning(notify)
+
     return result
+
+
+def _run_weekly_learning(notify: str = "none"):
+    """Run self-analysis + skill suggestion if due (rate-limited to weekly)."""
+    try:
+        from agents.learning import self_analyze, auto_apply_analysis, suggest_skill
+        analysis = self_analyze()
+        if analysis:
+            applied = auto_apply_analysis(analysis)
+            suggestion = suggest_skill()
+            if applied or suggestion:
+                msg = "🧠 **Weekly Learning Update**\n"
+                if applied:
+                    msg += "\nNew process rules learned:\n" + "\n".join(f"- {r}" for r in applied)
+                if suggestion:
+                    msg += f"\n\n{suggestion}"
+                if notify == "slack":
+                    run(slack_agent.send_dm(_USER, msg))
+    except Exception:
+        pass  # Never break heartbeat
 
 
 # --- Suggest routines from observer patterns ---

@@ -12,7 +12,7 @@ from textual import work, on
 from rich.markdown import Markdown
 from rich.text import Text
 
-from dispatch import COMMANDS, COMMAND_GROUPS, dispatch
+from dispatch import COMMANDS, COMMAND_GROUPS, dispatch_with_learning as dispatch
 
 CONFIG_DIR = Path.home() / ".envoy"
 SOUL_FILE = CONFIG_DIR / "soul.md"

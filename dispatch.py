@@ -8,8 +8,10 @@ UI layer must handle itself (e.g., /help, /status, /settings, /exit).
 """
 
 import os
+import threading
 
 _USER = os.environ.get("USER", "")
+_last_response = ""  # tracks last agent response for correction detection
 
 # --- Slash command table: cmd → (description, prompt_template | None) ---
 # prompt_template uses {days} and {arg} placeholders.
@@ -172,6 +174,43 @@ def dispatch(raw: str, agent):
 
     # --- Freeform natural language ---
     return (agent(stripped), True)
+
+
+def _learn_async(raw: str, result: str):
+    """Fire-and-forget learning in background thread. Never blocks dispatch."""
+    global _last_response
+    try:
+        from agents.learning import reflect, detect_correction, apply_correction
+
+        # 1. Correction detection — check if this input corrects the previous response
+        correction = detect_correction(raw, _last_response)
+        if correction:
+            msg = apply_correction(correction)
+            # We can't inject into the response retroactively, but it's saved.
+            # The agent will mention it next turn via process.md injection.
+
+        # 2. Reflect on what just happened (no AI, just file append)
+        reflect(raw, result)
+
+    except Exception:
+        pass  # Never crash the app
+    finally:
+        _last_response = result if result else _last_response
+
+
+def dispatch_with_learning(raw: str, agent):
+    """Wrapper around dispatch() that adds the active learning loop.
+    
+    Use this instead of dispatch() directly for learning-enabled sessions.
+    Same return signature: (result_or_cmd, handled).
+    """
+    result, handled = dispatch(raw, agent)
+
+    # Fire learning in background (non-blocking) for meaningful interactions
+    if handled and result and isinstance(result, str) and len(result) > 20:
+        threading.Thread(target=_learn_async, args=(raw, result), daemon=True).start()
+
+    return result, handled
 
 
 def _run_doctor() -> str:

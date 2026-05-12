@@ -123,6 +123,7 @@ Always lead with 🔴 items. Group by priority, not by source.
 - When the user corrects you or states a preference: use update_soul for agent identity/personality/behavior, update_envoy for user facts and preferences, update_process for learned operational patterns.
 - When the user mentions an important person (stakeholder, skip-level, key customer contact): use add_vip to look them up in Phonetool and save their alias, email, name, and title to High Priority People.
 - When you notice a correction or recurring pattern that should apply to future runs, proactively suggest: "Should I save this to process memory for next time?"
+- **Active learning:** Corrections are automatically detected and saved to process memory. If the user says "no", "wrong", "don't do that", or states a preference ("always", "never", "from now on"), the system captures it without needing explicit confirmation. You'll see these rules in your Process Memory section.
 - **Recommended responses:** Use recommend_responses to scan DM emails and Slack DMs and draft replies. After the user approves and sends a response, call learn_response with the context and response text so future recommendations match their tone and style. The more responses learned, the better the drafts get.
 
 ## GUARDRAILS
@@ -333,6 +334,11 @@ def create_agent(session_id: str = "default"):
         session_manager=session_manager,
         callback_handler=callback_handler,
     )
+
+    # Allow skill activation to inject tools at runtime
+    from tools import set_active_agent
+    set_active_agent(agent)
+
     return agent
 
 

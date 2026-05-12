@@ -3,7 +3,7 @@
 import os
 import sys
 from agent import get_agent, reload_agent
-from dispatch import COMMANDS, COMMAND_GROUPS, dispatch
+from dispatch import COMMANDS, COMMAND_GROUPS, dispatch_with_learning as dispatch
 
 
 def run_interactive():
