@@ -157,11 +157,58 @@ def create(session_mgr=None):
             return f"Posted to shared context: {key}"
         return read_context(key)
 
+    @tool
+    def instructai_query(question: str) -> str:
+        """Ask InstructAI a business question — routes to the best agent for revenue, pipeline,
+        partner goals, marketplace, funding, migrations, and more.
+        Args:
+            question: Business question (e.g. "What are top partners by revenue?")
+        """
+        async def _fetch():
+            from agents.base import instructai
+            async with instructai() as session:
+                result = await session.call_tool("InstructAI___question", {"question": question})
+                return result.content[0].text if result.content else "No response from InstructAI"
+        return run(_fetch())
+
+    @tool
+    def quicksight_query(question: str, topic_id: str = "") -> str:
+        """Query Amazon QuickSight dashboards and topics using natural language.
+        Use without topic_id to chat with the default assistant, or provide a topic_id for structured data queries.
+        Args:
+            question: Natural language question about data/dashboards
+            topic_id: Optional Q Topic ID for structured queries (use quicksight_topics to find IDs)
+        """
+        async def _fetch():
+            from agents.base import quicksight
+            async with quicksight() as session:
+                if topic_id:
+                    result = await session.call_tool("query_topic", {"topicId": topic_id, "question": question})
+                else:
+                    result = await session.call_tool("chat", {"message": question})
+                return result.content[0].text if result.content else "No response from QuickSight"
+        return run(_fetch())
+
+    @tool
+    def quicksight_topics(search: str = "") -> str:
+        """List available QuickSight Q Topics (queryable datasets). Use to find topic IDs for quicksight_query.
+        Args:
+            search: Optional filter by name/description
+        """
+        async def _fetch():
+            from agents.base import quicksight
+            async with quicksight() as session:
+                args = {"search": search} if search else {}
+                result = await session.call_tool("list_topics", args)
+                return result.content[0].text if result.content else "No topics found"
+        return run(_fetch())
+
     return Agent(
         model=_model("medium"),
-        system_prompt="You are a research specialist. You look up people, Kingpin goals/projects/milestones (list, view, update, comment), wiki pages, Taskei tasks, Broadcast videos, resolve links, and search the web. Return data concisely. Use shared_context to post important findings for other workers.",
+        system_prompt="You are a research specialist. You look up people, Kingpin goals/projects/milestones (list, view, update, comment), wiki pages, Taskei tasks, Broadcast videos, resolve links, search the web, query business data via InstructAI (revenue, pipeline, partners, marketplace), and query QuickSight dashboards/topics. Return data concisely. Use shared_context to post important findings for other workers.",
         tools=[lookup_person, kingpin, kingpin_list, kingpin_update, kingpin_comment, kingpin_teams,
-               wiki, taskei, broadcast, tiny, web_search, shared_context],
+               wiki, taskei, broadcast, tiny, web_search, shared_context,
+               instructai_query, quicksight_query, quicksight_topics],
         callback_handler=None,
         **({"session_manager": session_mgr} if session_mgr else {}),
     )

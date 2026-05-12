@@ -516,6 +516,8 @@ slack = _mcp_session("Slack")
 teamsnap = _mcp_session("TeamSnap")
 sharepoint = _mcp_session("SharePoint")
 kingpin = _mcp_session("Kingpin")
+instructai = _mcp_session("InstructAI")
+quicksight = _mcp_session("QuickSight")
 
 
 # --- Shared MCP batch runner ---

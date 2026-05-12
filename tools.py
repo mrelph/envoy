@@ -5,6 +5,26 @@ from strands import tool
 from envoy_logger import logged_tool
 from agents.base import outlook, builder, invoke_ai, check_mcp_connections, _load_models, MODEL_CATALOG, MODELS_FILE, get_token_usage, format_token_usage, reset_token_usage, run
 from agents import email, slack_agent, calendar, todo, tickets, memory2 as memory, teamsnap_agent, people, internal, export
+
+# --- Filesystem allow-list config ---
+
+_CONFIG_FILE = os.path.expanduser("~/.envoy/config.json")
+
+
+def _load_config() -> dict:
+    """Load ~/.envoy/config.json."""
+    if os.path.exists(_CONFIG_FILE):
+        try:
+            import json as _json
+            return _json.loads(open(_CONFIG_FILE).read())
+        except Exception:
+            pass
+    return {}
+
+
+def _allowed_dirs() -> list:
+    """Return the list of allowed filesystem directories from config."""
+    return _load_config().get("allowed_dirs", [])
 from agents import workflows as wf
 from agents.workers import get_worker
 from agents.skills import get_skills, activate as activate_skill_fn
@@ -567,6 +587,53 @@ def token_usage() -> str:
     return format_token_usage()
 
 
+# --- Skill-gated tools (available for activation, not in ALL_TOOLS by default) ---
+
+_SKILL_TOOLS = {
+    "teamsnap_schedule": teamsnap_schedule,
+    "teamsnap_roster": teamsnap_roster,
+    "teamsnap_availability": teamsnap_availability,
+    "teamsnap_event_detail": teamsnap_event_detail,
+    "teamsnap_location": teamsnap_location,
+    "teamsnap_contacts": teamsnap_contacts,
+    "teamsnap_announcements": teamsnap_announcements,
+    "teamsnap_rsvp": teamsnap_rsvp,
+    "teamsnap_assignments": teamsnap_assignments,
+    "teamsnap_standings": teamsnap_standings,
+}
+
+_active_agent = None  # set by agent.py after creation
+
+
+def set_active_agent(agent):
+    """Called by agent.py to allow skill activation to inject tools at runtime."""
+    global _active_agent
+    _active_agent = agent
+
+
+def _inject_skill_tools(skill_name: str, allowed_tools: str):
+    """Inject a skill's allowed-tools into the running agent's tool registry."""
+    if not _active_agent or not allowed_tools:
+        return
+    tool_names = allowed_tools.split()
+    for name in tool_names:
+        tool_fn = _SKILL_TOOLS.get(name)
+        if not tool_fn:
+            continue
+        # Skip if already registered
+        try:
+            existing = _active_agent.tool_registry.registry
+            dynamic = _active_agent.tool_registry.dynamic_tools
+            if name in existing or name in dynamic:
+                continue
+        except AttributeError:
+            continue
+        try:
+            _active_agent.tool_registry.process_tools([logged_tool(tool_fn)])
+        except Exception:
+            pass
+
+
 @tool
 def activate_skill(name: str) -> str:
     """Activate an Agent Skill by name to load its full instructions.
@@ -575,7 +642,11 @@ def activate_skill(name: str) -> str:
     Args:
         name: Skill name from the catalog
     """
-    return activate_skill_fn(name, get_skills())
+    skills = get_skills()
+    skill = skills.get(name)
+    if skill and skill.get("allowed_tools"):
+        _inject_skill_tools(name, skill["allowed_tools"])
+    return activate_skill_fn(name, skills)
 
 
 @tool
@@ -722,8 +793,10 @@ def productivity_worker(request: str) -> str:
 def research_worker(request: str) -> str:
     """Delegate research and lookup tasks: Phonetool profiles, Kingpin goals/projects/milestones
     (view, list, filter by owner/team/year/status, update status, add comments, list teams),
-    Wiki pages, Taskei tasks, Broadcast videos, tiny links, web search.
-    Use for ANY internal lookup or external web search request.
+    Wiki pages, Taskei tasks, Broadcast videos, tiny links, web search,
+    InstructAI business queries (revenue, pipeline, partner goals, marketplace, funding, migrations),
+    QuickSight dashboards and data topics (query data, list topics, GenAI trends, attach rates).
+    Use for ANY internal lookup, external web search, business data query, or dashboard request.
 
     Args:
         request: Natural language description of what to look up
@@ -787,6 +860,68 @@ def export_pptx(content: str, filename: str = "", title: str = "Envoy Report") -
     return result
 
 
+@tool
+def local_files(action: str, path: str = "", content: str = "") -> str:
+    """Read, write, list, or tree local files. Restricted to allow-listed directories
+    configured in ~/.envoy/config.json under "allowed_dirs".
+    Use when the user asks to read a local file, save notes, or browse a directory.
+
+    Args:
+        action: 'read', 'write', 'list', or 'tree'
+        path: File or directory path (absolute or ~ relative)
+        content: Content to write (for 'write' action only)
+    """
+    allowed = _allowed_dirs()
+    if not allowed:
+        return ("⚠️ No directories allowed. Add allowed_dirs to ~/.envoy/config.json:\n"
+                '{"allowed_dirs": ["~/Documents", "~/Projects"]}')
+
+    path = os.path.expanduser(path)
+    path = os.path.realpath(path)
+
+    # Enforce allow-list
+    if not any(path.startswith(os.path.realpath(os.path.expanduser(d))) for d in allowed):
+        return f"⚠️ Access denied. Path not in allowed_dirs: {allowed}"
+
+    if action == "list":
+        if not os.path.isdir(path):
+            return f"Not a directory: {path}"
+        entries = sorted(os.listdir(path))
+        dirs = [e + "/" for e in entries if os.path.isdir(os.path.join(path, e))]
+        files = [e for e in entries if os.path.isfile(os.path.join(path, e))]
+        return "\n".join(dirs + files) or "(empty)"
+
+    elif action == "tree":
+        if not os.path.isdir(path):
+            return f"Not a directory: {path}"
+        lines = []
+        for root, dirs_list, files_list in os.walk(path):
+            depth = root.replace(path, "").count(os.sep)
+            if depth > 3:
+                dirs_list.clear()
+                continue
+            indent = "  " * depth
+            lines.append(f"{indent}{os.path.basename(root)}/")
+            for f in sorted(files_list)[:20]:
+                lines.append(f"{indent}  {f}")
+        return "\n".join(lines[:200]) or "(empty)"
+
+    elif action == "read":
+        if not os.path.isfile(path):
+            return f"Not a file: {path}"
+        if os.path.getsize(path) > 500_000:
+            return f"File too large ({os.path.getsize(path)} bytes). Max 500KB."
+        return open(path).read()
+
+    elif action == "write":
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with open(path, "w") as f:
+            f.write(content)
+        return f"✅ Written {len(content)} bytes to {path}"
+
+    return f"Unknown action: {action}. Use read, write, list, or tree."
+
+
 _ALL_TOOLS_RAW = [
     # --- Worker agent routing (5 tools → replaces ~40 direct tools) ---
     email_worker,
@@ -825,10 +960,8 @@ _ALL_TOOLS_RAW = [
     current_time,
     token_usage,
     activate_skill,
-    # --- TeamSnap ---
-    teamsnap_schedule,
-    teamsnap_roster,
-    teamsnap_availability,
+    # --- Filesystem ---
+    local_files,
 ]
 
 # Add supervisor tools (gather, read_email_thread, lookup_person, search_emails, show_context)
