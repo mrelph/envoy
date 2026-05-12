@@ -61,6 +61,7 @@ COMMANDS = {
     "/mwinit":    ("Re-authenticate Midway",               None),
     "/models":    ("Show/edit AI model assignments",       None),
     "/settings":  ("Edit personality and config",          None),
+    "/mcp":       ("Manage MCP servers (add/remove/list)", None),
     "/skills":    ("List configured skills",               None),
     "/backup":    ("Back up config, memory, and state",    None),
     "/doctor":    ("Health check — MCP, AWS, config, memory", None),
@@ -87,7 +88,7 @@ COMMAND_GROUPS = [
     ("Actions", ["/reply", "/ea", "/book", "/findtime", "/search", "/sharepoint"]),
     ("Reviews", ["/eod", "/weekly", "/cron"]),
     ("Heartbeat", ["/routine", "/routines", "/heartbeat", "/suggest-routines"]),
-    ("System", ["/doctor", "/status", "/mwinit", "/models", "/skills", "/settings", "/backup", "/help", "/exit"]),
+    ("System", ["/doctor", "/status", "/mwinit", "/models", "/mcp", "/skills", "/settings", "/backup", "/help", "/exit"]),
 ]
 
 
@@ -164,6 +165,10 @@ def dispatch(raw: str, agent):
     # --- System commands return None — caller handles ---
     if cmd in ("/help", "/status", "/settings", "/backup", "/exit"):
         return (cmd, False)  # signal to caller
+
+    if cmd == "/mcp":
+        from init_cmd import run_mcp
+        return (run_mcp(arg), True)
 
     # --- Freeform natural language ---
     return (agent(stripped), True)

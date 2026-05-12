@@ -70,6 +70,8 @@ _MCP_PARAM_DEFS = {
     "TeamSnap":   {"command": "node", "args": [os.path.join(_teamsnap_dir, "dist", "wrapper.js")], "env": _teamsnap_env},
     "SharePoint": {"command": "amazon-sharepoint-mcp", "args": [], "env": _node_quiet_env},
     "Kingpin":    {"command": "kingpin-mcp", "args": []},
+    "InstructAI": {"command": "instructai-mcp", "args": []},
+    "QuickSight": {"command": "amazon-quick-mcp", "args": []},
 }
 
 # Optional user overrides: ~/.envoy/mcp.json

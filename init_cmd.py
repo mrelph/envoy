@@ -403,3 +403,81 @@ I am your AI chief of staff — sharp, proactive, and always one step ahead.
         console.print(f"[green]✓ Created {PROCESS_FILE}[/green]")
 
     console.print(f"\n[bold]Setup complete.[/bold] Edit files anytime, use /settings, or just tell me to adjust.\n")
+
+
+# --- MCP server management ---
+
+_MCP_JSON = CONFIG_DIR / "mcp.json"
+
+
+def _load_user_mcps() -> dict:
+    if _MCP_JSON.exists():
+        return json.loads(_MCP_JSON.read_text())
+    return {}
+
+
+def _save_user_mcps(data: dict):
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    _MCP_JSON.write_text(json.dumps(data, indent=2) + "\n")
+
+
+def run_mcp(arg: str) -> str:
+    """Manage MCP servers: add, remove, list."""
+    parts = arg.strip().split(None, 1)
+    sub = parts[0].lower() if parts else ""
+    rest = parts[1].strip() if len(parts) > 1 else ""
+
+    if sub == "add":
+        return _mcp_add(rest)
+    elif sub == "remove":
+        return _mcp_remove(rest)
+    elif sub == "list" or not sub:
+        return _mcp_list()
+    else:
+        return "Usage: /mcp [list | add <name> <command> [args...] | remove <name>]"
+
+
+def _mcp_list() -> str:
+    from agents.base import _MCP_PARAM_DEFS
+    lines = ["**MCP Servers**\n"]
+    user_mcps = _load_user_mcps()
+    for name, defn in sorted(_MCP_PARAM_DEFS.items()):
+        src = "user" if name in user_mcps else "built-in"
+        cmd = defn["command"]
+        args = " ".join(defn.get("args", []))
+        lines.append(f"- **{name}** ({src}): `{cmd} {args}`".rstrip())
+    lines.append(f"\nConfig: `{_MCP_JSON}`")
+    return "\n".join(lines)
+
+
+def _mcp_add(rest: str) -> str:
+    if not rest:
+        return "Usage: /mcp add <name> <command> [args...]\nExample: /mcp add MyServer my-mcp-server --port 3000"
+    tokens = rest.split()
+    name = tokens[0]
+    if len(tokens) < 2:
+        return "Need at least a name and command. Example: /mcp add MyServer my-mcp-server"
+    command = tokens[1]
+    args = tokens[2:]
+    user_mcps = _load_user_mcps()
+    user_mcps[name] = {"command": command, "args": args}
+    _save_user_mcps(user_mcps)
+    # Hot-reload into running config
+    from agents.base import _MCP_PARAM_DEFS, _mcp_params_cache
+    _MCP_PARAM_DEFS[name] = {"command": command, "args": args}
+    _mcp_params_cache.pop(name, None)
+    return f"✅ Added MCP server **{name}**: `{command} {' '.join(args)}`\nSaved to `{_MCP_JSON}`. Active on next connection."
+
+
+def _mcp_remove(name: str) -> str:
+    if not name:
+        return "Usage: /mcp remove <name>"
+    user_mcps = _load_user_mcps()
+    if name not in user_mcps:
+        return f"⚠️ **{name}** is not in your user config (`{_MCP_JSON}`). Only user-added servers can be removed."
+    del user_mcps[name]
+    _save_user_mcps(user_mcps)
+    from agents.base import _MCP_PARAM_DEFS, _mcp_params_cache
+    _MCP_PARAM_DEFS.pop(name, None)
+    _mcp_params_cache.pop(name, None)
+    return f"✅ Removed MCP server **{name}** from `{_MCP_JSON}`."
