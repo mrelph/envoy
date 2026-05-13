@@ -159,9 +159,9 @@ def create(session_mgr=None):
 
     @tool
     def instructai_query(question: str, agent: str = "") -> str:
-        """Ask InstructAI a business question. Routes automatically or targets a specific agent.
+        """Ask InstructAI a business question. ALWAYS specify an agent for faster, more reliable results.
 
-        Available agents (use agent= to target directly):
+        Available agents (REQUIRED — pick the best match):
         - partner_goals: Partner Attached Launched ARR, GenAI/ML partner attach, goal attainment
         - par_intelliagent: Partner Attributed Revenue (PAR) — Sell-With/Through/To models
         - business_context: Partner xBR/WBR talk tracks, 10-Blocker, 6-Blocker frameworks
@@ -185,27 +185,38 @@ def create(session_mgr=None):
 
         Args:
             question: Business question (e.g. "What is GenAI partner attached LARR YTD?")
-            agent: Optional agent ID from list above. If empty, auto-routes to best agent.
+            agent: Agent ID from list above. ALWAYS specify one — auto-routing is slow and unreliable.
         """
         async def _fetch():
-            from agents.base import instructai
+            from agents.base import instructai, MCP_CALL_TIMEOUT
             async with instructai() as session:
-                if agent:
-                    tool_name = f"InstructAI___{agent}"
-                    result = await session.call_tool(tool_name, {"question": question})
-                else:
-                    result = await session.call_tool("InstructAI___question", {"question": question})
+                # Override timeout for InstructAI — backend queries are slow
+                session._timeout = max(session._timeout, 90)
+                tool_name = f"InstructAI___{agent}" if agent else "InstructAI___question"
+                result = await session.call_tool(tool_name, {"question": question})
                 return result.content[0].text if result.content else "No response from InstructAI"
         return run(_fetch())
 
     @tool
     def instructai_agents() -> str:
-        """List all available InstructAI agents and their capabilities."""
+        """List all available InstructAI agents and check your data access permissions."""
         async def _fetch():
             from agents.base import instructai
             async with instructai() as session:
+                session._timeout = max(session._timeout, 90)
+                # Get permissions first
+                perms = ""
+                try:
+                    perm_result = await session.call_tool("InstructAI___get_permissions", {})
+                    perms = perm_result.content[0].text if perm_result.content else ""
+                except Exception:
+                    pass
+                # Then list agents
                 result = await session.call_tool("InstructAI___list_agents", {})
-                return result.content[0].text if result.content else "No agents found"
+                agents_text = result.content[0].text if result.content else "No agents found"
+                if perms:
+                    return f"## Your Permissions\n{perms}\n\n## Available Agents\n{agents_text}"
+                return agents_text
         return run(_fetch())
 
     @tool
@@ -242,7 +253,7 @@ def create(session_mgr=None):
 
     return Agent(
         model=_model("medium"),
-        system_prompt="You are a research specialist. You look up people, Kingpin goals/projects/milestones (list, view, update, comment), wiki pages, Taskei tasks, Broadcast videos, resolve links, search the web, query business data via InstructAI, and query QuickSight dashboards/topics. Return data concisely. Use shared_context to post important findings for other workers.\n\nFor InstructAI, target the right agent directly when the domain is clear:\n- Revenue questions → asp_revenue_agent\n- Partner attach/goals → partner_goals\n- Partner revenue (PAR) → par_intelliagent\n- Partner pipeline → prtnr_pipeline_agent\n- Partner xBR/WBR prep → business_context\n- Current pipeline → pipeline_agent_spec\n- Pipeline week-over-week → pipeline_snapshot\n- Pipeline narrative report → pipeline_narrative\n- WWSO goals → wwso_output_goals\n- Marketplace GSS → mp_gss_revenue_agent\n- Marketplace renewals → mp_renewals_agent\n- Marketplace private offers → mppo_agent\n- Fund requests → funding_agent\n- Pipeline risk → alfred\n- Migrations → marco or postsales_migrations\n- SIFT field trends → sift\n- PSA/APOTech → apotech_psa_cont_arr, apotech_deswins_arr, apotech_deswins_tcv\nIf unsure, omit the agent param to auto-route.",
+        system_prompt="You are a research specialist. You look up people, Kingpin goals/projects/milestones (list, view, update, comment), wiki pages, Taskei tasks, Broadcast videos, resolve links, search the web, query business data via InstructAI, and query QuickSight dashboards/topics. Return data concisely. Use shared_context to post important findings for other workers.\n\nFor InstructAI, ALWAYS specify the agent parameter — never omit it. The auto-router is slow and unreliable. Pick the best match:\n- Revenue questions → asp_revenue_agent\n- Partner attach/goals → partner_goals\n- Partner revenue (PAR) → par_intelliagent\n- Partner pipeline → prtnr_pipeline_agent\n- Partner xBR/WBR prep → business_context\n- Current pipeline → pipeline_agent_spec\n- Pipeline week-over-week → pipeline_snapshot\n- Pipeline narrative report → pipeline_narrative\n- WWSO goals → wwso_output_goals\n- Marketplace GSS → mp_gss_revenue_agent\n- Marketplace renewals → mp_renewals_agent\n- Marketplace private offers → mppo_agent\n- Fund requests → funding_agent\n- Pipeline risk → alfred\n- Migrations → marco or postsales_migrations\n- SIFT field trends → sift\n- PSA/APOTech → apotech_psa_cont_arr, apotech_deswins_arr, apotech_deswins_tcv\nIf the question spans multiple domains, make separate calls to each relevant agent.",
         tools=[lookup_person, kingpin, kingpin_list, kingpin_update, kingpin_comment, kingpin_teams,
                wiki, taskei, broadcast, tiny, web_search, shared_context,
                instructai_query, instructai_agents, quicksight_query, quicksight_topics],
