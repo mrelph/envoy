@@ -57,6 +57,9 @@ COMMANDS = {
     "/routines":  ("View routines",                        None),
     "/heartbeat": ("Run heartbeat now",                    None),
     "/suggest-routines": ("AI-suggested routines",         None),
+    # Skills
+    "/build-skill":      ("Build a new skill from description", None),
+    "/suggest-skills":   ("AI-suggested skills from history",   None),
     # System (handled by UI layer, not dispatch)
     "/help":      ("Show available commands",              None),
     "/status":    ("Refresh MCP server status",            None),
@@ -90,7 +93,8 @@ COMMAND_GROUPS = [
     ("Actions", ["/reply", "/ea", "/book", "/findtime", "/search", "/sharepoint"]),
     ("Reviews", ["/eod", "/weekly", "/cron"]),
     ("Heartbeat", ["/routine", "/routines", "/heartbeat", "/suggest-routines"]),
-    ("System", ["/doctor", "/status", "/mwinit", "/models", "/mcp", "/skills", "/settings", "/backup", "/help", "/exit"]),
+    ("Skills", ["/build-skill", "/suggest-skills", "/skills"]),
+    ("System", ["/doctor", "/status", "/mwinit", "/models", "/mcp", "/settings", "/backup", "/help", "/exit"]),
 ]
 
 
@@ -127,6 +131,19 @@ def dispatch(raw: str, agent):
     if cmd == "/suggest-routines":
         from agents.heartbeat import suggest_routines
         return (suggest_routines(), True)
+
+    if cmd == "/build-skill":
+        from agents.skill_builder import generate_skill, save_skill
+        if not arg:
+            return ("Usage: /build-skill <description of what the skill should do>", True)
+        content, slug = generate_skill(arg)
+        path = save_skill(content, slug)
+        return (f"✅ Skill **{slug}** created → `{path}`\n\n{content}", True)
+
+    if cmd == "/suggest-skills":
+        from agents.skill_builder import suggest_skills
+        days = int(arg) if arg and arg.isdigit() else 14
+        return (suggest_skills(days), True)
 
     if cmd == "/doctor":
         return (_run_doctor(), True)

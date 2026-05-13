@@ -116,3 +116,13 @@ def get_skills() -> Dict[str, dict]:
 def reload_skills():
     global _skills_cache
     _skills_cache = None
+
+
+def save_skill_md(slug: str, content: str) -> Path:
+    """Save a SKILL.md to the user skills directory and reload cache."""
+    skill_dir = CONFIG_DIR / "skills" / slug
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    path = skill_dir / "SKILL.md"
+    path.write_text(content)
+    reload_skills()
+    return path

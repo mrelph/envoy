@@ -28,6 +28,7 @@ def _allowed_dirs() -> list:
 from agents import workflows as wf
 from agents.workers import get_worker
 from agents.skills import get_skills, activate as activate_skill_fn
+from agents import skill_builder
 
 _USER = os.environ.get('USER', '')
 
@@ -650,6 +651,32 @@ def activate_skill(name: str) -> str:
 
 
 @tool
+def build_skill(description: str, slug: str = "", tools: str = "") -> str:
+    """Build a new Agent Skill from a natural language description and save it.
+    The skill will be generated as a SKILL.md and installed to ~/.envoy/skills/.
+    IMPORTANT: Show the user the generated skill and confirm before saving.
+
+    Args:
+        description: What the skill should do (natural language)
+        slug: Optional short name (auto-generated if blank)
+        tools: Optional comma-separated worker tools the skill needs (default: email_worker, comms_worker)
+    """
+    content, slug = skill_builder.generate_skill(description, slug, tools)
+    path = skill_builder.save_skill(content, slug)
+    return f"✅ Skill created: **{slug}**\nSaved to: `{path}`\n\nActivate with: `/activate {slug}` or it will auto-activate when relevant.\n\n<details>\n{content}\n</details>"
+
+
+@tool
+def suggest_skills(days: int = 14) -> str:
+    """Analyze recent activity and memory to suggest new skills that could automate recurring patterns.
+
+    Args:
+        days: How many days of history to analyze (default 14)
+    """
+    return skill_builder.suggest_skills(days)
+
+
+@tool
 def observe_interaction(interaction_summary: str, outcome: str, domain: str = "") -> str:
     """Log an interaction observation — what happened and what the user preferred.
 
@@ -960,6 +987,8 @@ _ALL_TOOLS_RAW = [
     current_time,
     token_usage,
     activate_skill,
+    build_skill,
+    suggest_skills,
     # --- Filesystem ---
     local_files,
 ]
