@@ -66,6 +66,8 @@ Falls back to a plain text REPL if Textual is unavailable. Type `/help` for comm
 | `envoy catchup` | `/catchup` | PTO catch-up — email, Slack, calendar, to-dos |
 | `envoy yesterbox` | `/yesterbox` | Yesterday's DMs, prioritized |
 | — | `/briefing` | Full morning briefing (calendar + email + Slack) |
+| — | `/calendar` | Today's calendar |
+| — | `/week` | Calendar for the week ahead |
 | — | `/eod` | End-of-day summary |
 | — | `/weekly` | Weekly review |
 | — | `/todo` | Show pending action items |
@@ -73,7 +75,7 @@ Falls back to a plain text REPL if Textual is unavailable. Type `/help` for comm
 
 ### Agent Skills (extensible)
 
-Skills are loaded on demand via the [Agent Skills](https://agentskills.io) open standard. 8 bundled skills ship with Envoy:
+Skills are loaded on demand via the [Agent Skills](https://agentskills.io) open standard. 11 bundled skills ship with Envoy:
 
 | Skill | Slash | Description |
 |---|---|---|
@@ -84,9 +86,12 @@ Skills are loaded on demand via the [Agent Skills](https://agentskills.io) open 
 | `followup-tracker` | `/followup` | Unanswered sent emails |
 | `calendar-audit` | `/cal-audit` | Meeting load & focus time |
 | `slack-catchup` | `/slack-catchup` | Focused Slack catch-up |
+| `eod` | `/eod` | End-of-day summary |
+| `weekly` | `/weekly` | Weekly review |
+| `second-brain` | — | Long-term notes / personal knowledge |
 | `teamsnap` | — | Kids' sports schedules |
 
-Add your own: drop a folder with a `SKILL.md` into `~/.envoy/skills/` or `~/.agents/skills/`.
+Add your own: drop a folder with a `SKILL.md` into `~/.envoy/skills/` or `~/.agents/skills/`. Or build one from a description with `/build-skill <description>`, or run `/suggest-skills` to have Envoy mine your usage history for repeated patterns and propose skills.
 
 ### Additional Capabilities
 
@@ -99,7 +104,13 @@ Add your own: drop a folder with a `SKILL.md` into `~/.envoy/skills/` or `~/.age
 | `/search` | Search Slack history |
 | `/sharepoint` | Search or browse SharePoint/OneDrive |
 | `/cron` | Manage scheduled automation jobs |
-| `/models` | View/edit AI model assignments |
+| `/models` | View/edit AI model assignments (live Bedrock catalog) |
+| `/mcp` | Add/remove/list MCP servers (user overrides via `~/.envoy/mcp.json`) |
+| `/skills` | List configured skills |
+| `/build-skill` | Generate a new skill from a description |
+| `/suggest-skills` | AI-suggested skills mined from your usage history |
+| `/doctor` | Health check — MCP, AWS, config, memory |
+| `/backup` | Back up config, memory, and state |
 | `/settings` | Edit personality and config |
 | Export | Generate Word (.docx) and PowerPoint (.pptx) from any report |
 
@@ -243,7 +254,7 @@ The supervisor agent routes requests to specialized workers, each with focused t
 | Comms | Medium | Slack scan (with user resolution + thread context), send messages (DMs, channels, threaded replies), search, mark read, reactions, drafts, file downloads, Slack Lists, EA delegation | Slack messaging |
 | Calendar | Light | view, create (recurring, optional attendees, room resources), find times, book rooms, shared calendars | Calendar management |
 | Productivity | Medium | to-dos (list, add with due dates/importance, complete, update, delete), tickets, memory, cron, briefings | Task management |
-| Research | Medium | Phonetool, Kingpin, Wiki, Taskei, Broadcast, web search (Brave) | Internal & external lookups |
+| Research | Medium | Phonetool, Kingpin, Wiki, Taskei, Broadcast, web search (Brave), InstructAI (revenue/pipeline/partners), QuickSight Q (dashboards/topics) | Internal & external lookups |
 | SharePoint | Medium | search, files, read, write, lists, analyze | SharePoint/OneDrive |
 
 ### Supervisor Tools
@@ -270,12 +281,18 @@ When gathering data from multiple sources, Envoy automatically extracts entities
 |---|---|
 | `builder-mcp` | Phonetool, Kingpin, Wiki, Taskei, Broadcast, Meetings |
 | `aws-outlook-mcp` | Email, calendar, to-do |
-| `slack-mcp` | Slack channels, DMs, search |
+| `slack-mcp` | Slack channels, DMs, search (with `ai-community-slack-mcp` fallback) |
 | `amazon-sharepoint-mcp` | SharePoint/OneDrive files and lists |
+| `kingpin-mcp` | Kingpin goals/projects/milestones |
+| `instructai-mcp` | InstructAI business questions (revenue, pipeline, partners, marketplace) |
+| `amazon-quick-mcp` | Amazon QuickSight Q (dashboards and topics) |
+| `TeamSnap` (local) | Kids' sports schedules |
+
+Add your own MCP servers via `/mcp add` or by editing `~/.envoy/mcp.json` (standard `mcpServers` shape — entries override built-ins by name).
 
 ### AI Models
 
-Configurable per tier via `/models` or `~/.envoy/models.json`:
+Configurable per tier via `/models` (interactive, live Bedrock catalog) or by editing `~/.envoy/models.json`. After a `/models` change, `reload_agent()` rebuilds the supervisor on the next turn so new assignments take effect immediately. Bedrock calls auto-retry once on `ExpiredTokenException` after re-reading `.env`, so refreshed AWS creds pick up without restarting.
 
 | Tier | Used For | Default |
 |---|---|---|
@@ -302,6 +319,15 @@ Skills follow the [Agent Skills](https://agentskills.io) open standard:
 - Progressive disclosure: only name + description loaded at startup (~100 tokens/skill)
 - Full instructions loaded on demand via `activate_skill` tool
 - Cross-compatible with Claude Code, Kiro, and other skills-compatible agents
+- Generate new skills from a one-line description with `/build-skill`, or have Envoy mine your history with `/suggest-skills`
+
+### Active Learning Loop
+
+Envoy quietly improves itself between turns (`agents/learning.py`):
+- **Reflection** — every meaningful interaction is logged to memory (no AI call, just an append)
+- **Correction detection** — when you say "no", "actually", "don't do that", Envoy detects it and saves the correction to `process.md` so the same mistake isn't repeated
+- **Weekly self-analysis** — heartbeat triggers an AI pass over recent interactions to spot patterns and auto-tune `process.md`
+- **Skill suggestions** — repeated multi-step patterns surface as candidates for new skills via `/suggest-skills`
 
 ### Security
 
@@ -317,17 +343,19 @@ Skills follow the [Agent Skills](https://agentskills.io) open standard:
 envoy/
 ├── envoy                    # Entrypoint (auto-installs venv)
 ├── cli.py                   # CLI commands → agent prompts
-├── agent.py                 # Strands agent factory + system prompt
+├── agent.py                 # Strands agent factory + system prompt + reload_agent()
 ├── tui.py                   # Textual TUI (default interface)
 ├── tui.css                  # TUI stylesheet
-├── dispatch.py              # Shared command dispatch (TUI + REPL)
+├── dispatch.py              # Shared command dispatch (TUI + REPL) + learning hooks
 ├── repl.py                  # Plain text REPL fallback
 ├── ui.py                    # MCP health checks + model catalog
 ├── tools.py                 # Strands @tool definitions + worker routing
 ├── supervisor.py            # Parallel data gathering + cross-referencing
+├── init_cmd.py              # `envoy init` + `/mcp` interactive setup
+├── envoy_logger.py          # Structured JSON logging
 ├── templates/
 │   ├── commands.md          # Core command prompts
-│   ├── skills/              # Bundled Agent Skills (8 skills)
+│   ├── skills/              # Bundled Agent Skills (11 skills)
 │   └── soul.md / envoy.md / process.md
 ├── agents/
 │   ├── base.py              # MCP connections (persistent), Bedrock client, run() helper
@@ -337,9 +365,11 @@ envoy/
 │   │   ├── comms_worker.py  # Slack + EA delegation worker
 │   │   ├── calendar_worker.py   # Calendar management worker
 │   │   ├── productivity_worker.py  # To-dos, tickets, memory, cron
-│   │   ├── research_worker.py     # Phonetool, Kingpin, Wiki, web search
+│   │   ├── research_worker.py     # Phonetool, Kingpin, Wiki, web search, InstructAI, QuickSight
 │   │   └── sharepoint_worker.py   # SharePoint/OneDrive worker
 │   ├── skills.py            # Agent Skills loader (agentskills.io)
+│   ├── skill_builder.py     # /build-skill + /suggest-skills generators
+│   ├── learning.py          # Active learning loop (reflect, correction, self-analysis)
 │   ├── workflows.py         # Compound commands (digest, catchup, etc.)
 │   ├── heartbeat.py         # Autonomous heartbeat + routines
 │   ├── watcher.py           # Long-running background watcher (envoy watch)
@@ -351,7 +381,7 @@ envoy/
 │   ├── sharepoint_agent.py  # SharePoint/OneDrive domain agent
 │   ├── tickets.py           # Tickets domain agent
 │   ├── memory2.py           # Entity-aware persistent memory
-│   ├── observer.py          # Observer/learning agent
+│   ├── observer.py          # Backward-compat shim — redirects to memory2
 │   ├── internal.py          # Internal websites (Kingpin, Wiki, Taskei)
 │   ├── export.py            # Word/PowerPoint export
 │   └── teamsnap_agent.py    # TeamSnap integration

@@ -5,10 +5,14 @@
 - **Python 3.7+** — `python3 --version`
 - **AWS credentials** — for AI features (Amazon Bedrock / Claude)
 - **MCP servers** installed and in PATH:
-  - `builder-mcp` — Phonetool access
+  - `builder-mcp` — Phonetool, Wiki, Taskei, Broadcast
   - `aws-outlook-mcp` — Outlook email, calendar, to-do
-  - `slack-mcp` — Slack integration (optional)
+  - `slack-mcp` — Slack integration (optional; `ai-community-slack-mcp` works as fallback)
   - `amazon-sharepoint-mcp` — SharePoint/OneDrive (optional)
+  - `kingpin-mcp` — Kingpin goals/projects/milestones (optional)
+  - `instructai-mcp` — InstructAI business queries (optional)
+  - `amazon-quick-mcp` — QuickSight Q (optional)
+  - Add custom servers via `/mcp add` or `~/.envoy/mcp.json`
 - **Midway auth** — `mwinit` (auto-refreshed on each run)
 
 ## Install
@@ -78,7 +82,8 @@ Once installed, Envoy provides full access to:
 - **Calendar** — view, create (recurring, optional attendees, room resources, reminders), shared calendars, find times, book rooms
 - **To-Do** — list, add (with due dates/importance/reminders), complete, update, delete, subtasks
 - **SharePoint** — search, browse, read, write, lists
-- **Research** — Phonetool, Kingpin, Wiki, Taskei, Broadcast
+- **Research** — Phonetool, Kingpin, Wiki, Taskei, Broadcast, web search, InstructAI (revenue/pipeline/partners), QuickSight Q (dashboards/topics)
+- **Skills** — bundled Agent Skills + on-demand skill creation via `/build-skill` and `/suggest-skills`
 
 ## Updating
 

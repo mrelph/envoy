@@ -36,6 +36,12 @@ Prerequisites: Python 3.7+, `builder-mcp`, `aws-outlook-mcp` in PATH, AWS creden
 /todo              Show pending action items
 /eod               End-of-day summary
 /weekly            Weekly review
+/build-skill <description>   Generate a new skill on the fly
+/suggest-skills    AI-suggested skills mined from your usage history
+/skills            List configured skills
+/mcp               Add/remove/list MCP servers
+/doctor            Health check (MCP, AWS, config, memory)
+/backup            Back up config, memory, and state
 /help              All commands
 ```
 
@@ -97,6 +103,8 @@ envoy cron add --name weekly-digest \
 ## Extending with Skills
 
 Drop a folder with a `SKILL.md` into `~/.envoy/skills/` — Envoy picks it up automatically. See [agentskills.io](https://agentskills.io) for the format spec.
+
+Or generate one on the fly: `/build-skill summarize my open SIMs at end of day` writes a new SKILL.md into `~/.envoy/skills/`. Run `/suggest-skills` periodically to have Envoy mine your usage history for repeated multi-step patterns and propose skills.
 
 ## Troubleshooting
 
