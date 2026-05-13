@@ -178,17 +178,41 @@ class StatusBar(Static):
         except Exception:
             pass
 
+        # Get session stats from app
+        ttft_ms = None
+        session_tokens = 0
+        try:
+            app = self.app
+            ttft_ms = app._last_ttft_ms
+            session_tokens = app._session_tokens
+        except Exception:
+            pass
+
         t = Text()
         t.append(f" {alias}", style="bold cyan")
         t.append(f"  {now}", style="dim")
         if model:
             t.append("  │  ", style="dim")
             t.append(f"🧠 {model}", style="italic")
+        # TTFT
+        if ttft_ms is not None:
+            t.append("  │  ", style="dim")
+            if ttft_ms >= 1000:
+                t.append(f"⚡{ttft_ms / 1000:.1f}s", style="yellow")
+            else:
+                t.append(f"⚡{ttft_ms}ms", style="green")
+        # Session tokens
+        if session_tokens > 0:
+            t.append("  │  ", style="dim")
+            if session_tokens >= 1_000_000:
+                t.append(f"🪙 {session_tokens / 1_000_000:.1f}M", style="dim")
+            elif session_tokens >= 1_000:
+                t.append(f"🪙 {session_tokens / 1_000:.0f}K", style="dim")
+            else:
+                t.append(f"🪙 {session_tokens}", style="dim")
         t.append("  │  ", style="dim")
         t.append("/help", style="bold green")
-        t.append(" commands  ", style="dim")
-        t.append("ctrl+y", style="bold")
-        t.append(" copy  ", style="dim")
+        t.append("  ", style="dim")
         t.append("ctrl+c", style="bold")
         t.append(" quit", style="dim")
         return t
@@ -227,6 +251,9 @@ class EnvoyApp(App):
         self._history: list[str] = []
         self._history_pos: int | None = None  # None = not browsing; else index into _history
         self._history_draft: str = ""          # current typed text, restored when user walks past end
+        # Session stats for status bar
+        self._session_tokens: int = 0
+        self._last_ttft_ms: int | None = None
 
     def compose(self) -> ComposeResult:
         yield MCPBar(id="mcp-bar")
@@ -350,6 +377,8 @@ class EnvoyApp(App):
         error = None
         result = None
         handled = True
+        import time as _time
+        _t0 = _time.time()
         try:
             result, handled = dispatch(raw, self._agent)
         except Exception as e:
@@ -357,6 +386,26 @@ class EnvoyApp(App):
         if worker.is_cancelled:
             self._busy = False
             return
+
+        # Extract metrics from AgentResult
+        try:
+            from strands.agent.agent_result import AgentResult
+            if isinstance(result, AgentResult) and result.metrics:
+                m = result.metrics
+                inv = m.latest_agent_invocation
+                if inv:
+                    self._session_tokens += inv.usage.get("totalTokens", 0)
+                # TTFT: use first cycle duration of this invocation
+                if inv and inv.cycles and m.cycle_durations:
+                    n_cycles = len(inv.cycles)
+                    idx = len(m.cycle_durations) - n_cycles
+                    if idx >= 0:
+                        self._last_ttft_ms = int(m.cycle_durations[idx] * 1000)
+                elif not error:
+                    # Fallback: wall-clock time for the whole call
+                    self._last_ttft_ms = int((_time.time() - _t0) * 1000)
+        except Exception:
+            pass
 
         def _show():
             # Stop spinner
@@ -386,6 +435,8 @@ class EnvoyApp(App):
 
             # Toast notification
             self.notify(f"✓ {hint} done", timeout=3)
+            # Refresh status bar to show updated TTFT/tokens
+            self.query_one("#status-bar", StatusBar).refresh()
 
         self.app.call_from_thread(_show)
 

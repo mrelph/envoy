@@ -389,12 +389,17 @@ async def send_dm(recipient: str, message: str, thread_ts: str = "") -> str:
                 users = [u.strip() for u in recipient.split(",") if u.strip()]
                 dm_result = await session.call_tool("open_conversation", arguments={"users": users})
                 dm_data = json.loads(dm_result.content[0].text) if dm_result.content else {}
-                channel_id = dm_data.get("channelId") or dm_data.get("channel", {}).get("id")
+                # slack-mcp open_dm_channel returns {"id": "D..."} or {"channel": {"id": "D..."}}
+                channel_id = (dm_data.get("channelId")
+                              or dm_data.get("id")
+                              or (dm_data.get("channel", {}).get("id")
+                                  if isinstance(dm_data.get("channel"), dict)
+                                  else dm_data.get("channel")))
             if not channel_id:
                 raise Exception("Could not open DM channel")
-            args = {"channelId": channel_id, "text": tagged_msg}
+            args = {"channel": channel_id, "text": tagged_msg}
             if thread_ts:
-                args["threadTs"] = thread_ts
+                args["replyTo"] = thread_ts
             await session.call_tool("post_message", arguments=args)
             log_sent(track_tag, channel_id, recipient, "slack", message)
             return f"✅ Sent to {recipient} ({track_tag}):\n\n> {message}"
