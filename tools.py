@@ -821,7 +821,8 @@ def research_worker(request: str) -> str:
     """Delegate research and lookup tasks: Phonetool profiles, Kingpin goals/projects/milestones
     (view, list, filter by owner/team/year/status, update status, add comments, list teams),
     Wiki pages, Taskei tasks, Broadcast videos, tiny links, web search,
-    InstructAI business queries (revenue, pipeline, partner goals, marketplace, funding, migrations),
+    InstructAI business queries (21 specialized agents: revenue, pipeline, partner goals/attach/PAR,
+    marketplace GSS/renewals/private offers, funding, migrations, SIFT, PSA/APOTech, pipeline risk),
     QuickSight dashboards and data topics (query data, list topics, GenAI trends, attach rates).
     Use for ANY internal lookup, external web search, business data query, or dashboard request.
 

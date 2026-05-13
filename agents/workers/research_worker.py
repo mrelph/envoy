@@ -158,17 +158,54 @@ def create(session_mgr=None):
         return read_context(key)
 
     @tool
-    def instructai_query(question: str) -> str:
-        """Ask InstructAI a business question — routes to the best agent for revenue, pipeline,
-        partner goals, marketplace, funding, migrations, and more.
+    def instructai_query(question: str, agent: str = "") -> str:
+        """Ask InstructAI a business question. Routes automatically or targets a specific agent.
+
+        Available agents (use agent= to target directly):
+        - partner_goals: Partner Attached Launched ARR, GenAI/ML partner attach, goal attainment
+        - par_intelliagent: Partner Attributed Revenue (PAR) — Sell-With/Through/To models
+        - business_context: Partner xBR/WBR talk tracks, 10-Blocker, 6-Blocker frameworks
+        - prtnr_pipeline_agent: Partner pipeline KPI — AO/PO Launched ARR by sales hierarchy
+        - pipeline_agent_spec: Current open/created/closed pipeline (ad-hoc, real-time)
+        - pipeline_snapshot: Weekly pipeline changes (Sunday snapshots, WoW movement)
+        - pipeline_narrative: Weekly leadership pipeline report (auto-generated prose)
+        - asp_revenue_agent: GAAP sales revenue — product/sales hierarchy, YoY/QoQ/MoM
+        - wwso_output_goals: WWSO specialist revenue & pipeline goal attainment (20+ domains)
+        - mp_gss_revenue_agent: Marketplace GSS & listing fee revenue
+        - mp_renewals_agent: Marketplace renewals & retention rates
+        - mppo_agent: Marketplace Private Offers — TCV, GSS, NFR
+        - funding_agent: Partner fund requests (APFP, SFDC, Approvals)
+        - alfred: Pipeline risk — at-risk opportunities likely to stall/close lost
+        - marco: Migration acceleration — stalled migrations, accelerator recommendations
+        - postsales_migrations: Post-sales migration metrics (realized revenue, velocity)
+        - sift: SIFT (Sales Inputs & Field Trends) analysis
+        - apotech_psa_cont_arr: PSA Contributed ARR (launched + pipeline)
+        - apotech_deswins_arr: PSA Design Wins ARR
+        - apotech_deswins_tcv: PSA Design Wins Marketplace TCV
+
         Args:
-            question: Business question (e.g. "What are top partners by revenue?")
+            question: Business question (e.g. "What is GenAI partner attached LARR YTD?")
+            agent: Optional agent ID from list above. If empty, auto-routes to best agent.
         """
         async def _fetch():
             from agents.base import instructai
             async with instructai() as session:
-                result = await session.call_tool("InstructAI___question", {"question": question})
+                if agent:
+                    tool_name = f"InstructAI___{agent}"
+                    result = await session.call_tool(tool_name, {"question": question})
+                else:
+                    result = await session.call_tool("InstructAI___question", {"question": question})
                 return result.content[0].text if result.content else "No response from InstructAI"
+        return run(_fetch())
+
+    @tool
+    def instructai_agents() -> str:
+        """List all available InstructAI agents and their capabilities."""
+        async def _fetch():
+            from agents.base import instructai
+            async with instructai() as session:
+                result = await session.call_tool("InstructAI___list_agents", {})
+                return result.content[0].text if result.content else "No agents found"
         return run(_fetch())
 
     @tool
@@ -205,10 +242,10 @@ def create(session_mgr=None):
 
     return Agent(
         model=_model("medium"),
-        system_prompt="You are a research specialist. You look up people, Kingpin goals/projects/milestones (list, view, update, comment), wiki pages, Taskei tasks, Broadcast videos, resolve links, search the web, query business data via InstructAI (revenue, pipeline, partners, marketplace), and query QuickSight dashboards/topics. Return data concisely. Use shared_context to post important findings for other workers.",
+        system_prompt="You are a research specialist. You look up people, Kingpin goals/projects/milestones (list, view, update, comment), wiki pages, Taskei tasks, Broadcast videos, resolve links, search the web, query business data via InstructAI, and query QuickSight dashboards/topics. Return data concisely. Use shared_context to post important findings for other workers.\n\nFor InstructAI, target the right agent directly when the domain is clear:\n- Revenue questions → asp_revenue_agent\n- Partner attach/goals → partner_goals\n- Partner revenue (PAR) → par_intelliagent\n- Partner pipeline → prtnr_pipeline_agent\n- Partner xBR/WBR prep → business_context\n- Current pipeline → pipeline_agent_spec\n- Pipeline week-over-week → pipeline_snapshot\n- Pipeline narrative report → pipeline_narrative\n- WWSO goals → wwso_output_goals\n- Marketplace GSS → mp_gss_revenue_agent\n- Marketplace renewals → mp_renewals_agent\n- Marketplace private offers → mppo_agent\n- Fund requests → funding_agent\n- Pipeline risk → alfred\n- Migrations → marco or postsales_migrations\n- SIFT field trends → sift\n- PSA/APOTech → apotech_psa_cont_arr, apotech_deswins_arr, apotech_deswins_tcv\nIf unsure, omit the agent param to auto-route.",
         tools=[lookup_person, kingpin, kingpin_list, kingpin_update, kingpin_comment, kingpin_teams,
                wiki, taskei, broadcast, tiny, web_search, shared_context,
-               instructai_query, quicksight_query, quicksight_topics],
+               instructai_query, instructai_agents, quicksight_query, quicksight_topics],
         callback_handler=None,
         **({"session_manager": session_mgr} if session_mgr else {}),
     )

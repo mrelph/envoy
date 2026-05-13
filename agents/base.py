@@ -116,7 +116,7 @@ def __getattr__(name):
 
 # --- MCP context managers ---
 
-MCP_CALL_TIMEOUT = 30  # seconds per MCP tool call
+MCP_CALL_TIMEOUT = 60  # seconds per MCP tool call
 
 
 import re as _re
@@ -553,17 +553,36 @@ async def mcp_batch(server_name: str, calls: list) -> list:
 
 # --- Connection testing ---
 
-_session_fns = {"Outlook": None, "Phonetool": None, "Slack": None, "TeamSnap": None, "SharePoint": None, "Kingpin": None}
+# Session factories for built-in servers. User-added servers (via /mcp add) are
+# resolved dynamically below from _MCP_PARAM_DEFS.
+_BUILTIN_SESSION_FNS = {
+    "Outlook": outlook,
+    "Phonetool": builder,
+    "Slack": slack,
+    "TeamSnap": teamsnap,
+    "SharePoint": sharepoint,
+    "Kingpin": kingpin,
+    "InstructAI": instructai,
+    "QuickSight": quicksight,
+}
 
 def check_mcp_connections() -> Dict[str, bool]:
     """Test MCP server connectivity using persistent sessions.
-    
+
     This warms up the connection pool — subsequent calls reuse these sessions.
+    Covers every server currently registered in _MCP_PARAM_DEFS, including
+    user-added servers from ~/.envoy/mcp.json.
     """
-    # Lazy-bind session functions (avoids circular import at module level)
-    if _session_fns["Outlook"] is None:
-        _session_fns.update({"Outlook": outlook, "Phonetool": builder, "Slack": slack,
-                             "TeamSnap": teamsnap, "SharePoint": sharepoint, "Kingpin": kingpin})
+    # Build the live session map from _MCP_PARAM_DEFS so newly-added servers
+    # (InstructAI, QuickSight, /mcp add ...) are all covered automatically.
+    _session_fns = {}
+    for name in _MCP_PARAM_DEFS:
+        if name.endswith("_fallback"):
+            continue  # skip aliased fallbacks (e.g. Slack_fallback)
+        fn = _BUILTIN_SESSION_FNS.get(name)
+        if fn is None:
+            fn = _mcp_session(name)  # lazily make a factory for user-added servers
+        _session_fns[name] = fn
 
     async def _test_one(name, session_fn):
         try:
