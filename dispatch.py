@@ -73,8 +73,9 @@ COMMANDS = {
     "/exit":      ("Exit Envoy",                           None),
 }
 
-# Commands that need an {arg} and should prompt if missing
-ARG_COMMANDS = {"/prep-1on1", "/prep-meeting", "/reply", "/ea", "/book", "/search", "/sharepoint"}
+# Commands that need an {arg} and should prompt if missing.
+# Note: /prep-meeting is intentionally NOT here — it defaults to "my next meeting".
+ARG_COMMANDS = {"/prep-1on1", "/reply", "/ea", "/book", "/search", "/sharepoint"}
 
 # Default days per command
 DEFAULT_DAYS = {
@@ -176,18 +177,22 @@ def dispatch(raw: str, agent):
     if entry and entry[1]:
         template = entry[1]
         days = int(arg) if arg.isdigit() else DEFAULT_DAYS.get(cmd, 7)
-        if not arg:
-            arg = "my next meeting" if cmd == "/prep-meeting" else ""
+        if not arg and cmd == "/prep-meeting":
+            arg = "my next meeting"
         prompt = template.format(days=days, arg=arg)
         return (agent(prompt), True)
 
     # --- System commands return None — caller handles ---
-    if cmd in ("/help", "/status", "/settings", "/backup", "/exit"):
+    if cmd in ("/help", "/status", "/settings", "/backup", "/exit", "/mwinit"):
         return (cmd, False)  # signal to caller
 
     if cmd == "/mcp":
         from init_cmd import run_mcp
         return (run_mcp(arg), True)
+
+    # --- Unknown slash command: don't burn LLM tokens on a typo ---
+    if cmd.startswith("/"):
+        return (f"Unknown command: {cmd}. Type /help to see available commands.", True)
 
     # --- Freeform natural language ---
     return (agent(stripped), True)

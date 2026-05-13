@@ -28,7 +28,7 @@ envoy/
 ├── envoy_logger.py          # Structured JSON logging
 ├── templates/
 │   ├── commands.md          # Core command prompts (editable)
-│   ├── skills/              # Bundled Agent Skills (8 skills)
+│   ├── skills/              # Bundled Agent Skills (11 skills)
 │   └── soul.md / envoy.md / process.md  # Config templates
 ├── agents/
 │   ├── base.py              # MCP connections (persistent), Bedrock client, run() helper
@@ -38,11 +38,14 @@ envoy/
 │   │   ├── comms_worker.py  # Slack + EA delegation worker
 │   │   ├── calendar_worker.py   # Calendar management worker
 │   │   ├── productivity_worker.py  # To-dos, tickets, memory, cron
-│   │   ├── research_worker.py     # Phonetool, Kingpin, Wiki, web search
+│   │   ├── research_worker.py     # Phonetool, Kingpin, Wiki, web search, InstructAI, QuickSight
 │   │   └── sharepoint_worker.py   # SharePoint/OneDrive worker
 │   ├── skills.py            # Agent Skills loader (agentskills.io)
+│   ├── skill_builder.py     # /build-skill + /suggest-skills generators
+│   ├── learning.py          # Active learning loop (reflection, correction, self-analysis)
 │   ├── workflows.py         # Compound commands (digest, catchup, etc.)
 │   ├── heartbeat.py         # Autonomous heartbeat + routines
+│   ├── watcher.py           # Long-running background watcher (envoy watch)
 │   ├── email.py             # Email: send/reply/draft (CC/BCC), read full threads, classify, flag, attachments, contacts
 │   ├── slack_agent.py       # Slack: scan (user resolution + threads), send (DM/channel/threaded), reactions, drafts, files, Lists
 │   ├── calendar.py          # Calendar: view, create (recurring/optional attendees/resources), shared calendars
@@ -51,7 +54,7 @@ envoy/
 │   ├── sharepoint_agent.py  # SharePoint/OneDrive domain agent
 │   ├── tickets.py           # Tickets domain agent
 │   ├── memory2.py           # Entity-aware persistent memory
-│   ├── observer.py          # Observer/learning agent
+│   ├── observer.py          # Backward-compat shim — redirects to memory2.remember()
 │   ├── internal.py          # Internal websites (Kingpin, Wiki, Taskei)
 │   ├── export.py            # Word/PowerPoint export
 │   └── teamsnap_agent.py    # TeamSnap integration
@@ -76,7 +79,7 @@ envoy/
 | Comms | Medium | Slack scan (user ID resolution + thread replies), send (DM/channel/threaded), search, mark read, reactions, drafts, file downloads, Slack Lists, EA delegation | Slack messaging |
 | Calendar | Light | view, create (recurring, optional attendees, room resources, reminders, showAs, all-day), find times, book rooms, shared calendars | Calendar management |
 | Productivity | Medium | to-dos (list, add with due dates/importance/reminders, complete, update, delete), tickets, memory, cron, briefings | Task management |
-| Research | Light | Phonetool, Kingpin, Wiki, Taskei, Broadcast | Internal lookups |
+| Research | Medium | Phonetool, Kingpin, Wiki, Taskei, Broadcast, web search (Brave), InstructAI, QuickSight Q | Internal & external lookups |
 | SharePoint | Medium | search, files, read, write, lists, analyze | SharePoint/OneDrive |
 
 ### MCP Servers
@@ -92,10 +95,16 @@ async with outlook() as session:
 
 | Server | Context Manager | Purpose |
 |---|---|---|
-| `builder-mcp` | `builder()` | Phonetool, Kingpin, Wiki, Taskei |
+| `builder-mcp` | `builder()` | Phonetool, Wiki, Taskei, Broadcast |
 | `aws-outlook-mcp` | `outlook()` | Email, calendar, to-do |
-| `ai-community-slack-mcp` | `slack()` | Slack channels, DMs |
+| `slack-mcp` | `slack()` | Slack channels, DMs (with `ai-community-slack-mcp` fallback) |
 | `amazon-sharepoint-mcp` | `sharepoint()` | SharePoint/OneDrive |
+| `kingpin-mcp` | `kingpin()` | Kingpin goals, projects, milestones |
+| `instructai-mcp` | `instructai()` | InstructAI business questions |
+| `amazon-quick-mcp` | `quicksight()` | QuickSight Q dashboards/topics |
+| `node ~/TeamSnapMCP/dist/wrapper.js` | `teamsnap()` | TeamSnap (kids' sports) |
+
+User overrides for any MCP server live in `~/.envoy/mcp.json` (standard `mcpServers` shape — entries override built-ins by name, new names are added). Manage interactively with `/mcp add|remove|list`.
 
 ### MCP Capability Coverage
 
@@ -157,14 +166,15 @@ Bundled skills live in `templates/skills/` and are copied to `~/.envoy/skills/` 
 
 1. Add the prompt template to `templates/commands.md`
 2. Add the CLI subcommand in `cli.py`
-3. Add the slash command in `repl.py`
+3. Add the slash command to the `COMMANDS` dict in `dispatch.py` (and to `COMMAND_GROUPS` for `/help`)
 4. If it needs a compound workflow, add it to `agents/workflows.py`
 
 ### Adding a new skill
 
 1. Create `templates/skills/my-skill/SKILL.md` with YAML frontmatter (`name`, `description`) and markdown instructions
 2. The skill is auto-discovered and available via `activate_skill`
-3. Add a slash command mapping in `repl.py` if desired
+3. Add a slash command mapping in `dispatch.py` if desired
+4. Or just run `/build-skill <description>` inside Envoy and let `agents/skill_builder.py` generate one for you
 
 ### Adding a new worker agent
 
@@ -204,6 +214,22 @@ Bundled skills live in `templates/skills/` and are copied to `~/.envoy/skills/` 
 | `python-docx` | Word document generation |
 | `python-pptx` | PowerPoint generation |
 | `markdown` | Markdown processing |
+
+## Tests
+
+Unit tests live under `tests/unit/`. They stub out `strands` and `mcp` at import time so no MCP servers, AWS creds, or network access are required.
+
+```bash
+./venv/bin/pytest tests/ -q              # full suite
+./venv/bin/pytest tests/unit/test_dispatch.py -v   # one file
+```
+
+Shared fixtures (`tests/conftest.py`):
+- `envoy_home` — redirects `$HOME` so `~/.envoy` writes land in a tmpdir
+- `fake_mcp_result(value)` — builds a fake MCP `CallToolResult` from a Python value
+- `no_ai` — stubs `invoke_ai` across `agents.base` and re-exporting modules; returns a recorder list
+
+Coverage is concentrated on parsing, dispatch, cron validation, memory, learning, skills, and supervisor context. AI calls and MCP I/O are intentionally not exercised — those are integration concerns.
 
 ## Code Style
 
