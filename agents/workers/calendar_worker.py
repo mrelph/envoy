@@ -9,16 +9,21 @@ def create(session_mgr=None):
     from agents import calendar as cal_mod
 
     @tool
-    def view_calendar(view_type: str = "day", days_ahead: int = 1, calendar_id: str = "") -> str:
+    def view_calendar(view_type: str = "day", days_ahead: int = 1, start_date: str = "", calendar_id: str = "") -> str:
         """View calendar with AI briefing.
         Args:
             view_type: 'day' or 'week'
-            days_ahead: Days to look ahead
+            days_ahead: Days to look ahead (used with 'week' view for end_date)
+            start_date: Start date in MM-DD-YYYY format (empty = today). Use this to view future/past dates.
             calendar_id: Shared calendar ID (empty = your calendar)
         """
         if calendar_id:
-            return run(cal_mod.view_shared_calendar(calendar_id, "", days_ahead))
-        return run(cal_mod.review(view_type, days_ahead=days_ahead))
+            return run(cal_mod.view_shared_calendar(calendar_id, start_date, days_ahead))
+        from agents.fetch import fetch_calendar
+        raw, xref = run(fetch_calendar(days=days_ahead, start_date=start_date))
+        if raw and not str(raw).startswith("No calendar"):
+            return raw
+        return str(raw)
 
     @tool
     def create_event(subject: str, start: str, end: str,

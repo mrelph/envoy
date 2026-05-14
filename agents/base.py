@@ -763,6 +763,15 @@ def _invoke_ai_once(prompt: str, max_tokens: int, tier: str) -> str:
     except Exception:
         pass
 
+    # Budget check before calling
+    try:
+        from agents.budget import get_budget
+        budget = get_budget()
+        if budget.exceeded:
+            raise RuntimeError(budget.warning_message())
+    except ImportError:
+        pass
+
     start = time.monotonic()
     try:
         response = bedrock.converse(
@@ -804,6 +813,12 @@ def _invoke_ai_once(prompt: str, max_tokens: int, tier: str) -> str:
                         model_id=model_id, response_length=len(result_text),
                         duration_ms=round(elapsed_ms, 1),
                         input_tokens=in_tok, output_tokens=out_tok)
+            # Record in per-request budget
+            try:
+                from agents.budget import get_budget
+                get_budget().record_ai_call(in_tok, out_tok, tier)
+            except Exception:
+                pass
         except Exception:
             pass
         return result_text

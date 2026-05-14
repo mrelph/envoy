@@ -744,6 +744,7 @@ def recall_memory(query: str = "", limit: int = 20) -> str:
 
 def _delegate(worker_name: str, request: str, _retries: int = 1) -> str:
     """Route to a worker agent with retry and graceful degradation."""
+    from agents.workers.result import WorkerResult
     import sys
     last_err = None
     for attempt in range(_retries + 1):
@@ -841,6 +842,23 @@ def sharepoint_worker(request: str) -> str:
         request: Natural language description of the SharePoint task
     """
     return _delegate("sharepoint", request)
+
+
+@tool
+def coding_worker(task: str, working_directory: str = "") -> str:
+    """Delegate coding and development tasks to an autonomous coding agent (Claude Code or Kiro).
+    The agent runs to completion — it can read/write files, run commands, run tests, and iterate.
+    Use for: writing code, fixing bugs, refactoring, creating scripts, code review, generating
+    config files, or any software development task.
+
+    Args:
+        task: Detailed description of the coding task to accomplish
+        working_directory: Directory to work in (default: current directory)
+    """
+    request = task
+    if working_directory:
+        request = f"[working_directory={working_directory}] {task}"
+    return _delegate("coding", request)
 
 
 # --- Export tools (stay on supervisor — they take content from other tools) ---
@@ -958,6 +976,7 @@ _ALL_TOOLS_RAW = [
     productivity_worker,
     research_worker,
     sharepoint_worker,
+    coding_worker,
     # --- Compound workflows (stay on supervisor for cross-domain orchestration) ---
     pto_catchup,
     slack_catchup,

@@ -226,6 +226,13 @@ def dispatch_with_learning(raw: str, agent):
     Use this instead of dispatch() directly for learning-enabled sessions.
     Same return signature: (result_or_cmd, handled).
     """
+    # Start per-request budget tracking
+    try:
+        from agents.budget import start_request
+        start_request()
+    except Exception:
+        pass
+
     result, handled = dispatch(raw, agent)
 
     # Fire learning in background (non-blocking) for meaningful interactions

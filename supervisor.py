@@ -190,24 +190,24 @@ async def _fetch_vault() -> str:
 
 async def _gather_async(sources: list, days: int, alias: str) -> dict:
     """Run data fetches in parallel."""
-    from agents import email, slack_agent, calendar, todo, tickets, people
+    from agents import fetch
 
     tasks = {}
 
     if "email" in sources:
-        tasks["emails"] = email.fetch_inbox(days=days, limit=50)
+        tasks["emails"] = fetch.fetch_emails(days=days, limit=50)
     if "slack" in sources:
-        tasks["slack"] = slack_agent.scan_raw(days=days, alias=alias)
+        tasks["slack"] = fetch.fetch_slack(days=days, alias=alias)
     if "calendar" in sources:
-        tasks["calendar"] = _wrap(calendar.get_events_raw(view="day" if days <= 1 else "week", days_ahead=days))
+        tasks["calendar"] = _wrap(fetch.fetch_calendar(days=days))
     if "todos" in sources:
-        tasks["todos"] = todo.fetch_todos_full()
+        tasks["todos"] = fetch.fetch_todos()
     if "tickets" in sources:
-        tasks["tickets"] = tickets.scan_tickets(alias)
+        tasks["tickets"] = fetch.fetch_tickets(alias)
     if "team" in sources:
-        tasks["people"] = people.get_direct_reports(alias)
+        tasks["people"] = fetch.fetch_people(alias, mode="team")
     if "bosses" in sources:
-        tasks["people"] = people.get_management_chain(alias)
+        tasks["people"] = fetch.fetch_people(alias, mode="bosses")
     if "vault" in sources:
         tasks["vault"] = _fetch_vault()
 

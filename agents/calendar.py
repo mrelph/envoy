@@ -15,7 +15,9 @@ async def get_events_raw(view: str = "day", start_date: str = "", days_ahead: in
     async with outlook() as session:
         args = {"view": view, "start_date": start_date}
         if view == "week":
-            args["end_date"] = (datetime.now() + timedelta(days=days_ahead)).strftime('%m-%d-%Y')
+            # Calculate end_date relative to start_date, not now()
+            start_dt = datetime.strptime(start_date, '%m-%d-%Y')
+            args["end_date"] = (start_dt + timedelta(days=days_ahead)).strftime('%m-%d-%Y')
         result = await session.call_tool("calendar_view", arguments=args)
         raw = str(result.content[0].text) if result.content else "No calendar events found."
 
@@ -182,7 +184,8 @@ async def view_shared_calendar(calendar_id: str, start_date: str = "", days: int
         async with outlook() as session:
             args = {"view": "week" if days > 1 else "day", "start_date": start_date, "calendar_id": calendar_id}
             if days > 1:
-                args["end_date"] = (datetime.now() + timedelta(days=days)).strftime('%m-%d-%Y')
+                start_dt = datetime.strptime(start_date, '%m-%d-%Y')
+                args["end_date"] = (start_dt + timedelta(days=days)).strftime('%m-%d-%Y')
             result = await session.call_tool("calendar_view", arguments=args)
             return str(result.content[0].text) if result.content else "No events found."
     except Exception as e:
