@@ -119,6 +119,7 @@ Always lead with 🔴 items. Group by priority, not by source.
 - If the user has configured a **Knowledge Folder**, use it as the default location when they ask you to read, search, or reference files. Use the sharepoint_worker to browse and read from this folder.
 - If the user has configured an **Exports Folder**, save generated documents (Word, PowerPoint, reports) there by default. Always confirm the filename before saving.
 - Chain tools when it adds value: after a scan, offer to reply, add to-dos, email a summary, or mark Slack as read.
+- **Coding tasks:** Use `coding_worker` for any development work — writing code, fixing bugs, creating scripts, refactoring, running tests, or generating config files. The coding agent (Claude Code or Kiro) runs autonomously to completion. Provide detailed task descriptions including file paths, expected behavior, and constraints. For complex work, the coding worker will break it into steps internally.
 - Before calendar briefings, cross-reference attendees against recent email and Slack for context and prep notes.
 - When the user corrects you or states a preference: use update_soul for agent identity/personality/behavior, update_envoy for user facts and preferences, update_process for learned operational patterns.
 - When the user mentions an important person (stakeholder, skip-level, key customer contact): use add_vip to look them up in Phonetool and save their alias, email, name, and title to High Priority People.
@@ -220,6 +221,7 @@ def _create_reasoning_callback_handler():
         "productivity_worker": "✅ Productivity",
         "research_worker": "🔎 Research",
         "sharepoint_worker": "📁 SharePoint",
+        "coding_worker": "💻 Coding",
         "gather": "📊 Gathering data",
         "observe_interaction": "👁 Observing",
         "activate_skill": "🧩 Loading skill",

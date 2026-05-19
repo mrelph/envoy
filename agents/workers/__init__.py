@@ -89,7 +89,7 @@ def clear_bus():
 
 _workers = {}
 
-WORKER_NAMES = ["email", "comms", "calendar", "productivity", "research", "sharepoint"]
+WORKER_NAMES = ["email", "comms", "calendar", "productivity", "research", "sharepoint", "coding"]
 
 
 # Map worker names to relevant process.md sections
@@ -142,6 +142,7 @@ def get_worker(name: str):
             "productivity": lambda: _import_create("productivity_worker", name),
             "research": lambda: _import_create("research_worker", name),
             "sharepoint": lambda: _import_create("sharepoint_worker", name),
+            "coding": lambda: _import_create("coding_worker", name),
         }
         factory = factories.get(name)
         if not factory:
