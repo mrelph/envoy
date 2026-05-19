@@ -32,10 +32,9 @@ _PREFERENCE_PATTERNS = re.compile(
 
 
 def reflect(command: str, response: str, user_reply: str = "") -> None:
-    """Log a lightweight observation after each command. No AI call — just append to memory.
+    """Log a clean structured observation after each command. No AI call.
     
-    Runs synchronously but is fast (file append only, <1ms).
-    Only logs if the interaction seems meaningful (not greetings/help).
+    Stores WHAT HAPPENED, not raw output. Format: [domain] action — outcome
     """
     # Skip trivial interactions
     if not command or command.startswith("/help") or command.startswith("/exit"):
@@ -43,19 +42,64 @@ def reflect(command: str, response: str, user_reply: str = "") -> None:
     if len(response) < 20:
         return
 
-    # Build a compact observation line
-    cmd_short = command[:80]
-    resp_short = response[:120].replace("\n", " ")
-    entry = f"{cmd_short} → {resp_short}"
+    # Determine domain from command
+    domain = _classify_domain(command)
 
+    # Extract clean action (the command/intent) and outcome (first meaningful line)
+    action = command.strip()[:80]
+    outcome = _extract_outcome(response)
+
+    entry = f"[{domain}] {action}"
+    if outcome:
+        entry += f" — {outcome}"
+
+    # Determine importance
+    importance = "routine"
     if user_reply:
         entry += f" | user: {user_reply[:60]}"
+        # User follow-up suggests this was notable
+        importance = "notable"
+    if _CORRECTION_PATTERNS.search(user_reply or ""):
+        importance = "permanent"
 
     try:
         from agents.memory2 import remember
-        remember(entry, entry_type="observation")
+        remember(entry, entry_type="observation", importance=importance)
     except Exception:
         pass  # Never break the main flow
+
+
+def _classify_domain(command: str) -> str:
+    """Classify command into a domain tag. Fast, no AI."""
+    cmd = command.lower().strip().lstrip("/")
+    if any(k in cmd for k in ("email", "inbox", "digest", "cleanup", "reply", "forward")):
+        return "email"
+    if any(k in cmd for k in ("slack", "dm", "channel", "message")):
+        return "comms"
+    if any(k in cmd for k in ("calendar", "meeting", "book", "findtime", "week")):
+        return "calendar"
+    if any(k in cmd for k in ("todo", "ticket", "task", "action")):
+        return "tasks"
+    if any(k in cmd for k in ("search", "lookup", "phonetool", "wiki", "kingpin")):
+        return "research"
+    if any(k in cmd for k in ("sharepoint", "onedrive", "file")):
+        return "files"
+    return "general"
+
+
+def _extract_outcome(response: str) -> str:
+    """Pull a clean one-line outcome from a response. No markdown, no JSON."""
+    # Strip markdown formatting
+    text = re.sub(r'[#*`\[\](){}|\\]', '', response)
+    # Strip JSON-like content
+    text = re.sub(r'\{[^}]*\}', '', text)
+    # Get first non-empty line that's actually content
+    for line in text.split("\n"):
+        line = line.strip().strip("-•►▸› ")
+        if len(line) > 15 and not line.startswith(("{'", "\"role\"", "Error", "I'm unable")):
+            # Truncate to something useful
+            return line[:120]
+    return ""
 
 
 def detect_correction(user_input: str, prev_response: str = "") -> str | None:

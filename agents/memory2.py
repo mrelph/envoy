@@ -29,8 +29,16 @@ MAX_ENTRIES = 2000       # prune oldest beyond this
 MAX_FILE_SIZE = 2 * 1024 * 1024  # 2MB hard limit per file
 SUMMARY_MAX = 3000
 RECALL_DEFAULT = 20      # entries returned by default
-KEEP_DAYS = 14           # full entries kept
-COMPRESS_AFTER_DAYS = 7  # compress into summary after this
+
+# Importance tiers — control retention
+#   routine:   auto-prune after 3 days (inbox scans, status checks)
+#   notable:   keep 14 days, then compress (decisions, meetings, outcomes)
+#   permanent: never auto-prune or compress (corrections, preferences, key decisions)
+TIER_KEEP_DAYS = {"routine": 3, "notable": 14, "permanent": 9999}
+COMPRESS_AFTER_DAYS = 7  # compress notable entries older than this
+
+# External vault paths (Obsidian, directories) — searched on recall fallback
+VAULT_CONFIG_FILE = os.path.join(os.path.expanduser("~/.envoy"), "config.json")
 
 
 def _ensure_dir():
@@ -81,11 +89,31 @@ _ENTITY_STOPWORDS = frozenset({
     'amazon', 'aws', 'sim', 'phonetool', 'kingpin', 'wiki', 'taskei',
     'sharepoint', 'onedrive', 'outlook', 'teams', 'zoom', 'chime',
     'jira', 'quip', 'broadcast', 'cron', 'api', 'mcp', 'bedrock',
+    # Additional leakers found in production
+    'based', 'look', 'include', 'show', 'query', 'results', 'system',
+    'details', 'target', 'execution', 'status', 'service', 'technical',
+    'looking', 'using', 'running', 'getting', 'making', 'trying',
+    'working', 'starting', 'checking', 'loading', 'processing',
+    'available', 'unavailable', 'unable', 'successful', 'complete',
+    'information', 'confirmation', 'notification', 'connection',
+    'attempted', 'received', 'returned', 'retrieved', 'generated',
 })
 
 
 def _extract_entities(text: str) -> List[str]:
     """Extract people, project IDs, and topics from text. Fast, no AI."""
+    # Reject text that's clearly not clean prose (raw JSON, markdown soup)
+    if text.count("\\n") > 3 or text.count("{") > 2 or text.count("**") > 2:
+        # Only extract aliases and project IDs from noisy text
+        entities = set()
+        for m in _ALIAS_RE.finditer(text.lower()):
+            alias = m.group(1) or m.group(2)
+            if alias and len(alias) > 2:
+                entities.add(alias)
+        for m in _PROJECT_RE.finditer(text):
+            entities.add(m.group(1).lower())
+        return sorted(entities)
+
     entities = set()
     # Aliases
     for m in _ALIAS_RE.finditer(text.lower()):
@@ -95,33 +123,37 @@ def _extract_entities(text: str) -> List[str]:
     # Project IDs
     for m in _PROJECT_RE.finditer(text):
         entities.add(m.group(1).lower())
-    # Mentioned names (simple: capitalized words that aren't sentence starters)
+    # Mentioned names (capitalized words not at sentence start, not stopwords)
     words = text.split()
     for i, w in enumerate(words):
-        clean = w.strip('.,!?:;()[]"\'')
-        if clean and clean[0].isupper() and len(clean) > 2 and i > 0:
-            # Skip common non-name words — verbs, nouns, adjectives, time, tech terms
-            if clean.lower() not in _ENTITY_STOPWORDS:
-                entities.add(clean.lower())
-    return sorted(entities)
+        clean = w.strip('.,!?:;()[]"\'-*#>')
+        if (clean and clean[0].isupper() and len(clean) > 2 and i > 0
+                and clean.isalpha()  # reject "Results**" or "Status:"
+                and clean.lower() not in _ENTITY_STOPWORDS):
+            entities.add(clean.lower())
+    return sorted(entities)[:10]  # cap at 10 entities per entry
 
 
 # --- Core operations ---
 
-def remember(text: str, entry_type: str = "action") -> str:
+def remember(text: str, entry_type: str = "action", importance: str = "notable") -> str:
     """Store an entry with auto-extracted entities.
 
     Args:
         text: What to remember
         entry_type: action, context, decision, observation, preference
+        importance: routine (3-day), notable (14-day), permanent (forever)
     """
     _ensure_dir()
+    if importance not in TIER_KEEP_DAYS:
+        importance = "notable"
     entities = _extract_entities(text)
     entry_id = datetime.now().strftime("%Y%m%d%H%M%S%f")[:18]
     entry = {
         "id": entry_id,
         "ts": datetime.now().isoformat(),
         "type": entry_type,
+        "importance": importance,
         "text": text[:MAX_ENTRY_LEN],
         "entities": entities,
     }
@@ -249,11 +281,16 @@ def _recall_by_query(query: str, limit: int) -> str:
         parts.extend(f"- {e['ts'][:16]} [{e['type']}] {e['text']}" for e in matches)
 
     if not parts:
-        # Fallback: search the vault (Knowledge Folder) if configured
+        # Fallback: search external vaults (Obsidian, directories)
         vault_result = _search_vault(query)
         if vault_result:
-            return f"## Memory: {query}\n\n*(from vault)*\n{vault_result}"
+            return f"## Memory: {query}\n\n*(from external vault)*\n\n{vault_result}"
         return f"No memory entries found for '{query}'."
+
+    # Also check vaults for supplementary context
+    vault_result = _search_vault(query)
+    if vault_result:
+        parts.append(f"\n*(from vault)*\n{vault_result}")
 
     return f"## Memory: {query}\n\n" + "\n".join(parts)
 
@@ -294,10 +331,16 @@ def known_entities() -> List[str]:
 
 # --- Entry loading ---
 
-def _load_entries(days: int = KEEP_DAYS) -> list:
+def _load_entries(days: int = 14) -> list:
+    """Load entries respecting importance tiers.
+    
+    Each entry is kept based on its importance tier:
+      routine: 3 days, notable: 14 days, permanent: always
+    The `days` param acts as an upper bound override.
+    """
     if not os.path.exists(ENTRIES_FILE):
         return []
-    cutoff = datetime.now() - timedelta(days=days)
+    now = datetime.now()
     entries = []
     for line in open(ENTRIES_FILE):
         line = line.strip()
@@ -305,7 +348,10 @@ def _load_entries(days: int = KEEP_DAYS) -> list:
             continue
         try:
             e = json.loads(line)
-            if datetime.fromisoformat(e["ts"]) >= cutoff:
+            ts = datetime.fromisoformat(e["ts"])
+            importance = e.get("importance", "notable")
+            keep_days = min(days, TIER_KEEP_DAYS.get(importance, 14))
+            if ts >= now - timedelta(days=keep_days):
                 entries.append(e)
         except Exception:
             pass
@@ -532,20 +578,137 @@ def migrate_old_memory():
 
 
 def _search_vault(query: str) -> str:
-    """Search the Knowledge Folder vault for a query. Returns matching content or ''."""
+    """Search configured external vaults (Obsidian, directories) for a query.
+    
+    Searches markdown files in configured paths for keyword matches.
+    Returns matching snippets or ''.
+    """
+    paths = _get_vault_paths()
+    if not paths:
+        return ""
+
+    query_terms = [t.lower() for t in query.split() if len(t) > 2]
+    if not query_terms:
+        return ""
+
+    results = []
+    for vault_path in paths:
+        vault_path = os.path.expanduser(vault_path)
+        if not os.path.isdir(vault_path):
+            continue
+        # Walk markdown files (cap at 500 files to stay fast)
+        file_count = 0
+        for root, _dirs, files in os.walk(vault_path):
+            # Skip hidden dirs (.obsidian, .git, .trash)
+            _dirs[:] = [d for d in _dirs if not d.startswith(".")]
+            for fname in files:
+                if not fname.endswith((".md", ".txt")):
+                    continue
+                file_count += 1
+                if file_count > 500:
+                    break
+                fpath = os.path.join(root, fname)
+                try:
+                    content = open(fpath, encoding="utf-8", errors="ignore").read(5000)
+                    content_lower = content.lower()
+                    # Score: how many query terms appear
+                    hits = sum(1 for t in query_terms if t in content_lower)
+                    if hits >= max(1, len(query_terms) // 2):
+                        # Extract relevant snippet (lines containing matches)
+                        lines = content.split("\n")
+                        matched_lines = [
+                            l.strip() for l in lines
+                            if any(t in l.lower() for t in query_terms)
+                            and len(l.strip()) > 10
+                        ][:5]
+                        if matched_lines:
+                            rel_path = os.path.relpath(fpath, vault_path)
+                            snippet = "\n".join(matched_lines)
+                            results.append((hits, f"**{rel_path}**\n{snippet}"))
+                except Exception:
+                    continue
+            if file_count > 500:
+                break
+
+    if not results:
+        return ""
+
+    # Sort by relevance (hit count), take top 3
+    results.sort(key=lambda x: -x[0])
+    return "\n\n".join(r[1] for r in results[:3])
+
+
+def _get_vault_paths() -> List[str]:
+    """Load vault/directory paths from config.json."""
     try:
-        from agents.export import _configured_folders
-        folder = _configured_folders().get("knowledge", "")
-        if not folder:
-            return ""
-        from agents.base import run
-        from agents import sharepoint_agent as sp
-        result = run(sp.search(f"{query} path:\"{folder}/wiki\"", row_limit=5))
-        if result and not result.startswith("No results") and not result.startswith("Error"):
-            return result[:3000]
+        if os.path.exists(VAULT_CONFIG_FILE):
+            config = json.loads(open(VAULT_CONFIG_FILE).read())
+            return config.get("memory_vaults", [])
     except Exception:
         pass
-    return ""
+    return []
+
+
+def add_vault_path(path: str) -> str:
+    """Add an external vault/directory path to memory sources."""
+    path = os.path.expanduser(path)
+    if not os.path.isdir(path):
+        return f"Error: '{path}' is not a valid directory."
+
+    config = {}
+    try:
+        if os.path.exists(VAULT_CONFIG_FILE):
+            config = json.loads(open(VAULT_CONFIG_FILE).read())
+    except Exception:
+        pass
+
+    vaults = config.get("memory_vaults", [])
+    # Store with ~ for portability
+    store_path = path.replace(os.path.expanduser("~"), "~")
+    if store_path in vaults or path in vaults:
+        return f"Vault already configured: {store_path}"
+
+    vaults.append(store_path)
+    config["memory_vaults"] = vaults
+    os.makedirs(os.path.dirname(VAULT_CONFIG_FILE), exist_ok=True)
+    with open(VAULT_CONFIG_FILE, "w") as f:
+        json.dump(config, f, indent=2)
+    return f"Added vault: {store_path}"
+
+
+def remove_vault_path(path: str) -> str:
+    """Remove an external vault/directory path from memory sources."""
+    config = {}
+    try:
+        if os.path.exists(VAULT_CONFIG_FILE):
+            config = json.loads(open(VAULT_CONFIG_FILE).read())
+    except Exception:
+        return "No config found."
+
+    vaults = config.get("memory_vaults", [])
+    path_expanded = os.path.expanduser(path)
+    store_path = path.replace(os.path.expanduser("~"), "~")
+
+    # Try both forms
+    removed = False
+    for p in [path, store_path, path_expanded]:
+        if p in vaults:
+            vaults.remove(p)
+            removed = True
+            break
+
+    if not removed:
+        return f"Vault not found: {path}"
+
+    config["memory_vaults"] = vaults
+    with open(VAULT_CONFIG_FILE, "w") as f:
+        json.dump(config, f, indent=2)
+    return f"Removed vault: {path}"
+
+
+def list_vault_paths() -> List[str]:
+    """List configured vault paths."""
+    return _get_vault_paths()
 
 
 # Auto-migrate old format on first import (idempotent — renames files after migration)

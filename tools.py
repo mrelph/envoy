@@ -738,6 +738,30 @@ def recall_memory(query: str = "", limit: int = 20) -> str:
     return memory.recall(query, limit)
 
 
+@tool
+def manage_memory_vaults(action: str, path: str = "") -> str:
+    """Manage external memory vaults (Obsidian vaults, note directories).
+
+    Args:
+        action: "list", "add", or "remove"
+        path: Directory path (required for add/remove). Supports ~ for home.
+    """
+    if action == "list":
+        paths = memory.list_vault_paths()
+        if not paths:
+            return "No external vaults configured. Use add with a path to an Obsidian vault or notes directory."
+        return "Configured vaults:\n" + "\n".join(f"  • {p}" for p in paths)
+    elif action == "add":
+        if not path:
+            return "Please provide a path to add."
+        return memory.add_vault_path(path)
+    elif action == "remove":
+        if not path:
+            return "Please provide a path to remove."
+        return memory.remove_vault_path(path)
+    return "Unknown action. Use: list, add, remove"
+
+
 # ============================================================
 # Worker agent routing — supervisor delegates to specialists
 # ============================================================
@@ -1000,6 +1024,7 @@ _ALL_TOOLS_RAW = [
     export_pptx,
     # --- Memory & Observer ---
     recall_memory,
+    manage_memory_vaults,
     observe_interaction,
     analyze_patterns,
     get_observer_insights,
