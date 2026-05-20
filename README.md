@@ -381,7 +381,6 @@ envoy/
 │   ├── sharepoint_agent.py  # SharePoint/OneDrive domain agent
 │   ├── tickets.py           # Tickets domain agent
 │   ├── memory2.py           # Entity-aware persistent memory
-│   ├── observer.py          # Backward-compat shim — redirects to memory2
 │   ├── internal.py          # Internal websites (Kingpin, Wiki, Taskei)
 │   ├── export.py            # Word/PowerPoint export
 │   └── teamsnap_agent.py    # TeamSnap integration

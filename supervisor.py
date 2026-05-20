@@ -21,14 +21,15 @@ from agents.base import run
 import time as _time
 
 _context = {
-    "items": {},             # ref_id → {type, summary, data, ...}  e.g. "E1" → email dict
+    "items": {},             # ref_id → {type, summary, _ts, data, ...}  e.g. "E1" → email dict
     "last_email_bodies": {}, # conversation_id → full thread body (cache)
     "last_report": "",       # last AI-generated report
     "ts": 0,                 # timestamp of last gather
 }
 _context_lock = threading.RLock()
 
-_CONTEXT_TTL = 1800  # 30 minutes
+_CONTEXT_TTL = 1800       # 30 minutes — wipe everything beyond this
+_ITEM_STALE_AFTER = 900   # 15 minutes — individual refs go stale this fast
 
 
 def _next_ref(prefix: str) -> str:
@@ -42,8 +43,20 @@ def _store_item(prefix: str, summary: str, **data) -> str:
     """Store an item in context and return its reference ID."""
     with _context_lock:
         ref = _next_ref(prefix)
-        _context["items"][ref] = {"summary": summary, **data}
+        _context["items"][ref] = {"summary": summary, "_ts": _time.monotonic(), **data}
         return ref
+
+
+def _format_age(ts: float) -> str:
+    """Render a monotonic timestamp as a short relative-age label."""
+    if not ts:
+        return ""
+    age = _time.monotonic() - ts
+    if age < 60:
+        return "just now"
+    if age < 3600:
+        return f"{int(age // 60)}m ago"
+    return f"{int(age // 3600)}h ago"
 
 
 def clear_context():
@@ -95,17 +108,19 @@ def gather_data(sources: str = "email,slack,calendar,todos", days: int = 1, alia
         if _context["ts"] and (_time.monotonic() - _context["ts"]) > _CONTEXT_TTL:
             clear_context()
         elif _context["items"]:
-            # Subsequent gather in same session — clear only refs for sources
-            # we're about to re-fetch, so we don't get stale duplicates
+            # Subsequent gather in same session — clear refs for sources we're
+            # about to re-fetch, plus auto-expire any other items older than
+            # _ITEM_STALE_AFTER so refs from the previous turn don't masquerade
+            # as fresh.
             prefix_map = {"email": "E", "slack": "S", "calendar": "C",
                           "todos": "T", "tickets": "K", "team": "P", "bosses": "P",
                           "vault": "V"}
-            for src in source_list:
-                pfx = prefix_map.get(src)
-                if pfx:
-                    stale = [k for k in _context["items"] if k.startswith(pfx)]
-                    for k in stale:
-                        del _context["items"][k]
+            refetch_prefixes = {prefix_map[s] for s in source_list if s in prefix_map}
+            cutoff = _time.monotonic() - _ITEM_STALE_AFTER
+            for k in list(_context["items"].keys()):
+                item = _context["items"][k]
+                if k[:1] in refetch_prefixes or item.get("_ts", 0) < cutoff:
+                    del _context["items"][k]
         _context["ts"] = _time.monotonic()
 
     results = run(_gather_async(source_list, days, alias))
@@ -442,13 +457,16 @@ def drill_down(ref: str) -> str:
     if not item:
         return f"Reference {ref} not found in context. Available: {', '.join(sorted(_context['items'].keys())) or 'none'}"
 
+    age = _format_age(item.get("_ts", 0))
+    age_label = f"  *(captured {age})*" if age else ""
+
     # For emails, fetch full thread body
     if item.get("type") == "email" and item.get("conversationId"):
         conv_id = item["conversationId"]
         # Check cache first
         cached = _context.get("last_email_bodies", {}).get(conv_id)
         if cached:
-            return f"**[{ref}] {item['summary']}**\n\n{cached}"
+            return f"**[{ref}]{age_label} {item['summary']}**\n\n{cached}"
         # Fetch full thread
         from agents.base import outlook as _outlook
         async def _call():
@@ -463,10 +481,12 @@ def drill_down(ref: str) -> str:
         if len(bodies) > 50:
             del bodies[list(bodies.keys())[0]]
         _context["last_email_bodies"] = bodies
-        return f"**[{ref}] {item['summary']}**\n\n{body}"
+        return f"**[{ref}]{age_label} {item['summary']}**\n\n{body}"
 
-    # For everything else, return stored data
-    return f"**[{ref}]** {item.get('summary', '')}\n\n{item.get('raw', json.dumps(item, indent=2, default=str))}"
+    # For everything else, return stored data with age annotation
+    age = _format_age(item.get("_ts", 0))
+    age_label = f"  *(captured {age})*" if age else ""
+    return f"**[{ref}]**{age_label} {item.get('summary', '')}\n\n{item.get('raw', json.dumps(item, indent=2, default=str))}"
 
 
 @tool
@@ -482,25 +502,32 @@ def show_context(key: str = "") -> str:
         # Try as ref ID first
         item = _context["items"].get(key.upper())
         if item:
-            return f"**[{key.upper()}]** {item.get('summary', '')}\nType: {item.get('type', '?')}"
+            age = _format_age(item.get("_ts", 0))
+            age_label = f"  *(captured {age})*" if age else ""
+            return f"**[{key.upper()}]**{age_label} {item.get('summary', '')}\nType: {item.get('type', '?')}"
         return f"Reference {key} not found."
 
     items = _context["items"]
     if not items:
         return "Context is empty. Use `gather` to fetch data first."
 
-    # Group by type
+    # Group by type, oldest age per group surfaces staleness at a glance
     by_type = {}
     for ref, item in sorted(items.items()):
         t = item.get("type", "other")
-        by_type.setdefault(t, []).append((ref, item.get("summary", "")[:100]))
+        by_type.setdefault(t, []).append((ref, item.get("summary", "")[:100], item.get("_ts", 0)))
 
     lines = [f"**{len(items)} items in context**\n"]
+    now = _time.monotonic()
     for t, entries in by_type.items():
-        lines.append(f"### {t.title()} ({len(entries)})")
-        for ref, summary in entries:
-            lines.append(f"  [{ref}] {summary}")
+        oldest_age = max((now - ts for _, _, ts in entries if ts), default=0)
+        age_hint = f" *(oldest: {_format_age(now - oldest_age)})*" if oldest_age else ""
+        lines.append(f"### {t.title()} ({len(entries)}){age_hint}")
+        for ref, summary, ts in entries:
+            stale_marker = " ⚠️ stale" if ts and (now - ts) > _ITEM_STALE_AFTER else ""
+            lines.append(f"  [{ref}]{stale_marker} {summary}")
     lines.append(f"\nUse `drill_down('E1')` to get full details for any item.")
+    lines.append("Items older than 15 min auto-expire on the next `gather`.")
     return "\n".join(lines)
 
 

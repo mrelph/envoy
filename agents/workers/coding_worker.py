@@ -4,9 +4,15 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 
 from strands import Agent, tool
 from agents.workers import _model
+
+# Subprocess timeout bounds. The per-request budget is ~120s, but coding tasks
+# can legitimately exceed it; we still cap so the user is never stuck forever.
+_CODING_MIN_TIMEOUT = 60
+_CODING_MAX_TIMEOUT = 600
 
 
 def _find_cli() -> tuple[str, str]:
@@ -40,6 +46,25 @@ def create(session_mgr=None):
         if not os.path.isdir(cwd):
             return f"⚠️ Directory not found: {cwd}"
 
+        # Pre-flight against the per-request budget. The subprocess makes its
+        # own opaque LLM calls, so we can't enforce mid-flight — but we can
+        # refuse to start a new long-running task once the budget is spent.
+        budget = None
+        try:
+            from agents.budget import get_budget
+            budget = get_budget()
+            if budget.exceeded:
+                return f"⚠️ Request budget exceeded ({budget.summary()}). Skipping coding sub-agent."
+        except Exception:
+            pass
+
+        # Cap subprocess timeout to remaining budget (with a usable floor) so
+        # the supervisor turn doesn't sit idle for ten minutes.
+        timeout = _CODING_MAX_TIMEOUT
+        if budget is not None:
+            remaining = max(0.0, budget.max_wall - budget.elapsed)
+            timeout = max(_CODING_MIN_TIMEOUT, min(_CODING_MAX_TIMEOUT, int(remaining + _CODING_MIN_TIMEOUT)))
+
         # Build command — non-interactive, autonomous
         cmd = [cli_path]
         if cli_name == "kiro-cli":
@@ -56,15 +81,16 @@ def create(session_mgr=None):
                 cmd.extend(["--permission-mode", "plan"])
             cmd.append(task)
 
-        print(f"[coding] Delegating to {cli_name}: {task[:120]}...", file=sys.stderr)
+        print(f"[coding] Delegating to {cli_name} (timeout {timeout}s): {task[:120]}...", file=sys.stderr)
 
+        started = time.monotonic()
         try:
             result = subprocess.run(
                 cmd,
                 cwd=cwd,
                 capture_output=True,
                 text=True,
-                timeout=600,  # 10 minute timeout
+                timeout=timeout,
             )
             output = result.stdout.strip()
             if result.returncode != 0 and result.stderr:
@@ -76,9 +102,23 @@ def create(session_mgr=None):
                 output = output[:6000] + "\n\n... [truncated] ...\n\n" + output[-4000:]
             return f"✅ [{cli_name}] completed:\n\n{output}"
         except subprocess.TimeoutExpired:
-            return f"⚠️ [{cli_name}] timed out after 10 minutes. The task may be too large — try breaking it into smaller steps."
+            return f"⚠️ [{cli_name}] timed out after {timeout}s. The task may be too large — try breaking it into smaller steps."
         except Exception as e:
             return f"⚠️ [{cli_name}] failed: {e}"
+        finally:
+            # Account for the call in the per-request budget. Token counts are
+            # opaque from outside the subprocess, so estimate by wall time at
+            # medium-tier rate. This at least prevents a runaway loop of
+            # coding-worker calls from being free.
+            try:
+                if budget is not None:
+                    elapsed = time.monotonic() - started
+                    # Rough estimate: ~30 in / 200 out tokens per second of work
+                    est_in = int(elapsed * 30)
+                    est_out = int(elapsed * 200)
+                    budget.record_ai_call(input_tokens=est_in, output_tokens=est_out, tier="medium")
+            except Exception:
+                pass
 
     @tool
     def shared_context(operation: str = "read", key: str = "", value: str = "") -> str:

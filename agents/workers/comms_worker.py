@@ -19,7 +19,7 @@ def create(session_mgr=None):
             days: Days to look back
         """
         ch_list = [c.strip() for c in channels.split(",") if c.strip()] or None
-        return run(slack_mod.scan(ch_list, days, alias=_USER))
+        return run(slack_mod.scan(ch_list, days, alias=_USER()))
 
     @tool
     def send_message(recipient: str, message: str, thread_ts: str = "") -> str:

@@ -10,7 +10,6 @@ UI layer must handle itself (e.g., /help, /status, /settings, /exit).
 import os
 import threading
 
-_USER = os.environ.get("USER", "")
 _last_response = ""  # tracks last agent response for correction detection
 
 # --- Slash command table: cmd → (description, prompt_template | None) ---

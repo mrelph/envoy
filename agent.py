@@ -200,12 +200,26 @@ When a task matches a skill's description, call the activate_skill tool with the
     return prompt
 
 
+# --- Streaming consumer registry ---
+# UI layers (TUI) can register a callable to receive streaming text chunks.
+# When set, `data` events are forwarded to the consumer instead of being
+# suppressed. None = legacy behavior (silent until the final result lands).
+
+_stream_consumer = None
+
+
+def set_stream_consumer(fn):
+    """Register a callable invoked with each streaming text chunk, or None to clear."""
+    global _stream_consumer
+    _stream_consumer = fn
+
+
 def _create_reasoning_callback_handler():
-    """Create a callback handler that shows brief status teasers and suppresses verbose output.
+    """Create a callback handler that shows brief status teasers and forwards streamed text.
 
     Strands calls this handler for every event: streaming text chunks, tool selections,
-    and results. We suppress the streaming text (which would dump raw thinking to console)
-    and only emit clean log events for tool selections.
+    and results. Streamed text is forwarded to the registered consumer (if any) so the
+    TUI can render partial output; tool selections still emit clean log events.
     """
     state = {
         "step_number": 0,
@@ -231,8 +245,16 @@ def _create_reasoning_callback_handler():
         try:
             logger = get_logger()
 
-            # Suppress streaming text — this is the key to reducing noise
+            # Forward streaming text to the registered consumer; otherwise drop it
+            # so the legacy console path stays quiet.
             if "data" in kwargs:
+                if _stream_consumer is not None:
+                    chunk = kwargs.get("data")
+                    if isinstance(chunk, str) and chunk:
+                        try:
+                            _stream_consumer(chunk)
+                        except Exception:
+                            pass
                 return
 
             if kwargs.get("init_event_loop") and not state["started"]:
@@ -362,6 +384,15 @@ def get_agent(session_id: str = "default"):
 
 
 def reload_agent() -> None:
-    """Drop the cached agent so the next get_agent() rebuilds it."""
+    """Drop the cached agent so the next get_agent() rebuilds it.
+
+    Also invalidates the cached user alias — a settings edit may have
+    changed envoy.md's "- Alias:" line.
+    """
     global _AGENT_INSTANCE
     _AGENT_INSTANCE = None
+    try:
+        from agents.base import reload_user
+        reload_user()
+    except Exception:
+        pass

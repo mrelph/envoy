@@ -401,6 +401,11 @@ class EnvoyApp(App):
         # Session stats for status bar
         self._session_tokens: int = 0
         self._last_ttft_ms: int | None = None
+        # Streaming state: chunks the agent emits live, written to RichLog as they arrive.
+        # The final result is suppressed on render if it matches what we streamed.
+        self._stream_buffer: list[str] = []
+        self._stream_pending: str = ""   # bytes not yet flushed to UI
+        self._stream_started: bool = False
 
     def compose(self) -> ComposeResult:
         yield MCPBar(id="mcp-bar")
@@ -502,13 +507,46 @@ class EnvoyApp(App):
         self._busy = True
         self._run_command(raw, hint)
 
+    def _ingest_stream_chunk(self, chunk: str) -> None:
+        """Worker-thread callback: enqueue a chunk for the UI to flush.
+
+        Called from inside the agent's callback handler (worker thread). We
+        accumulate into a string buffer and schedule a flush on the UI thread.
+        Splitting flush from receive lets us coalesce many small chunks into
+        a single RichLog write per UI tick.
+        """
+        self._stream_buffer.append(chunk)
+        self._stream_pending += chunk
+        # Flush on newline boundaries to keep markdown-ish output legible
+        if "\n" in chunk or len(self._stream_pending) > 200:
+            self.app.call_from_thread(self._flush_stream)
+
+    def _flush_stream(self) -> None:
+        """UI thread: write accumulated streamed text to the RichLog."""
+        if not self._stream_pending:
+            return
+        out = self.query_one("#output", RichLog)
+        if not self._stream_started:
+            # Stop the spinner the moment real text arrives — streaming IS the indicator now
+            self.query_one("#spinner", Spinner).stop()
+            out.write(Text())
+            self._stream_started = True
+        out.write(Text(self._stream_pending, style="#e6edf3"))
+        self._stream_pending = ""
+
     @work(thread=True, exclusive=True, group="cmd")
     def _run_command(self, raw: str, hint: str) -> None:
         worker = get_current_worker()
         # Always fetch via get_agent() — picks up a fresh instance after
         # reload_agent() (e.g. triggered by /models tier changes).
-        from agent import get_agent
+        from agent import get_agent, set_stream_consumer
         self._agent = get_agent()
+
+        # Reset streaming state and register consumer for this turn.
+        self._stream_buffer = []
+        self._stream_pending = ""
+        self._stream_started = False
+        set_stream_consumer(self._ingest_stream_chunk)
 
         error = None
         result = None
@@ -519,6 +557,8 @@ class EnvoyApp(App):
             result, handled = dispatch(raw, self._agent)
         except Exception as e:
             error = e
+        finally:
+            set_stream_consumer(None)
         if worker.is_cancelled:
             self._busy = False
             return
@@ -544,7 +584,10 @@ class EnvoyApp(App):
             pass
 
         def _show():
-            # Stop spinner
+            # Drain any trailing streamed text first
+            self._flush_stream()
+
+            # Stop spinner (no-op if streaming already stopped it)
             self.query_one("#spinner", Spinner).stop()
             self._busy = False
 
@@ -558,7 +601,26 @@ class EnvoyApp(App):
                 return
             if not result:
                 return
+
             text = str(result)
+            streamed = "".join(self._stream_buffer)
+
+            # If streaming covered the full response, re-render once as Markdown
+            # so headings/bullets land formatted (the live stream is plain text).
+            # Skip if the result is a plain status message (slash commands handled internally).
+            if self._stream_started and streamed and streamed.strip() == text.strip():
+                # Replace the plain stream with a formatted render
+                if any(c in text for c in ("#", "**", "- ", "| ", "```")):
+                    try:
+                        out.write(Text())
+                        out.write(Markdown(text))
+                        out.write(Text())
+                    except Exception:
+                        pass  # plain stream already on screen — no-op
+                else:
+                    out.write(Text())  # just spacing
+                return
+
             if any(c in text for c in ("#", "**", "- ", "| ", "```")):
                 try:
                     out.write(Text())

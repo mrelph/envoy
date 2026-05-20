@@ -9,7 +9,7 @@ import os
 import threading
 from pathlib import Path
 
-_USER = os.environ.get('USER', '')
+from agents.base import current_user as _USER  # call-time alias resolution
 _SESSIONS_DIR = Path.home() / ".envoy" / "sessions" / "workers"
 
 

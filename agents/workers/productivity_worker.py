@@ -28,7 +28,7 @@ def create(session_mgr=None):
             body: Task body/notes (for add/update)
         """
         if operation == "review":
-            return wf.todo_review(_USER)
+            return wf.todo_review(_USER())
         if operation == "add":
             action_items = []
             for l in items.split("\n"):
@@ -64,7 +64,7 @@ def create(session_mgr=None):
         Args:
             alias: Your alias (default: $USER)
         """
-        return run(tix_mod.scan_tickets(alias or _USER))
+        return run(tix_mod.scan_tickets(alias or _USER()))
 
     @tool
     def remember_item(text: str, entry_type: str = "action") -> str:

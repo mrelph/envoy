@@ -139,7 +139,7 @@ def create(session_mgr=None):
             limit: Max emails to scan
         """
         emails = run(email_mod.fetch_inbox(days, limit))
-        classified = email_mod.classify_emails(emails, _USER)
+        classified = email_mod.classify_emails(emails, _USER())
         return "\n".join(f"[{e.get('classification','KEEP')}] {e['from']} — {e['subject']} | {e.get('reason','')}" for e in classified) or "No emails found."
 
     @tool
@@ -162,7 +162,7 @@ def create(session_mgr=None):
             days: Days to look back
             team: Comma-separated team aliases
         """
-        alias = alias or _USER
+        alias = alias or _USER()
         team_list = [t.strip() for t in team.split(",") if t.strip()] or None
         return run(email_mod.scan_customer_emails(alias, days, team_list))
 
@@ -175,7 +175,7 @@ def create(session_mgr=None):
             selected: Comma-separated aliases to include
             vip: Track management chain instead of directs
         """
-        alias = alias or _USER
+        alias = alias or _USER()
         sel = [s.strip() for s in selected.split(",") if s.strip()] or None
         raw = wf.generate_digest(alias, days, sel, vip_mode=vip)
         return wf.generate_ai_summary(raw, alias, days)
@@ -187,8 +187,8 @@ def create(session_mgr=None):
             subject: Email subject
             body: Email body (markdown or plain text)
         """
-        run(email_mod.email_digest(body, _USER, 0))
-        return f"Email sent to {_USER}@amazon.com"
+        run(email_mod.email_digest(body, _USER(), 0))
+        return f"Email sent to {_USER()}@amazon.com"
 
     @tool
     def shared_context(operation: str = "read", key: str = "", value: str = "") -> str:

@@ -14,7 +14,7 @@ from typing import List, Dict
 
 from agents.base import invoke_ai, run
 
-_USER = os.getenv('USER', '')
+from agents.base import current_user as _USER  # call-time alias resolution
 
 
 def _worker_gather(**tasks) -> dict:
@@ -64,7 +64,7 @@ async def _read_bodies_parallel(session, emails, limit=15):
 
 
 def pto_catchup(alias: str = "", days: int = 5) -> str:
-    alias = alias or _USER
+    alias = alias or _USER()
     from supervisor import gather_data
     gathered = gather_data(sources="email,slack,calendar,todos,tickets", days=days, alias=alias)
     if not gathered or gathered == "No data gathered from any source.":
@@ -93,7 +93,7 @@ Data:
 
 
 def slack_catchup(alias: str = "", days: int = 3) -> str:
-    alias = alias or _USER
+    alias = alias or _USER()
     from supervisor import gather_data
     gathered = gather_data(sources="slack", days=days, alias=alias)
     if not gathered or gathered == "No data gathered from any source.":
@@ -119,7 +119,7 @@ Messages:
 
 
 def calendar_audit(alias: str = "", days: int = 5) -> str:
-    alias = alias or _USER
+    alias = alias or _USER()
     return run(_calendar_audit_async(alias, days))
 
 
@@ -148,7 +148,7 @@ Events:
 
 
 def response_time_tracker(alias: str = "", days: int = 7) -> str:
-    alias = alias or _USER
+    alias = alias or _USER()
     return run(_response_time_async(alias, days))
 
 
@@ -183,7 +183,7 @@ Data:
 
 
 def follow_up_tracker(alias: str = "", days: int = 7) -> str:
-    alias = alias or _USER
+    alias = alias or _USER()
     return run(_follow_up_tracker_async(alias, days))
 
 
@@ -222,7 +222,7 @@ INBOX (for cross-reference):
 
 
 def one_on_one_prep(person_alias: str, alias: str = "") -> str:
-    alias = alias or _USER
+    alias = alias or _USER()
     return run(_one_on_one_prep_async(person_alias, alias))
 
 
@@ -266,7 +266,7 @@ Data:
 
 
 def commitment_tracker(alias: str = "", days: int = 7) -> str:
-    alias = alias or _USER
+    alias = alias or _USER()
     return run(_commitment_tracker_async(alias, days))
 
 
@@ -307,7 +307,7 @@ Data:
 
 
 def meeting_prep(meeting_subject: str = "", alias: str = "") -> str:
-    alias = alias or _USER
+    alias = alias or _USER()
     return run(_meeting_prep_async(meeting_subject, alias))
 
 
@@ -366,7 +366,7 @@ Data:
 
 
 def yesterbox(alias: str = "", days: int = 1) -> str:
-    alias = alias or _USER
+    alias = alias or _USER()
     from supervisor import gather_data
     gathered = gather_data(sources="email,slack", days=days, alias=alias)
     if not gathered or gathered == "No data gathered from any source.":
@@ -443,7 +443,7 @@ def _load_response_patterns() -> str:
 
 
 def recommend_responses(alias: str = "", days: int = 3) -> str:
-    alias = alias or _USER
+    alias = alias or _USER()
     return run(_recommend_responses_async(alias, days))
 
 

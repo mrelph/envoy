@@ -30,7 +30,7 @@ from agents.workers import get_worker
 from agents.skills import get_skills, activate as activate_skill_fn
 from agents import skill_builder
 
-_USER = os.environ.get('USER', '')
+from agents.base import current_user as _USER  # call-time alias resolution
 
 
 def _outlook_tool(tool_name: str, args: dict) -> str:
@@ -329,7 +329,7 @@ def recommend_responses(days: int = 3) -> str:
     Args:
         days: Number of days to look back (default 3)
     """
-    return wf.recommend_responses(_USER, days)
+    return wf.recommend_responses(_USER(), days)
 
 
 @tool
@@ -466,7 +466,7 @@ def pto_catchup(days: int = 5) -> str:
     Args:
         days: Number of days you were out (default 5)
     """
-    return wf.pto_catchup(_USER, days)
+    return wf.pto_catchup(_USER(), days)
 
 
 @tool
@@ -477,7 +477,7 @@ def slack_catchup(days: int = 3) -> str:
     Args:
         days: Number of days to look back (default 3)
     """
-    return wf.slack_catchup(_USER, days)
+    return wf.slack_catchup(_USER(), days)
 
 
 @tool
@@ -489,7 +489,7 @@ def yesterbox(days: int = 1) -> str:
     Args:
         days: Number of days to look back (default: 1 for yesterday)
     """
-    alias = _USER
+    alias = _USER()
     return wf.yesterbox(alias, days)
 
 
@@ -501,7 +501,7 @@ def calendar_audit(days: int = 5) -> str:
     Args:
         days: Number of days ahead to analyze (default 5)
     """
-    return wf.calendar_audit(_USER, days)
+    return wf.calendar_audit(_USER(), days)
 
 
 @tool
@@ -512,7 +512,7 @@ def response_time_tracker(days: int = 7) -> str:
     Args:
         days: Number of days to analyze (default 7)
     """
-    return wf.response_time_tracker(_USER, days)
+    return wf.response_time_tracker(_USER(), days)
 
 
 @tool
@@ -524,7 +524,7 @@ def follow_up_tracker(days: int = 7) -> str:
     Args:
         days: Number of days to look back (default 7)
     """
-    return wf.follow_up_tracker(_USER, days)
+    return wf.follow_up_tracker(_USER(), days)
 
 
 @tool
@@ -537,7 +537,7 @@ def one_on_one_prep(person_alias: str) -> str:
     Args:
         person_alias: Amazon login/alias of the person you're meeting with
     """
-    return wf.one_on_one_prep(person_alias, _USER)
+    return wf.one_on_one_prep(person_alias, _USER())
 
 
 @tool
@@ -549,7 +549,7 @@ def commitment_tracker(days: int = 7) -> str:
     Args:
         days: Number of days to look back (default 7)
     """
-    return wf.commitment_tracker(_USER, days)
+    return wf.commitment_tracker(_USER(), days)
 
 
 @tool
@@ -562,7 +562,7 @@ def meeting_prep(meeting_subject: str = "") -> str:
     Args:
         meeting_subject: Meeting title to search for (empty = next upcoming meeting)
     """
-    return wf.meeting_prep(meeting_subject, _USER)
+    return wf.meeting_prep(meeting_subject, _USER())
 
 
 # --- Utility tools ---

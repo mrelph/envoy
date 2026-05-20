@@ -14,6 +14,48 @@ from pathlib import Path
 
 _ENVOY_DIR = Path.home() / ".envoy"
 _LAST_ANALYSIS = _ENVOY_DIR / "learning_state.json"
+_PROCESS_FILE = os.path.expanduser("~/.envoy/process.md")
+
+
+def apply_learning(pattern: str, section: str = "General") -> str:
+    """Append a learned rule to process.md under the given section."""
+    header = f"## {section}"
+    if not os.path.exists(_PROCESS_FILE):
+        tmpl = os.path.join(os.path.dirname(os.path.dirname(__file__)), "templates", "process.md")
+        if os.path.exists(tmpl):
+            import shutil
+            shutil.copy(tmpl, _PROCESS_FILE)
+        else:
+            with open(_PROCESS_FILE, "w") as f:
+                f.write(f"# Process Memory\n\n{header}\n- {pattern}\n")
+            return f"Created process memory: [{section}] {pattern}"
+    with open(_PROCESS_FILE) as f:
+        content = f.read()
+    if header in content:
+        content = content.replace(header, f"{header}\n- {pattern}", 1)
+    else:
+        content = content.rstrip() + f"\n\n{header}\n- {pattern}\n"
+    with open(_PROCESS_FILE, "w") as f:
+        f.write(content)
+    return f"Learned: [{section}] {pattern}"
+
+
+def analyze_patterns(days: int = 7) -> str:
+    """Analyze recent observation entries for recurring patterns and propose rules."""
+    from agents.memory2 import _load_entries
+    from agents.base import invoke_ai
+    entries = _load_entries(days)
+    observations = [e for e in entries if e.get("type") == "observation"]
+    if not observations:
+        return f"No observations in the last {days} days."
+    log = "\n".join(f"- {e['text'][:200]}" for e in observations[-50:])
+    return invoke_ai(
+        f"Analyze these {len(observations)} user interaction observations from the last {days} days. "
+        f"Identify recurring patterns and preferences. For each pattern, suggest a concrete rule "
+        f"that could be added to a process doc (sections: Email, Meetings, Cleanup, Slack, Calendar, General).\n"
+        f"Format: one pattern per line as '- [Section] rule text'\n\n{log}",
+        max_tokens=600, tier="light"
+    )
 
 # --- Correction detection patterns (no AI needed) ---
 
@@ -150,7 +192,6 @@ def apply_correction(rule: str) -> str:
     section = rule.split("]")[0].strip("[")
     text = rule.split("]", 1)[1].strip()
     try:
-        from agents.observer import apply_learning
         return apply_learning(text, section)
     except Exception as e:
         return f"Failed to save: {e}"
@@ -215,7 +256,6 @@ def auto_apply_analysis(analysis: str) -> list[str]:
             if not rule_text:
                 continue
             try:
-                from agents.observer import apply_learning
                 apply_learning(rule_text, section)
                 applied.append(f"[{section}] {rule_text}")
             except Exception:

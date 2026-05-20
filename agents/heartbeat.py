@@ -13,7 +13,7 @@ from pathlib import Path
 from agents.base import invoke_ai, outlook, MCPConnectionError, run
 from agents import email, slack_agent, calendar, todo, tickets, people, memory2 as memory
 
-_USER = os.getenv("USER", "")
+from agents.base import current_user as _USER  # call-time alias resolution
 _ENVOY_DIR = Path.home() / ".envoy"
 _ROUTINES_FILE = _ENVOY_DIR / "routines.md"
 _STATE_FILE = _ENVOY_DIR / "heartbeat_state.json"
@@ -106,7 +106,7 @@ async def _gather_context(days: int = 1) -> str:
     ]
 
     try:
-        tasks.append(_safe("tickets", tickets.scan_tickets(_USER)))
+        tasks.append(_safe("tickets", tickets.scan_tickets(_USER())))
     except Exception:
         pass
 
@@ -207,9 +207,9 @@ Respond with ONLY the alerts or ALL_CLEAR. No preamble."""
     message = f"{header}\n\n{result}"
 
     if notify == "slack":
-        await slack_agent.send_dm(_USER, message)
+        await slack_agent.send_dm(_USER(), message)
     elif notify == "email":
-        await email.email_digest(message, _USER, 0)
+        await email.email_digest(message, _USER(), 0)
 
     if not quiet:
         print(message)
@@ -235,7 +235,7 @@ def _run_weekly_learning(notify: str = "none"):
                 if suggestion:
                     msg += f"\n\n{suggestion}"
                 if notify == "slack":
-                    run(slack_agent.send_dm(_USER, msg))
+                    run(slack_agent.send_dm(_USER(), msg))
     except Exception:
         pass  # Never break heartbeat
 
@@ -244,7 +244,7 @@ def _run_weekly_learning(notify: str = "none"):
 
 def suggest_routines() -> str:
     """Analyze observer patterns and suggest new routines."""
-    from agents.observer import analyze_patterns
+    from agents.learning import analyze_patterns
     patterns = analyze_patterns(days=14)
     current = get_routines()
 

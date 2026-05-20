@@ -21,7 +21,7 @@ from agents.base import run, slack
 from agents import slack_agent
 from agents.heartbeat import _run_heartbeat_async
 
-_USER = os.getenv("USER", "")
+from agents.base import current_user as _USER  # call-time alias resolution
 _ENVOY_DIR = Path.home() / ".envoy"
 _STATE_FILE = _ENVOY_DIR / "watcher_state.json"
 _stop = False
@@ -96,7 +96,7 @@ async def _tick(force_heartbeat: bool):
     if alerts:
         msg = f"👁 Envoy Watcher — {now.astimezone().strftime('%a %I:%M%p')}\n\n" + "\n\n".join(alerts)
         try:
-            await slack_agent.send_dm(_USER, msg)
+            await slack_agent.send_dm(_USER(), msg)
         except Exception:
             print(msg)
 

@@ -847,6 +847,42 @@ def agent_name() -> str:
     return "Envoy"
 
 
+# --- User identity ---
+# Resolved lazily on first call from envoy.md ("- Alias:") and cached, so
+# the configured Amazon alias actually flows to workers instead of $USER.
+# `reload_user()` clears the cache after /settings edits.
+
+_user_cache = None
+
+
+def current_user() -> str:
+    """Return the user's Amazon alias from envoy.md, falling back to $USER."""
+    global _user_cache
+    if _user_cache is not None:
+        return _user_cache
+    p = os.path.expanduser("~/.envoy/envoy.md")
+    if os.path.exists(p):
+        try:
+            with open(p) as f:
+                for line in f:
+                    s = line.strip()
+                    if s.startswith("- Alias:"):
+                        val = s.split(":", 1)[1].strip()
+                        if val:
+                            _user_cache = val
+                            return _user_cache
+        except Exception:
+            pass
+    _user_cache = os.environ.get("USER", "")
+    return _user_cache
+
+
+def reload_user() -> None:
+    """Drop the cached user alias so the next current_user() re-reads envoy.md."""
+    global _user_cache
+    _user_cache = None
+
+
 # --- Sent message tracking ---
 
 SENT_LOG = os.path.expanduser("~/.envoy/sent.json")
