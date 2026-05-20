@@ -5,6 +5,8 @@ from strands import Agent, tool
 from agents.base import run
 from agents.workers import _model
 
+RELEVANT_SECTIONS = ["SharePoint", "General"]
+
 
 def create(session_mgr=None):
     from agents import sharepoint_agent as sp

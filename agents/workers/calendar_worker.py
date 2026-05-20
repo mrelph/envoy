@@ -4,6 +4,8 @@ from strands import Agent, tool
 from agents.base import run
 from agents.workers import _model
 
+RELEVANT_SECTIONS = ["Calendar", "Safety & Confirmations"]
+
 
 def create(session_mgr=None):
     from agents import calendar as cal_mod

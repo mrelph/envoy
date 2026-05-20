@@ -4,6 +4,9 @@ from strands import Agent, tool
 from agents.base import run
 from agents.workers import _USER, _model
 
+# process.md sections injected into this worker's system prompt
+RELEVANT_SECTIONS = ["Email", "Safety & Confirmations"]
+
 
 def _format_html(text: str) -> str:
     """Convert plain text to simple HTML with paragraph breaks."""

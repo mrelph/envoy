@@ -92,23 +92,22 @@ _workers = {}
 WORKER_NAMES = ["email", "comms", "calendar", "productivity", "research", "sharepoint", "coding"]
 
 
-# Map worker names to relevant process.md sections
-_WORKER_SECTIONS = {
-    "email": ["Email", "Safety & Confirmations"],
-    "comms": ["Slack", "Safety & Confirmations"],
-    "calendar": ["Calendar", "Safety & Confirmations"],
-    "productivity": ["Tickets", "General", "Safety & Confirmations"],
-    "research": ["General"],
-    "sharepoint": ["SharePoint", "General"],
-}
+def _worker_sections(module) -> list:
+    """Pull RELEVANT_SECTIONS off a worker module, with a safe fallback."""
+    sections = getattr(module, "RELEVANT_SECTIONS", None)
+    return list(sections) if isinstance(sections, (list, tuple)) else []
 
 
-def _load_process_rules(worker_name: str) -> str:
-    """Load relevant process.md sections for a worker's system prompt."""
+def _load_process_rules(worker_module) -> str:
+    """Load relevant process.md sections for a worker's system prompt.
+
+    Section list is declared on each worker module as RELEVANT_SECTIONS so
+    new workers only need to edit their own file.
+    """
     path = Path.home() / ".envoy" / "process.md"
     if not path.exists():
         return ""
-    sections = _WORKER_SECTIONS.get(worker_name, [])
+    sections = _worker_sections(worker_module)
     if not sections:
         return ""
     content = path.read_text()
@@ -157,7 +156,7 @@ def _import_create(module_name: str, worker_name: str):
     mod = importlib.import_module(f"agents.workers.{module_name}")
     agent = mod.create(session_mgr=_session_manager(worker_name))
     # Inject relevant process.md rules into the worker's system prompt
-    rules = _load_process_rules(worker_name)
+    rules = _load_process_rules(mod)
     if rules and hasattr(agent, 'system_prompt') and isinstance(agent.system_prompt, str):
         agent.system_prompt = agent.system_prompt + rules
     return agent

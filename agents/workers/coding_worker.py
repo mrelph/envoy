@@ -9,6 +9,8 @@ import time
 from strands import Agent, tool
 from agents.workers import _model
 
+RELEVANT_SECTIONS = ["Coding", "General", "Safety & Confirmations"]
+
 # Subprocess timeout bounds. The per-request budget is ~120s, but coding tasks
 # can legitimately exceed it; we still cap so the user is never stuck forever.
 _CODING_MIN_TIMEOUT = 60

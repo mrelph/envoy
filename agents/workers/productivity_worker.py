@@ -4,6 +4,8 @@ from strands import Agent, tool
 from agents.base import run
 from agents.workers import _USER, _model
 
+RELEVANT_SECTIONS = ["Tickets", "General", "Safety & Confirmations"]
+
 
 def create(session_mgr=None):
     from agents import todo as todo_mod, tickets as tix_mod, memory2 as mem_mod
