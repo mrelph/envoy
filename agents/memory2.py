@@ -247,7 +247,7 @@ def _recall_by_query(query: str, limit: int) -> str:
                 related_summaries.append((k, v))
 
     # Search raw entries
-    entries = _load_entries(days=KEEP_DAYS)
+    entries = _load_entries(days=max(TIER_KEEP_DAYS.values()))
     scored = []
     for e in entries:
         score = 0

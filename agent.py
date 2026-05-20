@@ -315,7 +315,7 @@ def create_agent(session_id: str = "default"):
     from strands.session.file_session_manager import FileSessionManager
     from tools import ALL_TOOLS
 
-    agent_model_id = _load_models().get("agent", "us.anthropic.claude-opus-4-6-v1")
+    agent_model_id = _load_models().get("agent", "us.anthropic.claude-opus-4-7-v1")
 
     model = BedrockModel(
         model_id=agent_model_id,

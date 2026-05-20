@@ -618,15 +618,17 @@ def check_mcp_connections() -> Dict[str, bool]:
 
 MODELS_FILE = os.path.expanduser("~/.envoy/models.json")
 DEFAULT_MODELS = {
-    "agent":  "us.anthropic.claude-opus-4-6-v1",
-    "heavy":  "us.anthropic.claude-opus-4-6-v1",
-    "medium": "us.anthropic.claude-sonnet-4-20250514-v1:0",
-    "light":  "us.anthropic.claude-3-5-haiku-20241022-v1:0",
+    "agent":  "us.anthropic.claude-opus-4-7-v1",
+    "heavy":  "us.anthropic.claude-opus-4-7-v1",
+    "medium": "us.anthropic.claude-sonnet-4-6-v1",
+    "light":  "us.amazon.nova-micro-v1:0",
     "memory": "us.amazon.nova-micro-v1:0",
 }
 MODEL_CATALOG = [
-    ("us.anthropic.claude-opus-4-6-v1",              "Claude Opus 4.6",   "Best reasoning, highest cost"),
-    ("us.anthropic.claude-sonnet-4-20250514-v1:0",   "Claude Sonnet 4",   "Strong balance of speed & quality"),
+    ("us.anthropic.claude-opus-4-7-v1",              "Claude Opus 4.7",   "Best reasoning, highest cost"),
+    ("us.anthropic.claude-opus-4-6-v1",              "Claude Opus 4.6",   "Previous gen Opus, strong reasoning"),
+    ("us.anthropic.claude-sonnet-4-6-v1",            "Claude Sonnet 4.6", "Strong balance of speed & quality"),
+    ("us.anthropic.claude-sonnet-4-20250514-v1:0",   "Claude Sonnet 4",   "Previous gen Sonnet"),
     ("us.anthropic.claude-3-5-haiku-20241022-v1:0",  "Claude 3.5 Haiku",  "Fast & cheap, good for simple tasks"),
     ("us.amazon.nova-pro-v1:0",                      "Nova Pro",          "Best Nova quality, multimodal"),
     ("us.amazon.nova-lite-v1:0",                     "Nova Lite",         "Fast & low-cost multimodal"),

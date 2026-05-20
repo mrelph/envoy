@@ -4,8 +4,10 @@ import os
 from datetime import datetime
 from pathlib import Path
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal
-from textual.widgets import Static, Input, RichLog, Label, TextArea
+from textual.containers import Horizontal, Vertical
+from textual.screen import ModalScreen
+from textual.widgets import Static, Input, RichLog, Label, TextArea, OptionList
+from textual.widgets.option_list import Option, Separator
 from textual.binding import Binding
 from textual.worker import get_current_worker
 from textual import work, on
@@ -18,14 +20,15 @@ CONFIG_DIR = Path.home() / ".envoy"
 SOUL_FILE = CONFIG_DIR / "soul.md"
 VERSION = (Path(__file__).parent / "VERSION").read_text().strip()
 
-LOGO = r"""[bold cyan]
- ███████╗███╗   ██╗██╗   ██╗ ██████╗ ██╗   ██╗
- ██╔════╝████╗  ██║██║   ██║██╔═══██╗╚██╗ ██╔╝
- █████╗  ██╔██╗ ██║██║   ██║██║   ██║ ╚████╔╝
- ██╔══╝  ██║╚██╗██║╚██╗ ██╔╝██║   ██║  ╚██╔╝
- ███████╗██║ ╚████║ ╚████╔╝ ╚██████╔╝   ██║
- ╚══════╝╚═╝  ╚═══╝  ╚═══╝   ╚═════╝    ╚═╝[/bold cyan]
-[dim]  Your AI Chief of Staff  ·  v{version}[/dim]"""
+LOGO = r"""[bold #58a6ff]
+  ╭──────────────────────────────────────╮
+  │                                      │
+  │    E N V O Y                         │
+  │                                      │
+  │    [dim #8b949e]Your AI Chief of Staff[/dim #8b949e]            │
+  │    [dim #484f58]v{version}[/dim #484f58]                            │
+  │                                      │
+  ╰──────────────────────────────────────╯[/bold #58a6ff]"""
 
 SPINNER_HINTS = {
     "email": "📧 Email", "inbox": "📧 Email", "digest": "📧 Email",
@@ -102,10 +105,11 @@ class MCPBar(Static):
     def check(self) -> None:
         from ui import _check_mcp_servers
         status = _check_mcp_servers()
-        t = Text(" ")
+        t = Text(" Envoy  ", style="bold #58a6ff")
+        t.append("│ ", style="#30363d")
         for name, ok in status.items():
-            t.append("● " if ok else "○ ", style="green" if ok else "red")
-            t.append(name, style="" if ok else "dim")
+            t.append("● " if ok else "○ ", style="#3fb950" if ok else "#f85149")
+            t.append(name, style="#e6edf3" if ok else "#484f58")
             t.append("  ")
         self._content = t
         self.app.call_from_thread(self.refresh)
@@ -124,9 +128,9 @@ class Spinner(Static):
             return Text("")
         char = BRAILLE_FRAMES[self._frame % len(BRAILLE_FRAMES)]
         flavor = _FLAVOR[self._flavor_idx % len(_FLAVOR)]
-        t = Text(f"  {char} ", style="bold cyan")
-        t.append(self._hint, style="dim italic")
-        t.append(f"  ·  {flavor}…", style="dim")
+        t = Text(f"  {char} ", style="bold #58a6ff")
+        t.append(self._hint, style="#8b949e italic")
+        t.append(f"  ·  {flavor}…", style="#484f58")
         return t
 
     def start(self, hint: str) -> None:
@@ -188,37 +192,180 @@ class StatusBar(Static):
         except Exception:
             pass
 
+        sep = "  ·  "
         t = Text()
-        t.append(f" {alias}", style="bold cyan")
-        t.append(f"  {now}", style="dim")
+        t.append(f" {alias}", style="bold #58a6ff")
+        t.append(sep, style="#30363d")
+        t.append(now, style="#8b949e")
         if model:
-            t.append("  │  ", style="dim")
-            t.append(f"🧠 {model}", style="italic")
-        # TTFT
+            t.append(sep, style="#30363d")
+            t.append(f"⚡ {model}", style="#d2a8ff")
         if ttft_ms is not None:
-            t.append("  │  ", style="dim")
+            t.append(sep, style="#30363d")
             if ttft_ms >= 1000:
-                t.append(f"⚡{ttft_ms / 1000:.1f}s", style="yellow")
+                t.append(f"{ttft_ms / 1000:.1f}s", style="#d29922")
             else:
-                t.append(f"⚡{ttft_ms}ms", style="green")
-        # Session tokens
+                t.append(f"{ttft_ms}ms", style="#3fb950")
         if session_tokens > 0:
-            t.append("  │  ", style="dim")
+            t.append(sep, style="#30363d")
             if session_tokens >= 1_000_000:
-                t.append(f"🪙 {session_tokens / 1_000_000:.1f}M", style="dim")
+                t.append(f"{session_tokens / 1_000_000:.1f}M tok", style="#484f58")
             elif session_tokens >= 1_000:
-                t.append(f"🪙 {session_tokens / 1_000:.0f}K", style="dim")
+                t.append(f"{session_tokens / 1_000:.0f}K tok", style="#484f58")
             else:
-                t.append(f"🪙 {session_tokens}", style="dim")
-        t.append("  │  ", style="dim")
-        t.append("/help", style="bold green")
-        t.append("  ", style="dim")
-        t.append("ctrl+c", style="bold")
-        t.append(" quit", style="dim")
+                t.append(f"{session_tokens} tok", style="#484f58")
+        t.append(sep, style="#30363d")
+        t.append("/help", style="#3fb950")
+        t.append("  ")
+        t.append("^C", style="#8b949e bold")
+        t.append(" quit", style="#484f58")
         return t
 
     def on_mount(self) -> None:
         self.set_interval(30, self.refresh)
+
+
+# ── Model Picker Modal ───────────────────────────────────
+
+
+class ModelPickerScreen(ModalScreen[str | None]):
+    """Interactive model picker — select tier then model."""
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+    ]
+
+    DEFAULT_CSS = """
+    ModelPickerScreen {
+        align: center middle;
+    }
+    #model-picker-box {
+        width: 72;
+        max-height: 28;
+        background: #161b22;
+        border: round #30363d;
+        padding: 1 2;
+    }
+    #model-picker-box Static {
+        width: 100%;
+        content-align: center middle;
+        text-style: bold;
+        color: #58a6ff;
+        margin-bottom: 1;
+    }
+    #model-picker-box OptionList {
+        height: auto;
+        max-height: 20;
+        background: #0d1117;
+        border: solid #21262d;
+    }
+    """
+
+    def __init__(self):
+        super().__init__()
+        self._phase = "tier"  # "tier" or "model"
+        self._selected_tier: str | None = None
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="model-picker-box"):
+            yield Static("⚙️  Model Picker — Select a tier to change")
+            yield OptionList(id="picker-list")
+
+    def on_mount(self) -> None:
+        self._show_tier_list()
+
+    def _show_tier_list(self) -> None:
+        from agents.base import _load_models, DEFAULT_MODELS, MODEL_CATALOG
+        models = _load_models()
+        ol = self.query_one("#picker-list", OptionList)
+        ol.clear_options()
+        for tier in DEFAULT_MODELS:
+            mid = models.get(tier, DEFAULT_MODELS[tier])
+            name = next((c[1] for c in MODEL_CATALOG if c[0] == mid), mid.split(".")[-1])
+            ol.add_option(Option(f"  {tier:<8} → {name}", id=tier))
+        ol.add_option(Separator())
+        ol.add_option(Option("  ↩ Cancel", id="__cancel__"))
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        if self._phase == "tier":
+            if event.option.id == "__cancel__":
+                self.dismiss(None)
+                return
+            self._selected_tier = event.option.id
+            self._phase = "model"
+            self._show_model_list()
+        else:
+            if event.option.id == "__cancel__":
+                # Go back to tier selection
+                self._phase = "tier"
+                self._show_tier_list()
+                return
+            # Apply the selection
+            tier = self._selected_tier
+            model_id = event.option.id
+            self._apply(tier, model_id)
+
+    def _show_model_list(self) -> None:
+        from ui import _fetch_model_catalog
+        from agents.base import MODEL_CATALOG, _load_models, DEFAULT_MODELS
+
+        live = _fetch_model_catalog(refresh=False)
+        catalog = live if live else [(mid, name, desc) for mid, name, desc in MODEL_CATALOG]
+
+        current_mid = _load_models().get(self._selected_tier, DEFAULT_MODELS.get(self._selected_tier, ""))
+
+        ol = self.query_one("#picker-list", OptionList)
+        ol.clear_options()
+        self.query_one("#model-picker-box Static", Static).update(
+            f"⚙️  Select model for [{self._selected_tier}]"
+        )
+        for mid, name, desc in catalog:
+            marker = " ●" if mid == current_mid else "  "
+            short_desc = (desc or "")[:40]
+            label = f"{marker} {name:<22} {short_desc}"
+            ol.add_option(Option(label, id=mid))
+        ol.add_option(Separator())
+        ol.add_option(Option("  ← Back", id="__cancel__"))
+
+    def _show_tier_list(self) -> None:
+        from agents.base import _load_models, DEFAULT_MODELS, MODEL_CATALOG
+        models = _load_models()
+
+        ol = self.query_one("#picker-list", OptionList)
+        ol.clear_options()
+        self.query_one("#model-picker-box Static", Static).update(
+            "⚙️  Model Picker — Select a tier to change"
+        )
+        for tier in DEFAULT_MODELS:
+            mid = models.get(tier, DEFAULT_MODELS[tier])
+            name = next((c[1] for c in MODEL_CATALOG if c[0] == mid), mid.split(".")[-1])
+            ol.add_option(Option(f"  {tier:<8} → {name}", id=tier))
+        ol.add_option(Separator())
+        ol.add_option(Option("  ↩ Cancel", id="__cancel__"))
+
+    def _apply(self, tier: str, model_id: str) -> None:
+        import json
+        from agents.base import MODELS_FILE, reload_models, MODEL_CATALOG
+
+        current = {}
+        try:
+            with open(MODELS_FILE) as f:
+                current = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            pass
+        current[tier] = model_id
+        os.makedirs(os.path.dirname(MODELS_FILE), exist_ok=True)
+        with open(MODELS_FILE, "w") as f:
+            json.dump(current, f, indent=2)
+        reload_models()
+        from agent import reload_agent
+        reload_agent()
+
+        name = next((c[1] for c in MODEL_CATALOG if c[0] == model_id), model_id.split(".")[-1])
+        self.dismiss(f"✓ {tier} → {name}")
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
 
 
 # ── App ──────────────────────────────────────────────────
@@ -228,7 +375,7 @@ class EnvoyApp(App):
     """Envoy TUI."""
 
     CSS_PATH = "tui.css"
-    TITLE = f"Envoy v{VERSION}"
+    TITLE = "Envoy"
     ALLOW_SELECT = True
 
     BINDINGS = [
@@ -285,7 +432,7 @@ class EnvoyApp(App):
             pass
         self.app.call_from_thread(
             self.query_one("#output", RichLog).write,
-            Text(f"  ✓ {name} ready\n", style="green"),
+            Text(f"  ✓ {name} ready\n", style="#3fb950"),
         )
 
     def on_click(self, event) -> None:
@@ -317,25 +464,14 @@ class EnvoyApp(App):
 
         # Echo user input
         t = Text()
-        t.append(f"\n › ", style="bold cyan")
-        t.append(raw, style="bold")
+        t.append(f"\n › ", style="bold #58a6ff")
+        t.append(raw, style="#e6edf3 bold")
         out.write(t)
 
         # Reject new input while a previous request is still running
         if self._busy:
-            out.write(Text("  ⏳ Still working on your last request — wait for it to finish (or ctrl+c to quit).", style="yellow"))
+            out.write(Text("  ⏳ Still working on your last request — wait for it to finish (or ctrl+c to quit).", style="#d29922"))
             return
-
-        # If we're awaiting a follow-up answer (e.g. after /models), rewrite the input
-        if self._pending_prompt == "models":
-            lower = raw.strip().lower()
-            if lower in ("", "cancel", "q", "quit", "exit"):
-                self._pending_prompt = None
-                out.write(Text("  Cancelled.", style="dim"))
-                return
-            raw = f"/models {raw.strip()}"
-            # Fall through to normal dispatch below; clear flag unless user stays in picker
-            self._pending_prompt = None
 
         # System commands
         cmd = raw.split()[0].lower() if raw.startswith("/") else None
@@ -352,17 +488,17 @@ class EnvoyApp(App):
             self._run_mwinit()
             return
         if cmd == "/settings":
-            out.write(Text("  Use 'envoy settings' from CLI to edit config.", style="dim"))
+            out.write(Text("  Use 'envoy settings' from CLI to edit config.", style="#8b949e"))
             return
 
-        # After a bare `/models`, arm follow-up so the next input is treated as args
-        bare_models = (cmd == "/models" and not raw.split()[1:])
+        # After a bare `/models`, open the interactive picker modal
+        if cmd == "/models" and not raw.split()[1:]:
+            self._open_model_picker()
+            return
 
         # Start animated spinner
         hint = _get_hint(raw)
         self.query_one("#spinner", Spinner).start(hint)
-        if bare_models:
-            self._pending_prompt = "models"
         self._busy = True
         self._run_command(raw, hint)
 
@@ -416,9 +552,9 @@ class EnvoyApp(App):
             if error is not None:
                 msg = str(error)
                 if "Concurrent invocations" in msg or "ConcurrencyException" in type(error).__name__:
-                    out.write(Text("  ⚠️  Agent was still busy. Try again in a moment.", style="yellow"))
+                    out.write(Text("  ⚠️  Agent was still busy. Try again in a moment.", style="#d29922"))
                 else:
-                    out.write(Text(f"\n  ⚠️  {type(error).__name__}: {msg}\n", style="red"))
+                    out.write(Text(f"\n  ⚠️  {type(error).__name__}: {msg}\n", style="#f85149"))
                 return
             if not result:
                 return
@@ -440,10 +576,22 @@ class EnvoyApp(App):
 
         self.app.call_from_thread(_show)
 
+    def _open_model_picker(self) -> None:
+        """Push the interactive model picker modal."""
+        def _on_dismiss(result: str | None) -> None:
+            out = self.query_one("#output", RichLog)
+            if result:
+                out.write(Text(f"  {result}", style="#3fb950"))
+            else:
+                out.write(Text("  Model picker closed.", style="#8b949e"))
+            self.query_one("#input", TextArea).focus()
+
+        self.push_screen(ModelPickerScreen(), callback=_on_dismiss)
+
     def _run_mwinit(self) -> None:
         import subprocess
         out = self.query_one("#output", RichLog)
-        out.write(Text("  Launching mwinit — check your browser…", style="dim"))
+        out.write(Text("  Launching mwinit — check your browser…", style="#8b949e"))
 
         def _do_mwinit():
             with self.suspend():
@@ -518,12 +666,12 @@ class EnvoyApp(App):
         out.write(Text())
         for group_name, cmds in COMMAND_GROUPS:
             t = Text()
-            t.append(f"  {group_name}\n", style="bold cyan")
+            t.append(f"  {group_name}\n", style="bold #58a6ff")
             for cmd in cmds:
                 entry = COMMANDS.get(cmd)
                 desc = entry[0] if entry else ""
-                t.append(f"    {cmd:22s}", style="green")
-                t.append(f"{desc}\n", style="dim")
+                t.append(f"    {cmd:22s}", style="#3fb950")
+                t.append(f"{desc}\n", style="#8b949e")
             out.write(t)
 
     def action_refresh_mcp(self) -> None:
