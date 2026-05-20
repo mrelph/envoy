@@ -101,8 +101,8 @@ class TestReflect:
 
         calls = []
 
-        def fake_remember(text, entry_type="action"):
-            calls.append({"text": text, "entry_type": entry_type})
+        def fake_remember(text, entry_type="action", **kwargs):
+            calls.append({"text": text, "entry_type": entry_type, **kwargs})
             return "ok"
 
         monkeypatch.setattr(memory2, "remember", fake_remember)
@@ -140,7 +140,7 @@ class TestReflect:
         assert "/digest morning" in c["text"]
         # Response substring (truncated to 120 chars) should appear, with newlines flattened.
         assert "Pulled 12 emails" in c["text"]
-        assert "→" in c["text"]
+        assert "—" in c["text"]
 
     def test_includes_user_reply_when_provided(self, recorder):
         calls, learning = recorder
@@ -160,11 +160,12 @@ class TestReflect:
         learning.reflect(long_cmd, long_resp)
         assert len(calls) == 1
         text = calls[0]["text"]
-        # Command portion capped at 80 chars
-        cmd_part = text.split(" → ")[0]
-        assert len(cmd_part) <= 80
+        # Command portion (after the [domain] tag) capped at 80 chars
+        cmd_part = text.split(" — ")[0]
+        action = cmd_part.split("] ", 1)[1]
+        assert len(action) <= 80
         # Response portion capped at 120 chars
-        resp_part = text.split(" → ")[1]
+        resp_part = text.split(" — ")[1]
         assert len(resp_part) <= 120
 
     def test_swallows_remember_exceptions(self, envoy_home, monkeypatch):

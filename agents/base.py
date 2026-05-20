@@ -229,9 +229,17 @@ class _TimeoutSession:
             raise
 
     async def _expand_batch(self, old_name, new_name, arguments, **kwargs):
-        """Expand a batch call into sequential single calls, returning a combined result."""
+        """Expand a batch call into sequential single calls, returning a combined result.
+
+        Per-item exceptions are caught and a placeholder result is substituted so a
+        partial Slack outage doesn't fail the whole scan. Swallowed errors are
+        aggregated and logged once per batch — silent fallbacks here previously
+        masked slack-mcp API drift for weeks.
+        """
         import json as _json
         from types import SimpleNamespace
+
+        swallowed = []  # (item_id, exception)
 
         results = []
         if old_name == "batch_get_channel_info":
@@ -240,7 +248,8 @@ class _TimeoutSession:
                     r = await self._call_one(new_name, {"channel": cid}, **kwargs)
                     text = r.content[0].text if r.content else "{}"
                     results.append({"channelId": cid, "result": _json.loads(text) if isinstance(text, str) else text})
-                except Exception:
+                except Exception as e:
+                    swallowed.append((cid, e))
                     results.append({"channelId": cid, "result": {"name": cid}})
         elif old_name == "batch_get_user_info":
             for uid in (arguments or {}).get("users", []):
@@ -249,7 +258,8 @@ class _TimeoutSession:
                     text = r.content[0].text if r.content else "{}"
                     data = _json.loads(text) if isinstance(text, str) else text
                     results.append({"userId": uid, "result": data if isinstance(data, dict) else {"name": uid}})
-                except Exception:
+                except Exception as e:
+                    swallowed.append((uid, e))
                     results.append({"userId": uid, "result": {"name": uid}})
         elif old_name == "batch_set_last_read":
             for ch in (arguments or {}).get("channels", []):
@@ -257,8 +267,8 @@ class _TimeoutSession:
                 ts = ch.get("ts") or ch.get("tsIso", "")
                 try:
                     await self._call_one(new_name, {"channel": cid, "timestamp": ts}, **kwargs)
-                except Exception:
-                    pass
+                except Exception as e:
+                    swallowed.append((cid, e))
             results = [{"ok": True}]
         elif old_name == "list_channels":
             # Emulate old list_channels using list_my_channels + list_channels (DM types)
@@ -304,9 +314,23 @@ class _TimeoutSession:
                 payload = _json.dumps({"channels": filtered[:limit]})
                 content_item = SimpleNamespace(type="text", text=payload)
                 return SimpleNamespace(content=[content_item])
-            except Exception:
+            except Exception as e:
+                swallowed.append(("list_my_channels", e))
                 results = {"channels": []}
                 payload = _json.dumps(results)
+
+        # If anything was swallowed, log once with a representative cause so
+        # slack-mcp API drift surfaces instead of silently degrading scans.
+        if swallowed:
+            try:
+                _, sample = swallowed[0]
+                get_logger().log(
+                    "WARNING", "slack_batch_swallow",
+                    f"slack-mcp {old_name}→{new_name}: {len(swallowed)} item(s) failed; sample: {sample!r}",
+                    server_name="Slack", tool_name=old_name, error_count=len(swallowed),
+                )
+            except Exception:
+                pass
 
         # Wrap in MCP-like response shape
         payload = _json.dumps(results)
