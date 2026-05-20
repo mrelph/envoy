@@ -46,92 +46,51 @@ def _ensure_dir():
 
 
 # --- Entity extraction (no AI, just pattern matching) ---
+#
+# Three strict signals — anything else is too noisy to index. We deliberately
+# do NOT collect bare single-word capitalized tokens; that approach required a
+# stopword list that grew to ~80 entries and still leaked words like "Looking"
+# or "Information" into entity tags.
+#   1. Amazon aliases (alice@amazon.com, @bob)
+#   2. Project / ticket IDs (KP-1234, SIM-5678, Foo-42)
+#   3. Multi-word capitalized phrases ("AWS Marketing Team", "Q3 2026")
+# Single-word names like "Sarah" only flow through if their alias appears
+# nearby — that's intentional, since "sarah" alone isn't unique enough to
+# be a useful retrieval key.
 
-# Common Amazon alias pattern
 _ALIAS_RE = re.compile(r'\b([a-z]{2,12})@amazon\.com\b|@([a-z]{2,12})\b')
-# Project/topic patterns — capitalized multi-word or known prefixes
 _PROJECT_RE = re.compile(r'\b(KP-\d+|SIM-\d+|[A-Z][a-z]+-\d+)\b')
-_TOPIC_RE = re.compile(r'\b(Q[1-4]\s*\d{4}|Q[1-4]\b|[A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)+)\b')
-
-# Words that look like entities (capitalized) but aren't people/projects
-_ENTITY_STOPWORDS = frozenset({
-    # Determiners, prepositions, conjunctions
-    'the', 'this', 'that', 'these', 'those', 'from', 'with', 'about', 'into',
-    'after', 'before', 'between', 'through', 'during', 'without', 'within',
-    'also', 'just', 'only', 'some', 'each', 'every', 'both', 'either',
-    # Common verbs (often start sentences in notes)
-    'reply', 'send', 'sent', 'check', 'update', 'updated', 'follow', 'review',
-    'reviewed', 'added', 'removed', 'created', 'deleted', 'moved', 'fixed',
-    'done', 'completed', 'cancelled', 'scheduled', 'shared', 'forwarded',
-    'replied', 'asked', 'told', 'said', 'noted', 'mentioned', 'discussed',
-    'approved', 'rejected', 'assigned', 'resolved', 'closed', 'opened',
-    'flagged', 'marked', 'scanned', 'fetched', 'searched', 'found',
-    'need', 'needs', 'should', 'could', 'would', 'will', 'can', 'may',
-    'keep', 'skip', 'ignore', 'decline', 'accept', 'confirm', 'cancel',
-    # Common nouns in agent context
-    'email', 'emails', 'slack', 'meeting', 'meetings', 'calendar', 'inbox',
-    'action', 'actions', 'todo', 'todos', 'ticket', 'tickets', 'digest',
-    'report', 'briefing', 'summary', 'response', 'message', 'messages',
-    'thread', 'channel', 'channels', 'draft', 'drafts', 'attachment',
-    'subject', 'body', 'sender', 'recipient', 'reply', 'forward',
-    'priority', 'urgent', 'important', 'critical', 'blocked', 'pending',
-    'status', 'progress', 'deadline', 'milestone', 'goal', 'project',
-    'team', 'manager', 'direct', 'reports', 'customer', 'customers',
-    'error', 'warning', 'success', 'failed', 'unavailable', 'available',
-    'worker', 'agent', 'envoy', 'heartbeat', 'routine', 'pattern',
-    'observation', 'context', 'memory', 'process', 'config', 'settings',
-    # Days and months
-    'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday',
-    'january', 'february', 'march', 'april', 'may', 'june',
-    'july', 'august', 'september', 'october', 'november', 'december',
-    'today', 'tomorrow', 'yesterday', 'week', 'month', 'year',
-    # Tech/Amazon terms
-    'amazon', 'aws', 'sim', 'phonetool', 'kingpin', 'wiki', 'taskei',
-    'sharepoint', 'onedrive', 'outlook', 'teams', 'zoom', 'chime',
-    'jira', 'quip', 'broadcast', 'cron', 'api', 'mcp', 'bedrock',
-    # Additional leakers found in production
-    'based', 'look', 'include', 'show', 'query', 'results', 'system',
-    'details', 'target', 'execution', 'status', 'service', 'technical',
-    'looking', 'using', 'running', 'getting', 'making', 'trying',
-    'working', 'starting', 'checking', 'loading', 'processing',
-    'available', 'unavailable', 'unable', 'successful', 'complete',
-    'information', 'confirmation', 'notification', 'connection',
-    'attempted', 'received', 'returned', 'retrieved', 'generated',
-})
+_TOPIC_RE = re.compile(
+    r'\b(Q[1-4]\s*\d{4}|Q[1-4]\b|[A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)+)\b'
+)
 
 
 def _extract_entities(text: str) -> List[str]:
     """Extract people, project IDs, and topics from text. Fast, no AI."""
-    # Reject text that's clearly not clean prose (raw JSON, markdown soup)
-    if text.count("\\n") > 3 or text.count("{") > 2 or text.count("**") > 2:
-        # Only extract aliases and project IDs from noisy text
-        entities = set()
-        for m in _ALIAS_RE.finditer(text.lower()):
-            alias = m.group(1) or m.group(2)
-            if alias and len(alias) > 2:
-                entities.add(alias)
-        for m in _PROJECT_RE.finditer(text):
-            entities.add(m.group(1).lower())
-        return sorted(entities)
-
     entities = set()
-    # Aliases
+
+    # Aliases — case-insensitive. Skip the topic pass on noisy text (raw JSON
+    # / markdown soup) since multi-word matching there is mostly false
+    # positives off escape sequences.
     for m in _ALIAS_RE.finditer(text.lower()):
         alias = m.group(1) or m.group(2)
         if alias and len(alias) > 2:
             entities.add(alias)
-    # Project IDs
+
+    # Project / ticket IDs
     for m in _PROJECT_RE.finditer(text):
         entities.add(m.group(1).lower())
-    # Mentioned names (capitalized words not at sentence start, not stopwords)
-    words = text.split()
-    for i, w in enumerate(words):
-        clean = w.strip('.,!?:;()[]"\'-*#>')
-        if (clean and clean[0].isupper() and len(clean) > 2 and i > 0
-                and clean.isalpha()  # reject "Results**" or "Status:"
-                and clean.lower() not in _ENTITY_STOPWORDS):
-            entities.add(clean.lower())
-    return sorted(entities)[:10]  # cap at 10 entities per entry
+
+    is_noisy = text.count("\\n") > 3 or text.count("{") > 2 or text.count("**") > 2
+    if not is_noisy:
+        # Multi-word capitalized phrases — must be at least 2 capitalized
+        # words. Single capitalized tokens are intentionally ignored.
+        for m in _TOPIC_RE.finditer(text):
+            phrase = m.group(1).strip().lower()
+            if 4 <= len(phrase) <= 60:
+                entities.add(phrase)
+
+    return sorted(entities)[:10]
 
 
 # --- Core operations ---
@@ -709,6 +668,43 @@ def remove_vault_path(path: str) -> str:
 def list_vault_paths() -> List[str]:
     """List configured vault paths."""
     return _get_vault_paths()
+
+
+def rebuild_entity_index() -> str:
+    """Re-extract entities from every entry and rewrite entities.json.
+
+    Use this after a change to _extract_entities so legacy junk entities
+    (left over from looser extraction rules) drop out of the index.
+    """
+    if not os.path.exists(ENTRIES_FILE):
+        return "No entries file — nothing to rebuild."
+    before = len(_load_index())
+    new_index: Dict[str, List[str]] = {}
+    rebuilt = 0
+    rewritten_lines = []
+    for line in open(ENTRIES_FILE):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            e = json.loads(line)
+        except Exception:
+            rewritten_lines.append(line)
+            continue
+        text = e.get("text", "")
+        entities = _extract_entities(text) if text else []
+        e["entities"] = entities
+        rewritten_lines.append(json.dumps(e))
+        for ent in entities:
+            new_index.setdefault(ent, []).append(e.get("id", ""))
+            if len(new_index[ent]) > 100:
+                new_index[ent] = new_index[ent][-100:]
+        rebuilt += 1
+    with open(ENTRIES_FILE, "w") as f:
+        f.write("\n".join(rewritten_lines) + "\n")
+    _save_index(new_index)
+    after = len(new_index)
+    return f"Rebuilt index: {rebuilt} entries scanned, {before} → {after} entities."
 
 
 # Auto-migrate old format on first import (idempotent — renames files after migration)

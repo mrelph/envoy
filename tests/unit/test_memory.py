@@ -164,11 +164,18 @@ class TestEntityExtraction:
         assert "reply" not in ents
         assert "email" not in ents
 
-    def test_extracts_capitalized_name(self, envoy_home):
+    def test_drops_single_capitalized_name(self, envoy_home):
+        """Single-word capitalized tokens are intentionally NOT extracted —
+        too noisy without a stopword list. Use aliases for unique people."""
         memory2 = _reload_memory(envoy_home)
-        # Capitalized non-stopword in non-leading position should be picked up.
         ents = memory2._extract_entities("Met with Salvador this morning")
-        assert "salvador" in ents
+        assert "salvador" not in ents
+
+    def test_extracts_multi_word_capitalized_phrase(self, envoy_home):
+        memory2 = _reload_memory(envoy_home)
+        ents = memory2._extract_entities("Met with the AWS Marketing Team about Q3 2026")
+        assert "aws marketing team" in ents
+        assert "q3 2026" in ents
 
     def test_remember_indexes_entities(self, envoy_home):
         memory2 = _reload_memory(envoy_home)
