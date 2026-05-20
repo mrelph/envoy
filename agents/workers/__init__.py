@@ -6,11 +6,27 @@ Workers have session persistence and share context via a bus.
 """
 
 import os
+import shutil
 import threading
+import time as _time
 from pathlib import Path
 
 from agents.base import current_user as _USER  # call-time alias resolution
 _SESSIONS_DIR = Path.home() / ".envoy" / "sessions" / "workers"
+
+# Worker sessions get unbounded — every supervisor call appends. We cap to keep
+# replay latency sane: in production we saw email worker hit 74 messages and
+# spend 80s replaying before answering. The supervisor passes the full request
+# fresh each turn, so cross-day worker memory isn't load-bearing.
+_MAX_SESSION_MESSAGES = 30
+_MAX_SESSION_AGE_HOURS = 6
+
+# Strands' FileSessionManager writes under base_dir, but in practice the SDK
+# also uses /tmp/strands/sessions. Both are checked when resetting a worker.
+_SESSION_DIRS = [
+    str(_SESSIONS_DIR),
+    "/tmp/strands/sessions",
+]
 
 
 def _model(tier: str):
@@ -92,6 +108,48 @@ _workers = {}
 WORKER_NAMES = ["email", "comms", "calendar", "productivity", "research", "sharepoint", "coding"]
 
 
+def _session_message_dirs(worker_name: str) -> list:
+    """Find every messages/ dir on disk for this worker, across both base dirs."""
+    found = []
+    for base in _SESSION_DIRS:
+        sess_root = Path(base) / f"session_worker-{worker_name}"
+        if sess_root.is_dir():
+            for msgs in sess_root.rglob("messages"):
+                if msgs.is_dir():
+                    found.append(msgs)
+    return found
+
+
+def _session_is_bloated(worker_name: str) -> bool:
+    """True if a worker's session has too many messages or is stale."""
+    msg_dirs = _session_message_dirs(worker_name)
+    if not msg_dirs:
+        return False
+    total = 0
+    newest_mtime = 0.0
+    for d in msg_dirs:
+        for m in d.iterdir():
+            if m.is_file():
+                total += 1
+                mt = m.stat().st_mtime
+                if mt > newest_mtime:
+                    newest_mtime = mt
+    if total >= _MAX_SESSION_MESSAGES:
+        return True
+    if newest_mtime and (_time.time() - newest_mtime) > _MAX_SESSION_AGE_HOURS * 3600:
+        return True
+    return False
+
+
+def reset_worker_session(worker_name: str) -> None:
+    """Wipe a worker's on-disk session and drop the cached agent instance."""
+    for base in _SESSION_DIRS:
+        sess_dir = Path(base) / f"session_worker-{worker_name}"
+        if sess_dir.is_dir():
+            shutil.rmtree(sess_dir, ignore_errors=True)
+    _workers.pop(worker_name, None)
+
+
 def _worker_sections(module) -> list:
     """Pull RELEVANT_SECTIONS off a worker module, with a safe fallback."""
     sections = getattr(module, "RELEVANT_SECTIONS", None)
@@ -132,20 +190,30 @@ def _load_process_rules(worker_module) -> str:
 
 
 def get_worker(name: str):
-    """Get or create a worker agent by name."""
+    """Get or create a worker agent by name.
+
+    If the on-disk session has accumulated past _MAX_SESSION_MESSAGES or sat
+    idle past _MAX_SESSION_AGE_HOURS, wipe it before constructing the worker
+    so we don't replay a giant prior conversation on every supervisor call.
+    """
+    factories = {
+        "email": lambda: _import_create("email_worker", name),
+        "comms": lambda: _import_create("comms_worker", name),
+        "calendar": lambda: _import_create("calendar_worker", name),
+        "productivity": lambda: _import_create("productivity_worker", name),
+        "research": lambda: _import_create("research_worker", name),
+        "sharepoint": lambda: _import_create("sharepoint_worker", name),
+        "coding": lambda: _import_create("coding_worker", name),
+    }
+    factory = factories.get(name)
+    if not factory:
+        raise ValueError(f"Unknown worker: {name}. Available: {list(factories.keys())}")
+
+    # Pre-flight: if the on-disk session is bloated, reset before constructing
+    if name not in _workers and _session_is_bloated(name):
+        reset_worker_session(name)
+
     if name not in _workers:
-        factories = {
-            "email": lambda: _import_create("email_worker", name),
-            "comms": lambda: _import_create("comms_worker", name),
-            "calendar": lambda: _import_create("calendar_worker", name),
-            "productivity": lambda: _import_create("productivity_worker", name),
-            "research": lambda: _import_create("research_worker", name),
-            "sharepoint": lambda: _import_create("sharepoint_worker", name),
-            "coding": lambda: _import_create("coding_worker", name),
-        }
-        factory = factories.get(name)
-        if not factory:
-            raise ValueError(f"Unknown worker: {name}. Available: {list(factories.keys())}")
         _workers[name] = factory()
     return _workers[name]
 

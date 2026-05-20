@@ -769,12 +769,23 @@ def manage_memory_vaults(action: str, path: str = "") -> str:
 def _delegate(worker_name: str, request: str, _retries: int = 1) -> str:
     """Route to a worker agent with retry and graceful degradation."""
     from agents.workers.result import WorkerResult
+    from agents.workers import reset_worker_session
     import sys
     last_err = None
     for attempt in range(_retries + 1):
         try:
             result = get_worker(worker_name)(request)
             response = str(result.message) if hasattr(result, 'message') else str(result)
+
+            # Empty-prompt artifact: the worker model received no user message
+            # (session corruption — usually a stale toolUse with no toolResult)
+            # and politely asks "what would you like help with?". Treat as a
+            # silent failure: reset and retry the request once.
+            if attempt < _retries and _looks_like_empty_prompt(response):
+                print(f"[{worker_name}] empty-prompt artifact detected — resetting session", file=sys.stderr)
+                reset_worker_session(worker_name)
+                continue
+
             try:
                 memory.remember(f"[{worker_name}] {request[:200]} → {response[:200]}", entry_type="observation")
             except Exception:
@@ -787,14 +798,24 @@ def _delegate(worker_name: str, request: str, _retries: int = 1) -> str:
                 # Clear corrupted session if Bedrock rejects the message history
                 err_msg = str(e)
                 if "ValidationException" in err_msg and "toolResult" in err_msg:
-                    import shutil
-                    for base in ["/tmp/strands/sessions", os.path.expanduser("~/.envoy/sessions/workers")]:
-                        sess_dir = os.path.join(base, f"session_worker-{worker_name}")
-                        if os.path.isdir(sess_dir):
-                            shutil.rmtree(sess_dir, ignore_errors=True)
-                from agents.workers import _workers
-                _workers.pop(worker_name, None)
+                    reset_worker_session(worker_name)
     return f"⚠️ {worker_name} worker unavailable: {last_err}. Other sources may still have the information you need."
+
+
+_EMPTY_PROMPT_HINTS = (
+    "<<HUMAN_CONVERSATION_START>>",
+    "started a message but it came through empty",
+    "nothing followed",
+    "appears to be empty",
+)
+
+
+def _looks_like_empty_prompt(response: str) -> bool:
+    """Detect the worker artifact emitted when its user message arrives empty."""
+    if not response or len(response) > 4000:
+        return False
+    low = response.lower()
+    return any(h.lower() in low for h in _EMPTY_PROMPT_HINTS)
 
 
 @tool
