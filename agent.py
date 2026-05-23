@@ -18,6 +18,76 @@ def _load_file(path: Path) -> str:
     return ""
 
 
+# --- Steering docs (from Vault) ---
+# Loaded contextually when Envoy is doing writing, review, or decision tasks.
+# The system prompt gets a lightweight summary; full docs loaded on demand.
+
+_STEERING_DOCS = {
+    "language-standards": "Language rules — banned phrases, active voice, formatting",
+    "doc-review-standards": "How Mark reviews documents — first pass, flags, what makes a great doc",
+    "leadership-principles": "LPs as evaluation lenses — questions to ask of any document",
+    "decision-frameworks": "Named decision frameworks — one-way doors, Tim Hortons test, signal over noise",
+    "business-context": "Org scope, key metrics, strategic priorities, competitive landscape",
+    "persona": "How Mark works — communication style, operating philosophy, AI parsing guidance",
+}
+
+
+def _get_steering_summary() -> str:
+    """Return a lightweight summary of available steering docs for the system prompt."""
+    steering_path = _get_steering_path()
+    if not steering_path:
+        return ""
+
+    available = []
+    for name, desc in _STEERING_DOCS.items():
+        if os.path.exists(os.path.join(steering_path, f"{name}.md")):
+            available.append(f"  - `{name}` — {desc}")
+
+    if not available:
+        return ""
+
+    return """## Steering Docs (Vault)
+When writing emails, documents, or reviews — or when evaluating documents for the user — load the relevant steering doc for contextual guidance. Use `load_steering_doc(name)` to get the full content.
+
+Available:
+""" + "\n".join(available) + """
+
+**Auto-load rules:**
+- Writing/drafting anything → load `language-standards`
+- Reviewing a document → load `doc-review-standards` + `leadership-principles`
+- Making a recommendation or decision → load `decision-frameworks`
+- Needing business context → load `business-context`
+"""
+
+
+def _get_steering_path() -> str:
+    """Get steering docs path from config."""
+    try:
+        config_file = CONFIG_DIR / "config.json"
+        if config_file.exists():
+            config = json.loads(config_file.read_text())
+            path = config.get("steering_docs", "")
+            if path and os.path.isdir(path):
+                return path
+    except Exception:
+        pass
+    return ""
+
+
+def load_steering_doc(name: str) -> str:
+    """Load a specific steering doc by name. Called by tools/skills on demand."""
+    steering_path = _get_steering_path()
+    if not steering_path:
+        return ""
+    fpath = os.path.join(steering_path, f"{name}.md")
+    if os.path.exists(fpath):
+        try:
+            return open(fpath, encoding="utf-8", errors="ignore").read()
+        except Exception:
+            pass
+    return ""
+
+
 def _ensure_config_files():
     """Bootstrap config files from templates if missing, and migrate personality.md if present."""
     CONFIG_DIR.mkdir(exist_ok=True)
@@ -181,6 +251,14 @@ Suggest 2-3 concrete next steps. Examples:
     except Exception:
         pass
 
+    # Inject steering doc awareness (lightweight — full docs loaded on demand)
+    try:
+        steering = _get_steering_summary()
+        if steering:
+            prompt += f"\n{steering}\n"
+    except Exception:
+        pass
+
     # Inject skill catalog (progressive disclosure — names + descriptions only)
     try:
         from agents.skills import get_skills, build_catalog
@@ -200,18 +278,25 @@ When a task matches a skill's description, call the activate_skill tool with the
     return prompt
 
 
-# --- Streaming consumer registry ---
-# UI layers (TUI) can register a callable to receive streaming text chunks.
-# When set, `data` events are forwarded to the consumer instead of being
-# suppressed. None = legacy behavior (silent until the final result lands).
+# --- Streaming + step consumer registries ---
+# UI layers (TUI) can register callables to receive live progress signals.
+#   set_stream_consumer(fn(chunk)) — each streaming text chunk
+#   set_step_consumer(fn(label))   — each new tool selection ("📧 Email", etc.)
 
 _stream_consumer = None
+_step_consumer = None
 
 
 def set_stream_consumer(fn):
     """Register a callable invoked with each streaming text chunk, or None to clear."""
     global _stream_consumer
     _stream_consumer = fn
+
+
+def set_step_consumer(fn):
+    """Register a callable invoked with a friendly label each time a new tool fires."""
+    global _step_consumer
+    _step_consumer = fn
 
 
 def _create_reasoning_callback_handler():
@@ -277,6 +362,11 @@ def _create_reasoning_callback_handler():
                         step_number=state["step_number"],
                         chosen_action=tool_name,
                     )
+                    if _step_consumer is not None:
+                        try:
+                            _step_consumer(label)
+                        except Exception:
+                            pass
 
             if kwargs.get("result") is not None and state["started"]:
                 logger.log(

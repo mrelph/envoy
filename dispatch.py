@@ -51,6 +51,15 @@ COMMANDS = {
     "/eod":       ("End-of-day summary",                   "Activate the eod skill and generate my end-of-day summary"),
     "/weekly":    ("Weekly review",                        "Activate the weekly skill and generate my weekly review"),
     "/cron":      ("Manage scheduled jobs",                "Show my cron jobs and available presets"),
+    # Vault / Knowledge
+    "/vault":     ("Search your Second Brain vault",       "Activate the brain-query skill and search my vault for: {arg}"),
+    "/synthesize": ("Connect the dots across vault pages", "Activate the brain-synthesize skill and synthesize what I know about: {arg}"),
+    "/pulse":     ("Partner relationship health check",    "Activate the partner-pulse skill and show me the partner pulse"),
+    "/dossier":   ("Build a partner dossier",             "Activate the partner-dossier skill and build a dossier on: {arg}"),
+    "/pre-game":  ("Deep meeting prep (super brief)",     "Activate the pre-game skill and pre-game for: {arg}"),
+    "/daily-note": ("Daily reflection note",              "Activate the daily-note skill and create my daily note"),
+    "/vault-health": ("Vault structural health check",    "Activate the brain-lint skill and lint my vault"),
+    "/ingest":    ("Process vault inbox/sources",         "Activate the brain-ingest skill and ingest my brain inbox"),
     # Heartbeat
     "/routine":   ("Add a routine",                        None),
     "/routines":  ("View routines",                        None),
@@ -74,7 +83,7 @@ COMMANDS = {
 
 # Commands that need an {arg} and should prompt if missing.
 # Note: /prep-meeting is intentionally NOT here — it defaults to "my next meeting".
-ARG_COMMANDS = {"/prep-1on1", "/reply", "/ea", "/book", "/search", "/sharepoint"}
+ARG_COMMANDS = {"/prep-1on1", "/reply", "/ea", "/book", "/search", "/sharepoint", "/vault", "/synthesize", "/dossier", "/pre-game"}
 
 # Default days per command
 DEFAULT_DAYS = {
@@ -168,6 +177,8 @@ def dispatch(raw: str, agent):
             "/prep-1on1": "alias", "/prep-meeting": "meeting subject",
             "/reply": "which email + your reply", "/ea": "message for EA",
             "/book": "building + time", "/search": "query", "/sharepoint": "query",
+            "/vault": "topic to search", "/synthesize": "topic to connect",
+            "/dossier": "partner name", "/pre-game": "meeting or company name",
         }
         return (f"Usage: {cmd} <{labels.get(cmd, 'argument')}>", True)
 

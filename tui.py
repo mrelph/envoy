@@ -143,6 +143,11 @@ class Spinner(Static):
         if self._timer is None:
             self._timer = self.set_interval(0.1, self._tick)
 
+    def update_hint(self, hint: str) -> None:
+        """Swap the hint label without resetting the spinner — used as new tools fire."""
+        self._hint = hint
+        self.refresh()
+
     def stop(self) -> None:
         self._hint = ""
         self.display = False
@@ -508,45 +513,40 @@ class EnvoyApp(App):
         self._run_command(raw, hint)
 
     def _ingest_stream_chunk(self, chunk: str) -> None:
-        """Worker-thread callback: enqueue a chunk for the UI to flush.
+        """Worker-thread callback: buffer streamed chunks for fallback display.
 
-        Called from inside the agent's callback handler (worker thread). We
-        accumulate into a string buffer and schedule a flush on the UI thread.
-        Splitting flush from receive lets us coalesce many small chunks into
-        a single RichLog write per UI tick.
+        We don't render chunks live anymore — the final result is rendered as
+        Markdown once it lands so headings and bullets format correctly.
+        Streaming text was double-rendering (plain stream + markdown re-render
+        beneath it) which broke the look of /catchup and similar commands.
+        The buffer is only used as a last-resort fallback if the final result
+        is empty.
         """
         self._stream_buffer.append(chunk)
-        self._stream_pending += chunk
-        # Flush on newline boundaries to keep markdown-ish output legible
-        if "\n" in chunk or len(self._stream_pending) > 200:
-            self.app.call_from_thread(self._flush_stream)
 
-    def _flush_stream(self) -> None:
-        """UI thread: write accumulated streamed text to the RichLog."""
-        if not self._stream_pending:
-            return
-        out = self.query_one("#output", RichLog)
-        if not self._stream_started:
-            # Stop the spinner the moment real text arrives — streaming IS the indicator now
-            self.query_one("#spinner", Spinner).stop()
-            out.write(Text())
-            self._stream_started = True
-        out.write(Text(self._stream_pending, style="#e6edf3"))
-        self._stream_pending = ""
+    def _on_step(self, label: str) -> None:
+        """Worker-thread callback: update the spinner hint when a new tool fires."""
+        try:
+            self.app.call_from_thread(
+                self.query_one("#spinner", Spinner).update_hint, label
+            )
+        except Exception:
+            pass
 
     @work(thread=True, exclusive=True, group="cmd")
     def _run_command(self, raw: str, hint: str) -> None:
         worker = get_current_worker()
         # Always fetch via get_agent() — picks up a fresh instance after
         # reload_agent() (e.g. triggered by /models tier changes).
-        from agent import get_agent, set_stream_consumer
+        from agent import get_agent, set_stream_consumer, set_step_consumer
         self._agent = get_agent()
 
-        # Reset streaming state and register consumer for this turn.
+        # Reset streaming state and register consumers for this turn.
         self._stream_buffer = []
         self._stream_pending = ""
         self._stream_started = False
         set_stream_consumer(self._ingest_stream_chunk)
+        set_step_consumer(self._on_step)
 
         error = None
         result = None
@@ -559,6 +559,7 @@ class EnvoyApp(App):
             error = e
         finally:
             set_stream_consumer(None)
+            set_step_consumer(None)
         if worker.is_cancelled:
             self._busy = False
             return
@@ -584,10 +585,6 @@ class EnvoyApp(App):
             pass
 
         def _show():
-            # Drain any trailing streamed text first
-            self._flush_stream()
-
-            # Stop spinner (no-op if streaming already stopped it)
             self.query_one("#spinner", Spinner).stop()
             self._busy = False
 
@@ -603,24 +600,6 @@ class EnvoyApp(App):
                 return
 
             text = str(result)
-            streamed = "".join(self._stream_buffer)
-
-            # If streaming covered the full response, re-render once as Markdown
-            # so headings/bullets land formatted (the live stream is plain text).
-            # Skip if the result is a plain status message (slash commands handled internally).
-            if self._stream_started and streamed and streamed.strip() == text.strip():
-                # Replace the plain stream with a formatted render
-                if any(c in text for c in ("#", "**", "- ", "| ", "```")):
-                    try:
-                        out.write(Text())
-                        out.write(Markdown(text))
-                        out.write(Text())
-                    except Exception:
-                        pass  # plain stream already on screen — no-op
-                else:
-                    out.write(Text())  # just spacing
-                return
-
             if any(c in text for c in ("#", "**", "- ", "| ", "```")):
                 try:
                     out.write(Text())

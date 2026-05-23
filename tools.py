@@ -739,6 +739,32 @@ def recall_memory(query: str = "", limit: int = 20) -> str:
 
 
 @tool
+def load_steering(name: str) -> str:
+    """Load a steering doc from the vault for contextual guidance on writing, reviews, or decisions.
+
+    Available docs: language-standards, doc-review-standards, leadership-principles,
+    decision-frameworks, business-context, persona.
+
+    Auto-load rules:
+    - Writing/drafting → language-standards
+    - Reviewing documents → doc-review-standards + leadership-principles
+    - Decisions/recommendations → decision-frameworks
+    - Business context needed → business-context
+
+    Args:
+        name: Steering doc name (without .md extension)
+    """
+    from agent import load_steering_doc
+    content = load_steering_doc(name)
+    if not content:
+        available = ", ".join(["language-standards", "doc-review-standards",
+                              "leadership-principles", "decision-frameworks",
+                              "business-context", "persona"])
+        return f"Steering doc '{name}' not found. Available: {available}"
+    return f"## Steering: {name}\n\n{content}"
+
+
+@tool
 def manage_memory_vaults(action: str, path: str = "") -> str:
     """Manage external memory vaults (Obsidian vaults, note directories).
 

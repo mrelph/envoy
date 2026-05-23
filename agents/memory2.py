@@ -537,64 +537,153 @@ def migrate_old_memory():
 
 
 def _search_vault(query: str) -> str:
-    """Search configured external vaults (Obsidian, directories) for a query.
+    """Structure-aware vault search — routes queries to the right subfolder.
     
-    Searches markdown files in configured paths for keyword matches.
-    Returns matching snippets or ''.
+    Intent detection:
+      - Person names / aliases → 02 - People/
+      - Partner/company names → wiki/entities/ + 10 - Org Relationships/
+      - Concepts / frameworks → wiki/concepts/ + wiki/topics/
+      - Meeting context → 08 - Meeting Notes/
+      - Briefing / EBC / prep → 03 - Briefings/
+      - Fallback → full vault search (capped)
     """
     paths = _get_vault_paths()
     if not paths:
         return ""
 
+    query_lower = query.lower()
     query_terms = [t.lower() for t in query.split() if len(t) > 2]
     if not query_terms:
         return ""
+
+    # Determine which subfolders to prioritize based on intent
+    priority_subdirs = _route_query(query_lower)
 
     results = []
     for vault_path in paths:
         vault_path = os.path.expanduser(vault_path)
         if not os.path.isdir(vault_path):
             continue
-        # Walk markdown files (cap at 500 files to stay fast)
+
+        # Search priority folders first (higher score boost)
+        searched_files = set()
+        for subdir, boost in priority_subdirs:
+            target = os.path.join(vault_path, subdir)
+            if not os.path.isdir(target):
+                continue
+            hits = _scan_folder(target, query_terms, vault_path, max_files=100)
+            for score, snippet, fpath in hits:
+                searched_files.add(fpath)
+                results.append((score + boost, snippet))
+
+        # Fallback: scan remaining vault (lower priority, capped)
         file_count = 0
         for root, _dirs, files in os.walk(vault_path):
-            # Skip hidden dirs (.obsidian, .git, .trash)
             _dirs[:] = [d for d in _dirs if not d.startswith(".")]
             for fname in files:
-                if not fname.endswith((".md", ".txt")):
+                if not fname.endswith(".md"):
+                    continue
+                fpath = os.path.join(root, fname)
+                if fpath in searched_files:
                     continue
                 file_count += 1
-                if file_count > 500:
+                if file_count > 200:
                     break
-                fpath = os.path.join(root, fname)
-                try:
-                    content = open(fpath, encoding="utf-8", errors="ignore").read(5000)
-                    content_lower = content.lower()
-                    # Score: how many query terms appear
-                    hits = sum(1 for t in query_terms if t in content_lower)
-                    if hits >= max(1, len(query_terms) // 2):
-                        # Extract relevant snippet (lines containing matches)
-                        lines = content.split("\n")
-                        matched_lines = [
-                            l.strip() for l in lines
-                            if any(t in l.lower() for t in query_terms)
-                            and len(l.strip()) > 10
-                        ][:5]
-                        if matched_lines:
-                            rel_path = os.path.relpath(fpath, vault_path)
-                            snippet = "\n".join(matched_lines)
-                            results.append((hits, f"**{rel_path}**\n{snippet}"))
-                except Exception:
-                    continue
-            if file_count > 500:
+                hit = _score_file(fpath, query_terms, vault_path)
+                if hit:
+                    results.append(hit)
+            if file_count > 200:
                 break
 
     if not results:
         return ""
 
-    # Sort by relevance (hit count), take top 3
     results.sort(key=lambda x: -x[0])
-    return "\n\n".join(r[1] for r in results[:3])
+    return "\n\n".join(r[1] for r in results[:5])
+
+
+# Vault structure routing table
+_PERSON_SIGNALS = {"who is", "about ", "prep for my 1:1", "relationship with", "report"}
+_PARTNER_SIGNALS = {"partner", "customer", "dossier", "relationship", "health", "cold", "pulse"}
+_CONCEPT_SIGNALS = {"what is", "concept", "framework", "strategy", "how does", "explain"}
+_MEETING_SIGNALS = {"meeting", "discussed", "action item", "1:1", "sync", "review"}
+_BRIEFING_SIGNALS = {"briefing", "ebc", "prep", "brief", "talking points"}
+
+
+def _route_query(query_lower: str) -> list:
+    """Return list of (subfolder, score_boost) tuples ordered by relevance."""
+    routes = []
+
+    if any(s in query_lower for s in _PERSON_SIGNALS):
+        routes.append(("02 - People", 5))
+        routes.append(("wiki/entities", 3))
+
+    if any(s in query_lower for s in _PARTNER_SIGNALS):
+        routes.append(("10 - Org Relationships", 5))
+        routes.append(("wiki/entities", 4))
+        routes.append(("03 - Briefings", 2))
+
+    if any(s in query_lower for s in _CONCEPT_SIGNALS):
+        routes.append(("wiki/concepts", 5))
+        routes.append(("wiki/topics", 4))
+
+    if any(s in query_lower for s in _MEETING_SIGNALS):
+        routes.append(("08 - Meeting Notes", 5))
+
+    if any(s in query_lower for s in _BRIEFING_SIGNALS):
+        routes.append(("03 - Briefings", 5))
+
+    # Always include wiki as a secondary source
+    if not any(r[0].startswith("wiki/") for r in routes):
+        routes.append(("wiki/entities", 2))
+        routes.append(("wiki/topics", 2))
+
+    return routes
+
+
+def _scan_folder(folder: str, query_terms: list, vault_root: str, max_files: int = 100) -> list:
+    """Scan a specific folder for matches. Returns [(score, snippet, filepath)]."""
+    results = []
+    file_count = 0
+    for root, _dirs, files in os.walk(folder):
+        _dirs[:] = [d for d in _dirs if not d.startswith(".")]
+        for fname in files:
+            if not fname.endswith(".md"):
+                continue
+            file_count += 1
+            if file_count > max_files:
+                return results
+            fpath = os.path.join(root, fname)
+            hit = _score_file(fpath, query_terms, vault_root)
+            if hit:
+                results.append((hit[0], hit[1], fpath))
+    return results
+
+
+def _score_file(fpath: str, query_terms: list, vault_root: str):
+    """Score a single file against query terms. Returns (score, snippet) or None."""
+    try:
+        content = open(fpath, encoding="utf-8", errors="ignore").read(5000)
+        content_lower = content.lower()
+        # Filename match gets a bonus
+        fname_lower = os.path.basename(fpath).lower()
+        fname_hits = sum(2 for t in query_terms if t in fname_lower)
+        content_hits = sum(1 for t in query_terms if t in content_lower)
+        total = fname_hits + content_hits
+        if total >= max(1, len(query_terms) // 2):
+            lines = content.split("\n")
+            matched_lines = [
+                l.strip() for l in lines
+                if any(t in l.lower() for t in query_terms)
+                and len(l.strip()) > 10
+            ][:5]
+            if matched_lines:
+                rel_path = os.path.relpath(fpath, vault_root)
+                snippet = "\n".join(matched_lines)
+                return (total, f"**{rel_path}**\n{snippet}")
+    except Exception:
+        pass
+    return None
 
 
 def _get_vault_paths() -> List[str]:
