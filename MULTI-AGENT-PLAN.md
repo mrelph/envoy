@@ -56,18 +56,18 @@ memory_namespace: deals
 
 ---
 
-## Phase 4: Shared Workspace (Emergent Collaboration)
+## Phase 4: Shared Workspace (Emergent Collaboration) ✅ COMPLETE
 Agents work on a shared artifact asynchronously.
 
-**Architecture:**
-- Structured workspace (findings[], open_questions[], draft_sections{})
-- Workers get `workspace_read/append` tools
-- Synthesizer agent assembles final output
-- Per-request workspace (not persistent unless saved to vault)
-
-**Useful for:** Complex reports (weekly review, PTO catchup, customer analysis)
-
-**Effort:** 2 weeks
+**Implemented:** `agents/workspace.py`
+- `Workspace` dataclass: findings[], action_items[], open_questions[], draft_sections{}
+- Priority-aware ordering (🔴 high items surface first)
+- `make_workspace_tools()` — workspace_append + workspace_read injected into all workers
+- `synthesize()` — medium-tier LLM assembles workspace into polished response
+- Small workspaces (<2K chars) returned directly (no LLM call needed)
+- Integrated with planner: create workspace → execute plan → synthesize → clear
+- Fallback: if workers don't use workspace, raw results returned as before
+- Thread-safe lifecycle: create/get/clear with lock
 
 ---
 

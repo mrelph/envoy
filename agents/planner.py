@@ -205,27 +205,43 @@ def execute_plan(plan: list) -> dict:
 
 
 def plan_and_execute(query: str) -> Optional[str]:
-    """Full pipeline: plan → execute → return combined context for the supervisor.
+    """Full pipeline: plan → create workspace → execute → synthesize.
     
     Returns formatted results string, or None if planning failed.
     """
+    from agents.workspace import create as create_workspace, get as get_workspace, synthesize, clear as clear_workspace
+
     plan = generate_plan(query)
     if not plan:
         return None
-    
+
+    # Create a workspace for this request — workers can post structured findings
+    create_workspace(query)
+
     results = execute_plan(plan)
-    
-    # Format results as context for the supervisor to synthesize
+
+    # Check if workers populated the workspace
+    ws = get_workspace()
+    if ws and not ws.is_empty:
+        # Workers posted structured data — use synthesizer
+        output = synthesize(ws)
+        clear_workspace()
+        if output:
+            return output
+
+    # Fallback — format raw results (workers didn't use workspace)
     sections = []
     for step in plan:
         step_id = step["id"]
         result = results.get(step_id, "No result")
         if result and not result.startswith("⚠️ Skipped"):
             sections.append(f"### Step {step_id}: {step['tool']} — {step['request'][:100]}\n{result[:4000]}")
-    
+
+    clear_workspace()
+
     if not sections:
         return None
-    
+
     return "\n\n---\n\n".join(sections)
 
 

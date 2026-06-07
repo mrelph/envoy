@@ -254,10 +254,14 @@ def _import_create(module_name: str, worker_name: str):
         try:
             delegate_tool = make_delegate_tool()
             agent.tool_registry.process_tools([delegate_tool])
+            # Add workspace tools so workers can post structured findings
+            from agents.workspace import make_workspace_tools
+            ws_tools = make_workspace_tools()
+            agent.tool_registry.process_tools(ws_tools)
             # Tell this worker about its siblings
             siblings = {k: v for k, v in WORKER_DESCRIPTIONS.items() if k != worker_name}
             sibling_list = "\n".join(f"  - {k}: {v}" for k, v in siblings.items())
-            agent.system_prompt += f"\n\nYou can delegate to sibling workers via delegate_to_worker when you need data from another domain:\n{sibling_list}\nUse sparingly — only when the info would materially improve your answer."
+            agent.system_prompt += f"\n\nYou can delegate to sibling workers via delegate_to_worker when you need data from another domain:\n{sibling_list}\nUse sparingly — only when the info would materially improve your answer.\n\nIf a shared workspace is active, post key findings via workspace_append (section: findings, action_items, open_questions, or draft:<name>). This helps produce better synthesized output."
         except Exception:
             pass
     return agent
