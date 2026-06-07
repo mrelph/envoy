@@ -541,10 +541,17 @@ def _search_vault(query: str) -> str:
     
     Intent detection:
       - Person names / aliases → 02 - People/
-      - Partner/company names → wiki/entities/ + 10 - Org Relationships/
+      - Partner/company names → 10 - Org Relationships/ + wiki/entities/
       - Concepts / frameworks → wiki/concepts/ + wiki/topics/
       - Meeting context → 08 - Meeting Notes/
       - Briefing / EBC / prep → 03 - Briefings/
+      - Doc reviews / narratives → 04 - Doc Reviews/
+      - Research / deep dives → 05 - Research/
+      - Presentations / decks → 06 - Presentations/
+      - Think Big / vision → 07 - Think Big/
+      - Reflections / lessons → 09 - Reflections/
+      - Projects / initiatives → wiki/projects/
+      - Standards / guidelines → 01 - Steering/
       - Fallback → full vault search (capped)
     """
     paths = _get_vault_paths()
@@ -608,6 +615,13 @@ _PARTNER_SIGNALS = {"partner", "customer", "dossier", "relationship", "health", 
 _CONCEPT_SIGNALS = {"what is", "concept", "framework", "strategy", "how does", "explain"}
 _MEETING_SIGNALS = {"meeting", "discussed", "action item", "1:1", "sync", "review"}
 _BRIEFING_SIGNALS = {"briefing", "ebc", "prep", "brief", "talking points"}
+_REVIEW_SIGNALS = {"doc review", "review document", "feedback on", "prfaq", "pr-faq", "narrative", "6-pager"}
+_RESEARCH_SIGNALS = {"research", "analysis", "deep dive", "investigate", "explore", "study"}
+_PRESENTATION_SIGNALS = {"presentation", "slide", "deck", "talk", "keynote", "demo"}
+_THINK_BIG_SIGNALS = {"think big", "vision", "future", "bold", "moonshot", "big bet", "innovation"}
+_REFLECTION_SIGNALS = {"reflection", "lesson", "retrospective", "retro", "learned", "growth", "mistake"}
+_PROJECT_SIGNALS = {"project", "initiative", "workstream", "program", "milestone", "deliverable"}
+_STEERING_SIGNALS = {"standard", "principle", "guideline", "language rule", "writing style", "decision framework"}
 
 
 def _route_query(query_lower: str) -> list:
@@ -632,6 +646,31 @@ def _route_query(query_lower: str) -> list:
 
     if any(s in query_lower for s in _BRIEFING_SIGNALS):
         routes.append(("03 - Briefings", 5))
+
+    if any(s in query_lower for s in _REVIEW_SIGNALS):
+        routes.append(("04 - Doc Reviews", 5))
+        routes.append(("01 - Steering", 2))
+
+    if any(s in query_lower for s in _RESEARCH_SIGNALS):
+        routes.append(("05 - Research", 5))
+        routes.append(("wiki/topics", 3))
+
+    if any(s in query_lower for s in _PRESENTATION_SIGNALS):
+        routes.append(("06 - Presentations", 5))
+
+    if any(s in query_lower for s in _THINK_BIG_SIGNALS):
+        routes.append(("07 - Think Big", 5))
+        routes.append(("wiki/topics", 3))
+
+    if any(s in query_lower for s in _REFLECTION_SIGNALS):
+        routes.append(("09 - Reflections", 5))
+
+    if any(s in query_lower for s in _PROJECT_SIGNALS):
+        routes.append(("wiki/projects", 5))
+        routes.append(("wiki/topics", 3))
+
+    if any(s in query_lower for s in _STEERING_SIGNALS):
+        routes.append(("01 - Steering", 5))
 
     # Always include wiki as a secondary source
     if not any(r[0].startswith("wiki/") for r in routes):
