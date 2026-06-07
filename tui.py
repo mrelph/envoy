@@ -115,6 +115,67 @@ class MCPBar(Static):
         self.app.call_from_thread(self.refresh)
 
 
+class FeedPanel(Static):
+    """Ambient activity feed — proactive insights scrolling at the top."""
+
+    _items: list = []
+    _max_visible: int = 4
+
+    def render(self) -> Text:
+        if not self._items:
+            return Text("")
+        t = Text()
+        for item in self._items[-self._max_visible:]:
+            t.append(f"  {item.display}\n", style="#8b949e")
+        return t
+
+    def push(self, item) -> None:
+        """Add a new feed item and refresh."""
+        self._items.append(item)
+        if len(self._items) > 20:
+            self._items = self._items[-20:]
+        self.refresh()
+
+    def on_mount(self) -> None:
+        """Start the feed poll loop."""
+        self._start_feed()
+
+    @work(thread=True)
+    def _start_feed(self) -> None:
+        """Register listener and start the background poll."""
+        import asyncio
+        from agents.feed import on_new_item, start as start_feed, _poll_once
+
+        def _on_item(item):
+            try:
+                self.app.call_from_thread(self.push, item)
+            except Exception:
+                pass
+
+        on_new_item(_on_item)
+
+        # Run the poll loop on the base event loop
+        try:
+            from agents.base import _get_loop
+            loop = _get_loop()
+            asyncio.run_coroutine_threadsafe(_poll_loop_safe(), loop)
+        except Exception:
+            pass
+
+
+async def _poll_loop_safe():
+    """Safe poll loop that runs in the background event loop."""
+    from agents.feed import _poll_once, _POLL_INTERVAL, _running
+    import asyncio
+    await asyncio.sleep(15)  # initial delay
+    while True:
+        try:
+            await _poll_once()
+        except Exception:
+            pass
+        await asyncio.sleep(_POLL_INTERVAL)
+
+
 class Spinner(Static):
     """Animated braille spinner with elapsed time, step count, and live tool info."""
 
@@ -445,6 +506,7 @@ class EnvoyApp(App):
 
     def compose(self) -> ComposeResult:
         yield MCPBar(id="mcp-bar")
+        yield FeedPanel(id="feed")
         yield RichLog(id="output", highlight=True, markup=True, wrap=True, max_lines=5000, auto_scroll=True)
         yield Spinner(id="spinner")
         with Horizontal(id="input-area"):

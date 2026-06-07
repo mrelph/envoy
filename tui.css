@@ -12,6 +12,14 @@ Screen {
     border-bottom: solid #21262d;
 }
 
+#feed {
+    height: auto;
+    max-height: 5;
+    padding: 0 2;
+    background: #0d1117;
+    border-bottom: dashed #21262d;
+}
+
 #output {
     height: 1fr;
     padding: 1 4;
