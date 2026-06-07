@@ -266,6 +266,15 @@ def set_step_consumer(fn):
     _step_consumer = fn
 
 
+def emit_step(label: str):
+    """Emit a progress step to the TUI spinner. Safe to call from any thread."""
+    if _step_consumer is not None:
+        try:
+            _step_consumer(label)
+        except Exception:
+            pass
+
+
 def _create_reasoning_callback_handler():
     """Create a callback handler that shows brief status teasers and forwards streamed text.
 

@@ -39,6 +39,25 @@ _WORKFLOW_TIMEOUT = 60  # seconds
 def _with_timeout(fn, *args, **kwargs):
     """Run a function with a hard timeout. Returns error string on timeout instead of raising."""
     import concurrent.futures
+    # Emit progress if the function has a recognizable name
+    try:
+        from agent import emit_step
+        name = getattr(fn, '__name__', '')
+        _labels = {
+            "commitment_tracker": "📬 Scanning commitments…",
+            "follow_up_tracker": "📬 Checking follow-ups…",
+            "pto_catchup": "🏖️ Catching up…",
+            "slack_catchup": "💬 Scanning Slack…",
+            "calendar_audit": "📊 Auditing calendar…",
+            "response_time_tracker": "⏱️ Analyzing response times…",
+            "meeting_prep": "🧩 Prepping meeting…",
+            "one_on_one_prep": "🧩 Prepping 1:1…",
+            "yesterbox": "📬 Yesterday's DMs…",
+        }
+        if name in _labels:
+            emit_step(_labels[name])
+    except Exception:
+        pass
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
         future = executor.submit(fn, *args, **kwargs)
         try:

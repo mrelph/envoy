@@ -19,6 +19,15 @@ from typing import Optional
 from agents.base import invoke_ai, run
 from agents.workers import WORKER_DESCRIPTIONS, get_worker
 
+
+def _emit(label: str):
+    """Emit progress step to TUI."""
+    try:
+        from agent import emit_step
+        emit_step(label)
+    except Exception:
+        pass
+
 # Workers available for planning
 _AVAILABLE_WORKERS = {k: v for k, v in WORKER_DESCRIPTIONS.items() if k != "coding"}
 
@@ -150,6 +159,16 @@ def execute_plan(plan: list) -> dict:
         tool = step["tool"]
         request = step["request"]
         
+        # Emit progress
+        _TOOL_LABELS = {
+            "gather": "📊 Gathering data", "email": "📧 Email", "comms": "💬 Slack",
+            "calendar": "📅 Calendar", "productivity": "✅ Tasks",
+            "research": "🔎 Research", "sharepoint": "📁 SharePoint",
+            "commitment_tracker": "📬 Commitments", "follow_up_tracker": "📬 Follow-ups",
+            "calendar_audit": "📊 Calendar audit", "meeting_prep": "🧩 Meeting prep",
+        }
+        _emit(_TOOL_LABELS.get(tool, f"⚙️ {tool}"))
+        
         try:
             if tool == "gather":
                 from supervisor import gather_data
@@ -211,9 +230,12 @@ def plan_and_execute(query: str) -> Optional[str]:
     """
     from agents.workspace import create as create_workspace, get as get_workspace, synthesize, clear as clear_workspace
 
+    _emit("📋 Planning…")
     plan = generate_plan(query)
     if not plan:
         return None
+
+    _emit(f"📋 Plan: {len(plan)} steps")
 
     # Create a workspace for this request — workers can post structured findings
     create_workspace(query)
@@ -224,10 +246,14 @@ def plan_and_execute(query: str) -> Optional[str]:
     ws = get_workspace()
     if ws and not ws.is_empty:
         # Workers posted structured data — use synthesizer
+        _emit("✨ Synthesizing…")
         output = synthesize(ws)
         clear_workspace()
         if output:
+            _emit("💬 Composing response…")
             return output
+
+    _emit("💬 Composing response…")
 
     # Fallback — format raw results (workers didn't use workspace)
     sections = []
