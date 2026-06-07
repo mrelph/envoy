@@ -116,27 +116,53 @@ class MCPBar(Static):
 
 
 class Spinner(Static):
-    """Animated braille spinner with hint text. Shows during agent work."""
+    """Animated braille spinner with elapsed time, step count, and live tool info."""
 
     _frame: int = 0
     _hint: str = ""
     _flavor_idx: int = 0
     _timer = None
+    _start_time: float = 0
+    _steps: int = 0
+    _tool_history: list = []
 
     def render(self) -> Text:
         if not self._hint:
             return Text("")
+        import time as _time
         char = BRAILLE_FRAMES[self._frame % len(BRAILLE_FRAMES)]
-        flavor = _FLAVOR[self._flavor_idx % len(_FLAVOR)]
+        elapsed = _time.time() - self._start_time if self._start_time else 0
+
         t = Text(f"  {char} ", style="bold #58a6ff")
-        t.append(self._hint, style="#8b949e italic")
-        t.append(f"  ·  {flavor}…", style="#484f58")
+        t.append(self._hint, style="#e6edf3 bold")
+
+        # Elapsed time
+        if elapsed >= 60:
+            t.append(f"  {int(elapsed)}s", style="#d29922")
+        elif elapsed >= 5:
+            t.append(f"  {int(elapsed)}s", style="#8b949e")
+
+        # Step count + trail
+        if self._steps > 0:
+            t.append(f"  ·  step {self._steps}", style="#484f58")
+            # Show last 2 tools as breadcrumb trail
+            if self._tool_history:
+                trail = " → ".join(self._tool_history[-2:])
+                t.append(f"  [{trail}]", style="#484f58 italic")
+        else:
+            # No steps yet — show flavor text while waiting for first tool call
+            flavor = _FLAVOR[self._flavor_idx % len(_FLAVOR)]
+            t.append(f"  ·  {flavor}…", style="#484f58")
+
         return t
 
     def start(self, hint: str) -> None:
-        import random
+        import random, time as _time
         self._hint = hint
         self._frame = 0
+        self._steps = 0
+        self._tool_history = []
+        self._start_time = _time.time()
         self._flavor_idx = random.randint(0, len(_FLAVOR) - 1)
         self.display = True
         self.refresh()
@@ -144,7 +170,12 @@ class Spinner(Static):
             self._timer = self.set_interval(0.1, self._tick)
 
     def update_hint(self, hint: str) -> None:
-        """Swap the hint label without resetting the spinner — used as new tools fire."""
+        """Update when a new tool fires — tracks steps and tool names."""
+        self._steps += 1
+        # Extract short name from label (strip emoji prefix)
+        short = hint.lstrip("📧💬📅✅📊🔎📁💻👁🧩📬 ")
+        if short:
+            self._tool_history.append(short)
         self._hint = hint
         self.refresh()
 
@@ -157,7 +188,7 @@ class Spinner(Static):
 
     def _tick(self) -> None:
         self._frame += 1
-        if self._frame % 20 == 0:  # rotate flavor every ~2s
+        if self._steps == 0 and self._frame % 30 == 0:  # rotate flavor every ~3s (only before first tool)
             self._flavor_idx += 1
         self.refresh()
 
