@@ -601,6 +601,8 @@ _SKILL_TOOLS = {
     "teamsnap_rsvp": teamsnap_rsvp,
     "teamsnap_assignments": teamsnap_assignments,
     "teamsnap_standings": teamsnap_standings,
+    "vault_write": vault_write,
+    "vault_read": vault_read,
 }
 
 _active_agent = None  # set by agent.py after creation
@@ -916,7 +918,41 @@ def sharepoint_worker(request: str) -> str:
 
 
 @tool
-def coding_worker(task: str, working_directory: str = "") -> str:
+def vault_write(file_path: str, content: str) -> str:
+    """Write a markdown file to the vault (Knowledge Folder on OneDrive).
+    Handles path resolution automatically — just provide the vault-relative path.
+
+    Args:
+        file_path: Vault-relative path (e.g. "wiki/entities/Databricks.md", "wiki/log.md", "sources/inbox/note.md")
+        content: Full markdown content to write
+    """
+    from agents.export import _configured_folders
+    folder = _configured_folders().get("knowledge", "")
+    if not folder:
+        return "Error: Knowledge Folder not configured in ~/.envoy/envoy.md"
+    # Build the SharePoint write request with explicit path
+    full_folder = f"{folder}/{'/'.join(file_path.split('/')[:-1])}" if '/' in file_path else folder
+    file_name = file_path.split('/')[-1]
+    return _delegate("sharepoint", f"Write file to my personal OneDrive. Library: Documents. Folder: {full_folder}. Filename: {file_name}. Content:\n\n{content}")
+
+
+@tool
+def vault_read(file_path: str) -> str:
+    """Read a markdown file from the vault (Knowledge Folder on OneDrive).
+
+    Args:
+        file_path: Vault-relative path (e.g. "wiki/index.md", "02 - People/John Smith.md")
+    """
+    from agents.export import _configured_folders
+    import os as _os
+    folder = _configured_folders().get("knowledge", "")
+    if not folder:
+        return "Error: Knowledge Folder not configured in ~/.envoy/envoy.md"
+    user = _os.getenv("USER", "")
+    server_url = f"/personal/{user}_amazon_com/Documents/{folder}/{file_path}"
+    return _delegate("sharepoint", f"Read this file inline from my personal OneDrive: {server_url}")
+
+
     """Delegate coding and development tasks to an autonomous coding agent (Claude Code or Kiro).
     The agent runs to completion — it can read/write files, run commands, run tests, and iterate.
     Use for: writing code, fixing bugs, refactoring, creating scripts, code review, generating
@@ -1047,6 +1083,8 @@ _ALL_TOOLS_RAW = [
     productivity_worker,
     research_worker,
     sharepoint_worker,
+    vault_write,
+    vault_read,
     coding_worker,
     # --- Compound workflows (stay on supervisor for cross-domain orchestration) ---
     pto_catchup,
