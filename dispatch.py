@@ -60,6 +60,8 @@ COMMANDS = {
     "/daily-note": ("Daily reflection note",              "Activate the daily-note skill and create my daily note"),
     "/vault-health": ("Vault structural health check",    "Activate the brain-lint skill and lint my vault"),
     "/ingest":    ("Process vault inbox/sources",         "Activate the brain-ingest skill and ingest my brain inbox"),
+    "/exec-sponsor": ("Executive sponsor intel brief",    "Activate the exec-sponsor-insights skill and build an exec sponsor brief for: {arg}"),
+    "/save-email": ("Save an email to your vault",        "Activate the email-to-vault skill and save that email to my vault: {arg}"),
     # Heartbeat
     "/routine":   ("Add a routine",                        None),
     "/routines":  ("View routines",                        None),
@@ -83,7 +85,7 @@ COMMANDS = {
 
 # Commands that need an {arg} and should prompt if missing.
 # Note: /prep-meeting is intentionally NOT here — it defaults to "my next meeting".
-ARG_COMMANDS = {"/prep-1on1", "/reply", "/ea", "/book", "/search", "/sharepoint", "/vault", "/synthesize", "/dossier", "/pre-game"}
+ARG_COMMANDS = {"/prep-1on1", "/reply", "/ea", "/book", "/search", "/sharepoint", "/vault", "/synthesize", "/dossier", "/pre-game", "/exec-sponsor", "/save-email"}
 
 # Default days per command
 DEFAULT_DAYS = {
@@ -179,6 +181,7 @@ def dispatch(raw: str, agent):
             "/book": "building + time", "/search": "query", "/sharepoint": "query",
             "/vault": "topic to search", "/synthesize": "topic to connect",
             "/dossier": "partner name", "/pre-game": "meeting or company name",
+            "/exec-sponsor": "account or partner name", "/save-email": "email subject or sender",
         }
         return (f"Usage: {cmd} <{labels.get(cmd, 'argument')}>", True)
 

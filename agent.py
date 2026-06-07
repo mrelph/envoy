@@ -29,6 +29,9 @@ _STEERING_DOCS = {
     "decision-frameworks": "Named decision frameworks — one-way doors, Tim Hortons test, signal over noise",
     "business-context": "Org scope, key metrics, strategic priorities, competitive landscape",
     "persona": "How Mark works — communication style, operating philosophy, AI parsing guidance",
+    "org-entity-linking-standard": "Standard for linking org/entity references across vault agents (Chinook, Portage)",
+    "people-linking-standard": "Standard for people profile linking across Scout and Portage agents",
+    "About Mark": "Canonical operating manual for AI agents — preferences, patterns, communication style",
 }
 
 
