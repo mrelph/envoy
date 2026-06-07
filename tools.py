@@ -32,6 +32,20 @@ from agents import skill_builder
 
 from agents.base import current_user as _USER  # call-time alias resolution
 
+# Timeout for workflow tools (commitment_tracker, follow_up, etc.)
+_WORKFLOW_TIMEOUT = 60  # seconds
+
+
+def _with_timeout(fn, *args, **kwargs):
+    """Run a function with a hard timeout. Returns error string on timeout instead of raising."""
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(fn, *args, **kwargs)
+        try:
+            return future.result(timeout=_WORKFLOW_TIMEOUT)
+        except concurrent.futures.TimeoutError:
+            return f"⚠️ Timed out after {_WORKFLOW_TIMEOUT}s. MCP services may be slow or unreachable. Try again later or check connectivity with /doctor."
+
 
 def _outlook_tool(tool_name: str, args: dict) -> str:
     """Direct MCP call to Outlook — used by worker agents."""
@@ -329,7 +343,7 @@ def recommend_responses(days: int = 3) -> str:
     Args:
         days: Number of days to look back (default 3)
     """
-    return wf.recommend_responses(_USER(), days)
+    return _with_timeout(wf.recommend_responses, _USER(), days)
 
 
 @tool
@@ -342,7 +356,7 @@ def learn_response(context: str, response: str, medium: str = "email") -> str:
         response: The actual response text that was sent
         medium: "email" or "slack"
     """
-    return wf.learn_response(context, response, medium)
+    return _with_timeout(wf.learn_response, context, response, medium)
 
 
 @tool
@@ -466,7 +480,7 @@ def pto_catchup(days: int = 5) -> str:
     Args:
         days: Number of days you were out (default 5)
     """
-    return wf.pto_catchup(_USER(), days)
+    return _with_timeout(wf.pto_catchup, _USER(), days)
 
 
 @tool
@@ -477,7 +491,7 @@ def slack_catchup(days: int = 3) -> str:
     Args:
         days: Number of days to look back (default 3)
     """
-    return wf.slack_catchup(_USER(), days)
+    return _with_timeout(wf.slack_catchup, _USER(), days)
 
 
 @tool
@@ -490,7 +504,7 @@ def yesterbox(days: int = 1) -> str:
         days: Number of days to look back (default: 1 for yesterday)
     """
     alias = _USER()
-    return wf.yesterbox(alias, days)
+    return _with_timeout(wf.yesterbox, alias, days)
 
 
 @tool
@@ -501,7 +515,7 @@ def calendar_audit(days: int = 5) -> str:
     Args:
         days: Number of days ahead to analyze (default 5)
     """
-    return wf.calendar_audit(_USER(), days)
+    return _with_timeout(wf.calendar_audit, _USER(), days)
 
 
 @tool
@@ -512,7 +526,7 @@ def response_time_tracker(days: int = 7) -> str:
     Args:
         days: Number of days to analyze (default 7)
     """
-    return wf.response_time_tracker(_USER(), days)
+    return _with_timeout(wf.response_time_tracker, _USER(), days)
 
 
 @tool
@@ -524,7 +538,7 @@ def follow_up_tracker(days: int = 7) -> str:
     Args:
         days: Number of days to look back (default 7)
     """
-    return wf.follow_up_tracker(_USER(), days)
+    return _with_timeout(wf.follow_up_tracker, _USER(), days)
 
 
 @tool
@@ -537,7 +551,7 @@ def one_on_one_prep(person_alias: str) -> str:
     Args:
         person_alias: Amazon login/alias of the person you're meeting with
     """
-    return wf.one_on_one_prep(person_alias, _USER())
+    return _with_timeout(wf.one_on_one_prep, person_alias, _USER())
 
 
 @tool
@@ -549,7 +563,7 @@ def commitment_tracker(days: int = 7) -> str:
     Args:
         days: Number of days to look back (default 7)
     """
-    return wf.commitment_tracker(_USER(), days)
+    return _with_timeout(wf.commitment_tracker, _USER(), days)
 
 
 @tool
@@ -562,7 +576,7 @@ def meeting_prep(meeting_subject: str = "") -> str:
     Args:
         meeting_subject: Meeting title to search for (empty = next upcoming meeting)
     """
-    return wf.meeting_prep(meeting_subject, _USER())
+    return _with_timeout(wf.meeting_prep, meeting_subject, _USER())
 
 
 # --- Utility tools ---
@@ -601,8 +615,6 @@ _SKILL_TOOLS = {
     "teamsnap_rsvp": teamsnap_rsvp,
     "teamsnap_assignments": teamsnap_assignments,
     "teamsnap_standings": teamsnap_standings,
-    "vault_write": vault_write,
-    "vault_read": vault_read,
 }
 
 _active_agent = None  # set by agent.py after creation
@@ -638,16 +650,30 @@ def _inject_skill_tools(skill_name: str, allowed_tools: str):
 
 
 @tool
-def activate_skill(name: str) -> str:
-    """Activate an Agent Skill by name to load its full instructions.
-    Use when a task matches a skill's description from the available_skills catalog.
+def activate_skill(name: str, request: str = "") -> str:
+    """Activate an Agent Skill by name. For subagent skills (those with declared tools),
+    runs the skill as an independent agent and returns its response. For legacy skills,
+    loads the full instructions into your context.
 
     Args:
         name: Skill name from the catalog
+        request: What you want the skill to do (required for subagent skills, optional for legacy)
     """
+    from agents.skills import run_skill as _run_skill
     skills = get_skills()
     skill = skills.get(name)
-    if skill and skill.get("allowed_tools"):
+    if not skill:
+        available = ", ".join(skills.keys()) if skills else "none"
+        return f"Skill '{name}' not found. Available: {available}"
+
+    # Subagent skill — run as independent agent
+    if skill.get("is_subagent"):
+        if not request:
+            return f"Skill '{name}' is a subagent — provide a request. Example: activate_skill(name='{name}', request='scan last 7 days for commitments')"
+        return _run_skill(name, request)
+
+    # Legacy skill — inject tools + load instructions
+    if skill.get("allowed_tools"):
         _inject_skill_tools(name, skill["allowed_tools"])
     return activate_skill_fn(name, skills)
 
@@ -823,10 +849,13 @@ def _delegate(worker_name: str, request: str, _retries: int = 1) -> str:
             last_err = e
             print(f"[{worker_name}] attempt {attempt+1} failed: {e}", file=sys.stderr)
             if attempt < _retries:
-                # Clear corrupted session if Bedrock rejects the message history
+                # Only retry on session corruption — NOT on timeouts
                 err_msg = str(e)
                 if "ValidationException" in err_msg and "toolResult" in err_msg:
                     reset_worker_session(worker_name)
+                else:
+                    # Timeout, connection error, etc — don't waste time retrying
+                    break
     return f"⚠️ {worker_name} worker unavailable: {last_err}. Other sources may still have the information you need."
 
 
@@ -953,6 +982,12 @@ def vault_read(file_path: str) -> str:
     return _delegate("sharepoint", f"Read this file inline from my personal OneDrive: {server_url}")
 
 
+_SKILL_TOOLS["vault_write"] = vault_write
+_SKILL_TOOLS["vault_read"] = vault_read
+
+
+@tool
+def coding_worker(task: str, working_directory: str = "") -> str:
     """Delegate coding and development tasks to an autonomous coding agent (Claude Code or Kiro).
     The agent runs to completion — it can read/write files, run commands, run tests, and iterate.
     Use for: writing code, fixing bugs, refactoring, creating scripts, code review, generating

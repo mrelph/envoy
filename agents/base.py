@@ -116,7 +116,7 @@ def __getattr__(name):
 
 # --- MCP context managers ---
 
-MCP_CALL_TIMEOUT = 60  # seconds per MCP tool call
+MCP_CALL_TIMEOUT = 30  # seconds per MCP tool call
 
 
 import re as _re
@@ -382,7 +382,7 @@ def run(coro):
     survive across calls (~0.9s saved per reused connection).
     """
     future = asyncio.run_coroutine_threadsafe(coro, _get_loop())
-    return future.result(timeout=120)
+    return future.result(timeout=65)  # just above _WORKER_TIMEOUT (60s) to avoid racing
 
 
 # --- Persistent MCP sessions ---

@@ -208,6 +208,23 @@ def dispatch(raw: str, agent):
         return (f"Unknown command: {cmd}. Type /help to see available commands.", True)
 
     # --- Freeform natural language ---
+    # For complex multi-domain requests, run planner first to gather data,
+    # then feed context to the agent for synthesis.
+    try:
+        from agents.planner import needs_planning, plan_and_execute
+        if needs_planning(stripped):
+            context = plan_and_execute(stripped)
+            if context:
+                # Feed gathered context + original query to the agent
+                augmented = f"""The user asked: "{stripped}"
+
+I've already gathered the following data for you. Synthesize it into a response — do NOT re-fetch this data.
+
+{context}"""
+                return (agent(augmented), True)
+    except Exception:
+        pass  # Planner failed — fall through to direct agent call
+
     return (agent(stripped), True)
 
 

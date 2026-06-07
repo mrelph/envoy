@@ -327,11 +327,16 @@ async def _gather_async(sources: list, days: int, alias: str) -> dict:
     return results
 
 
+_GATHER_SOURCE_TIMEOUT = 45  # seconds per source — fail fast, don't wait for full MCP timeout chain
+
+
 async def _named(name, coro):
-    """Wrap a coroutine to return (name, result)."""
+    """Wrap a coroutine to return (name, result) with a timeout."""
     try:
-        result = await coro
+        result = await asyncio.wait_for(coro, timeout=_GATHER_SOURCE_TIMEOUT)
         return (name, result)
+    except asyncio.TimeoutError:
+        return (name, TimeoutError(f"{name} timed out after {_GATHER_SOURCE_TIMEOUT}s"))
     except Exception as e:
         return (name, e)
 

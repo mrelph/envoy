@@ -25,10 +25,19 @@ def _worker_gather(**tasks) -> dict:
     """
     from agents.workers import get_worker
 
+    _WORKER_TIMEOUT = 60  # seconds — fail fast, don't wait for full MCP retry chain
+
     async def _run_one(name, worker_name, request):
         try:
-            result = get_worker(worker_name)(request)
+            result = await asyncio.wait_for(
+                asyncio.get_event_loop().run_in_executor(
+                    None, lambda: get_worker(worker_name)(request)
+                ),
+                timeout=_WORKER_TIMEOUT,
+            )
             return name, str(result.message) if hasattr(result, 'message') else str(result)
+        except asyncio.TimeoutError:
+            return name, f"⚠️ {worker_name} timed out after {_WORKER_TIMEOUT}s"
         except Exception as e:
             return name, f"⚠️ {worker_name} unavailable: {e}"
 
