@@ -70,7 +70,7 @@ _MCP_PARAM_DEFS = {
     "TeamSnap":   {"command": "node", "args": [os.path.join(_teamsnap_dir, "dist", "wrapper.js")], "env": _teamsnap_env},
     "SharePoint": {"command": "amazon-sharepoint-mcp", "args": [], "env": _node_quiet_env},
     "Kingpin":    {"command": "kingpin-mcp", "args": []},
-    "InstructAI": {"command": "instructai-mcp", "args": []},
+    "InstructAI": {"command": "instructai-mcp-proxy", "args": []},
     "QuickSight": {"command": "amazon-quick-mcp", "args": []},
 }
 
@@ -203,6 +203,20 @@ class _TimeoutSession:
         self._name = name
         self._timeout = timeout
         self.dead = False
+        self.auth_failed = False  # set True when an auth failure is detected
+
+    _AUTH_FAIL_PATTERNS = (
+        "unauthorized", "401", "403", "authentication failed",
+        "token expired", "token invalid", "access denied",
+        "cookie expired", "session expired",
+        "not authenticated", "credentials expired",
+    )
+
+    @staticmethod
+    def _looks_like_json(text: str) -> bool:
+        """Heuristic: is this text a JSON object/array a consumer might parse?"""
+        stripped = text.lstrip()
+        return stripped.startswith("{") or stripped.startswith("[")
 
     async def _call_one(self, tool_name, arguments=None, **kwargs):
         """Single MCP call with timeout and health tracking."""
@@ -216,6 +230,14 @@ class _TimeoutSession:
                 for item in result.content:
                     if hasattr(item, 'text') and isinstance(item.text, str):
                         item.text = strip_mcp_wrapper(item.text)
+                        # Detect auth failures in response text. Flag it for
+                        # programmatic callers, but only append human guidance
+                        # when the payload isn't JSON — appending to JSON would
+                        # break downstream parsers (e.g. feed.py json.loads).
+                        if item.text and any(p in item.text.lower() for p in self._AUTH_FAIL_PATTERNS):
+                            self.auth_failed = True
+                            if not self._looks_like_json(item.text):
+                                item.text += "\n\n⚠️ Authentication failure detected. Please refresh your credentials and retry."
             return result
         except asyncio.TimeoutError:
             raise TimeoutError(f"{self._name}/{tool_name} timed out after {self._timeout}s")
@@ -226,6 +248,9 @@ class _TimeoutSession:
             msg = str(e).lower()
             if any(k in msg for k in ("closed", "broken pipe", "transport", "eof")):
                 self.dead = True
+            # Surface auth errors with actionable guidance
+            if any(p in msg for p in self._AUTH_FAIL_PATTERNS):
+                raise type(e)(f"{e}\n\n⚠️ Authentication failure — please refresh your credentials.") from e
             raise
 
     async def _expand_batch(self, old_name, new_name, arguments, **kwargs):

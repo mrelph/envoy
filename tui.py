@@ -165,15 +165,17 @@ class FeedPanel(Static):
 
 async def _poll_loop_safe():
     """Safe poll loop that runs in the background event loop."""
-    from agents.feed import _poll_once, _POLL_INTERVAL, _running
     import asyncio
+    from agents import feed
+    feed._running = True
     await asyncio.sleep(15)  # initial delay
-    while True:
+    # Gate on the live module flag (not a captured value) so feed.stop() halts us.
+    while feed._running:
         try:
-            await _poll_once()
+            await feed._poll_once()
         except Exception:
             pass
-        await asyncio.sleep(_POLL_INTERVAL)
+        await asyncio.sleep(feed._POLL_INTERVAL)
 
 
 class Spinner(Static):
@@ -587,9 +589,6 @@ class EnvoyApp(App):
         if cmd == "/status":
             self.action_refresh_mcp()
             return
-        if cmd == "/mwinit":
-            self._run_mwinit()
-            return
         if cmd == "/settings":
             out.write(Text("  Use 'envoy settings' from CLI to edit config.", style="#8b949e"))
             return
@@ -721,22 +720,6 @@ class EnvoyApp(App):
             self.query_one("#input", TextArea).focus()
 
         self.push_screen(ModelPickerScreen(), callback=_on_dismiss)
-
-    def _run_mwinit(self) -> None:
-        import subprocess
-        out = self.query_one("#output", RichLog)
-        out.write(Text("  Launching mwinit — check your browser…", style="#8b949e"))
-
-        def _do_mwinit():
-            with self.suspend():
-                subprocess.run(["mwinit", "-o"])
-            # Reconnect MCP sessions with fresh creds
-            from agents.base import _persistent
-            _persistent.clear()
-            self.action_refresh_mcp()
-            self.notify("✓ Midway refreshed", timeout=3)
-
-        self.call_later(_do_mwinit)
 
     # ── Helpers ──
 
