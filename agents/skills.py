@@ -2,7 +2,6 @@
 
 import os
 import re
-import yaml
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -19,6 +18,8 @@ SKILL_PATHS = [
 
 def _parse_skill_md(path: Path) -> Optional[dict]:
     """Parse a SKILL.md file into {name, description, body, location, dir}."""
+    import yaml
+
     try:
         text = path.read_text()
     except Exception:

@@ -28,15 +28,55 @@ _SESSION_DIRS = [
     "/tmp/strands/sessions",
 ]
 
+# Set by _model() each time it constructs a BedrockModel, so _import_create
+# can learn which model_id a worker's create() picked (every worker calls
+# _model() exactly once) without threading it through create()'s signature
+# or introspecting the (possibly mocked) Agent/model objects afterward.
+# threading.local so concurrent worker construction on different threads
+# can't stomp on each other.
+_last_model_id = threading.local()
+
 
 def _model(tier: str):
     """Lazy-construct a BedrockModel — avoids importing strands at module load."""
     from strands.models import BedrockModel
     from agents.base import model_for
+    model_id = model_for(tier)
+    _last_model_id.value = model_id
     return BedrockModel(
-        model_id=model_for(tier),
+        model_id=model_id,
         region_name=os.environ.get("AWS_REGION", "us-west-2"),
     )
+
+
+def _supports_prompt_caching(model_id: str) -> bool:
+    """Bedrock prompt caching is only supported on Claude and Nova model families.
+
+    Mirrors agent.py's `_supports_prompt_caching` (agent.py:298-300). Kept as a
+    local copy rather than imported: agent.py imports tools.py, which imports
+    agents.workers, so agents.workers -> agent.py would be a circular import.
+    """
+    return "anthropic.claude" in model_id or "amazon.nova" in model_id
+
+
+def _system_prompt_for_model(text: str, model_id: str):
+    """Wrap the system prompt in a cachePoint block when the model supports caching.
+
+    Mirrors agent.py's `_system_prompt_for_model` (agent.py:303-319) — same
+    eligibility check, same block structure. Returns either a plain string (no
+    caching) or a list of SystemContentBlock items with a trailing cachePoint
+    marker, telling Bedrock to cache everything before it.
+    """
+    if not _supports_prompt_caching(model_id):
+        return text
+    try:
+        from strands.types.content import SystemContentBlock
+    except ImportError:
+        return text
+    return [
+        SystemContentBlock(text=text),
+        SystemContentBlock(cachePoint={"type": "default"}),
+    ]
 
 
 def _session_manager(worker_name: str):
@@ -66,11 +106,16 @@ def post_context(key: str, value: str, source: str = ""):
     import time
     with _bus_lock:
         _bus[key] = {"value": value, "source": source, "ts": time.monotonic()}
-        # Evict entries older than 30 min or if bus exceeds 50 entries
+        # Always evict entries older than 30 min, then hard-cap at 50 entries
+        # (oldest-first) so a burst of fresh posts can't grow the bus forever.
         cutoff = time.monotonic() - 1800
+        stale = [k for k, v in _bus.items() if v["ts"] < cutoff]
+        for k in stale:
+            del _bus[k]
         if len(_bus) > 50:
-            stale = [k for k, v in _bus.items() if v["ts"] < cutoff]
-            for k in stale:
+            overflow = len(_bus) - 50
+            oldest = sorted(_bus.items(), key=lambda kv: kv[1]["ts"])[:overflow]
+            for k, _ in oldest:
                 del _bus[k]
 
 
@@ -219,12 +264,31 @@ def get_worker(name: str):
 
 
 def _import_create(module_name: str, worker_name: str):
-    """Import a worker module and call its create() with session manager."""
+    """Import a worker module and call its create() with session manager.
+
+    The final prompt is assembled in two ordered steps:
+    1. Build the full prompt *text* — base prompt + any appended process.md
+       sections — via plain string concatenation.
+    2. Only once that's final, wrap it in cachePoint block form (a list of
+       SystemContentBlock items) if the worker's model supports prompt
+       caching. Wrapping has to be the last step: block form is a list, not
+       a str, so appending more text after wrapping would break.
+    """
     import importlib
     mod = importlib.import_module(f"agents.workers.{module_name}")
     agent = mod.create(session_mgr=_session_manager(worker_name))
-    # Inject relevant process.md rules into the worker's system prompt
-    rules = _load_process_rules(mod)
-    if rules and hasattr(agent, 'system_prompt') and isinstance(agent.system_prompt, str):
-        agent.system_prompt = agent.system_prompt + rules
+
+    if hasattr(agent, 'system_prompt') and isinstance(agent.system_prompt, str):
+        # Inject relevant process.md rules into the worker's system prompt
+        rules = _load_process_rules(mod)
+        full_prompt = agent.system_prompt + rules if rules else agent.system_prompt
+
+        # _model() (called inside mod.create() above) recorded which model_id
+        # this worker was built with — use it to decide cache eligibility.
+        model_id = getattr(_last_model_id, "value", None)
+        if model_id:
+            agent.system_prompt = _system_prompt_for_model(full_prompt, model_id)
+        else:
+            agent.system_prompt = full_prompt
+
     return agent

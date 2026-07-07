@@ -122,16 +122,29 @@ MCP_CALL_TIMEOUT = 60  # seconds per MCP tool call
 import re as _re
 
 _UNTRUSTED_PREFIX_RE = _re.compile(r'^<untrusted_content[^>]*>\n?')
-_UNTRUSTED_SUFFIX_RE = _re.compile(r'\n?</untrusted_content[^>]*>.*', _re.DOTALL)
+# Matches only the closing tag itself (plus an optional preceding newline) —
+# NOT `.*` after it. The previous version used DOTALL with a trailing `.*`,
+# which silently deleted every byte of real content that happened to follow
+# the closing tag (e.g. the rest of an email thread after a quoted reply).
+_UNTRUSTED_SUFFIX_RE = _re.compile(r'\n?</untrusted_content[^>]*>')
 _SAFETY_DIRECTIVE_RE = _re.compile(r'^\[CONTENT SAFETY DIRECTIVE\].*?^---\n', _re.DOTALL | _re.MULTILINE)
 
 
 def strip_mcp_wrapper(text: str) -> str:
     """Strip MCP safety wrappers from responses.
-    
+
     Handles:
     - <untrusted_content_xxx>...</untrusted_content_xxx> (Outlook MCP)
     - [CONTENT SAFETY DIRECTIVE]...--- (Slack MCP)
+
+    SECURITY NOTE: this function is no longer called automatically from
+    `_TimeoutSession._call_one`. The Outlook/Slack MCP servers add these
+    wrappers deliberately as a prompt-injection defense — they mark
+    third-party content as untrusted data so the model doesn't treat it as
+    instructions. Stripping them before the content reaches the model
+    defeated that defense. Kept here only for any code/tests that still
+    want the stripped text explicitly (e.g. for display), not as a
+    security boundary.
     """
     text = _UNTRUSTED_PREFIX_RE.sub('', text)
     text = _UNTRUSTED_SUFFIX_RE.sub('', text)
@@ -205,17 +218,18 @@ class _TimeoutSession:
         self.dead = False
 
     async def _call_one(self, tool_name, arguments=None, **kwargs):
-        """Single MCP call with timeout and health tracking."""
+        """Single MCP call with timeout and health tracking.
+
+        Deliberately does NOT strip <untrusted_content>/[CONTENT SAFETY
+        DIRECTIVE] wrappers (see strip_mcp_wrapper's docstring) — those are
+        the Outlook/Slack MCP servers' own prompt-injection defense, and
+        removing them let third-party content masquerade as instructions.
+        """
         try:
             result = await asyncio.wait_for(
                 self._session.call_tool(tool_name, arguments, **kwargs),
                 timeout=self._timeout,
             )
-            # Strip <untrusted_content> wrappers from all text content
-            if result and result.content:
-                for item in result.content:
-                    if hasattr(item, 'text') and isinstance(item.text, str):
-                        item.text = strip_mcp_wrapper(item.text)
             return result
         except asyncio.TimeoutError:
             raise TimeoutError(f"{self._name}/{tool_name} timed out after {self._timeout}s")
@@ -229,7 +243,14 @@ class _TimeoutSession:
             raise
 
     async def _expand_batch(self, old_name, new_name, arguments, **kwargs):
-        """Expand a batch call into sequential single calls, returning a combined result.
+        """Expand a batch call into per-item calls, returning a combined result.
+
+        Per-item calls run concurrently (bounded by a semaphore of 8) instead
+        of sequentially — a 50-item Slack batch used to take ~10-25s making
+        one call at a time. asyncio.gather preserves result ordering (it
+        returns results in the same order as the input list regardless of
+        completion order), so downstream code that zips results back up
+        against the original ids/channels is unaffected.
 
         Per-item exceptions are caught and a placeholder result is substituted so a
         partial Slack outage doesn't fail the whole scan. Swallowed errors are
@@ -240,35 +261,56 @@ class _TimeoutSession:
         from types import SimpleNamespace
 
         swallowed = []  # (item_id, exception)
+        sem = asyncio.Semaphore(8)
 
         results = []
         if old_name == "batch_get_channel_info":
-            for cid in (arguments or {}).get("channelIds", []):
-                try:
-                    r = await self._call_one(new_name, {"channel": cid}, **kwargs)
-                    text = r.content[0].text if r.content else "{}"
-                    results.append({"channelId": cid, "result": _json.loads(text) if isinstance(text, str) else text})
-                except Exception as e:
-                    swallowed.append((cid, e))
-                    results.append({"channelId": cid, "result": {"name": cid}})
+            async def _fetch_channel(cid):
+                async with sem:
+                    try:
+                        r = await self._call_one(new_name, {"channel": cid}, **kwargs)
+                        text = r.content[0].text if r.content else "{}"
+                        return {"channelId": cid, "result": _json.loads(text) if isinstance(text, str) else text}, None
+                    except Exception as e:
+                        return {"channelId": cid, "result": {"name": cid}}, (cid, e)
+
+            channel_ids = (arguments or {}).get("channelIds", [])
+            outcomes = await asyncio.gather(*[_fetch_channel(cid) for cid in channel_ids])
+            for item, err in outcomes:
+                results.append(item)
+                if err:
+                    swallowed.append(err)
         elif old_name == "batch_get_user_info":
-            for uid in (arguments or {}).get("users", []):
-                try:
-                    r = await self._call_one(new_name, {"query": uid}, **kwargs)
-                    text = r.content[0].text if r.content else "{}"
-                    data = _json.loads(text) if isinstance(text, str) else text
-                    results.append({"userId": uid, "result": data if isinstance(data, dict) else {"name": uid}})
-                except Exception as e:
-                    swallowed.append((uid, e))
-                    results.append({"userId": uid, "result": {"name": uid}})
+            async def _fetch_user(uid):
+                async with sem:
+                    try:
+                        r = await self._call_one(new_name, {"query": uid}, **kwargs)
+                        text = r.content[0].text if r.content else "{}"
+                        data = _json.loads(text) if isinstance(text, str) else text
+                        return {"userId": uid, "result": data if isinstance(data, dict) else {"name": uid}}, None
+                    except Exception as e:
+                        return {"userId": uid, "result": {"name": uid}}, (uid, e)
+
+            users = (arguments or {}).get("users", [])
+            outcomes = await asyncio.gather(*[_fetch_user(uid) for uid in users])
+            for item, err in outcomes:
+                results.append(item)
+                if err:
+                    swallowed.append(err)
         elif old_name == "batch_set_last_read":
-            for ch in (arguments or {}).get("channels", []):
+            async def _set_last_read(ch):
                 cid = ch.get("channelId", "")
                 ts = ch.get("ts") or ch.get("tsIso", "")
-                try:
-                    await self._call_one(new_name, {"channel": cid, "timestamp": ts}, **kwargs)
-                except Exception as e:
-                    swallowed.append((cid, e))
+                async with sem:
+                    try:
+                        await self._call_one(new_name, {"channel": cid, "timestamp": ts}, **kwargs)
+                        return None
+                    except Exception as e:
+                        return (cid, e)
+
+            channels_arg = (arguments or {}).get("channels", [])
+            outcomes = await asyncio.gather(*[_set_last_read(ch) for ch in channels_arg])
+            swallowed.extend(err for err in outcomes if err)
             results = [{"ok": True}]
         elif old_name == "list_channels":
             # Emulate old list_channels using list_my_channels + list_channels (DM types)
@@ -377,10 +419,23 @@ def _get_loop():
 
 def run(coro):
     """Run an async coroutine on the shared event loop.
-    
+
     Uses a persistent background loop so MCP subprocess connections
     survive across calls (~0.9s saved per reused connection).
     """
+    if threading.current_thread() is _loop_thread:
+        # Calling run() from the loop thread itself would schedule the
+        # coroutine onto the loop and then block that same loop waiting for
+        # it to finish — a guaranteed self-deadlock (surfaces as a 120s
+        # timeout). Fail fast instead.
+        try:
+            coro.close()
+        except Exception:
+            pass
+        raise RuntimeError(
+            "run() called from the event-loop thread — this would deadlock; "
+            "await the coroutine directly or use asyncio.to_thread"
+        )
     future = asyncio.run_coroutine_threadsafe(coro, _get_loop())
     return future.result(timeout=120)
 
@@ -936,6 +991,10 @@ def log_sent(tag: str, channel: str, recipient: str, medium: str, summary: str):
     os.makedirs(os.path.dirname(SENT_LOG), exist_ok=True)
     with open(SENT_LOG, "w") as f:
         json.dump(entries, f, indent=2)
+    try:
+        os.chmod(SENT_LOG, 0o600)
+    except OSError:
+        pass
 
 
 def load_sent() -> list:

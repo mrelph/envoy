@@ -2,7 +2,9 @@
 import os
 import json
 import shutil
+from datetime import datetime
 from pathlib import Path
+from typing import Optional
 from rich.console import Console
 from rich.panel import Panel
 from agents.base import invoke_ai, builder, run
@@ -15,6 +17,66 @@ PROCESS_FILE = CONFIG_DIR / "process.md"
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 console = Console()
+
+
+def _secure_dir(path: Path):
+    """Best-effort lock down a config directory to owner-only (0700)."""
+    try:
+        os.chmod(path, 0o700)
+    except OSError:
+        pass
+
+
+def _secure_file(path: Path):
+    """Best-effort lock down a config file that may hold secrets/PII to 0600."""
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
+def _backup_before_overwrite(path: Path) -> Optional[Path]:
+    """If `path` already has real (non-template-placeholder) content, copy it
+    to a timestamped sibling before it gets overwritten. Returns the backup
+    path, or None if there was nothing worth backing up."""
+    if not path.exists():
+        return None
+    try:
+        if not path.read_text().strip():
+            return None
+    except OSError:
+        return None
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup_path = path.with_name(f"{path.name}.bak-{ts}")
+    try:
+        shutil.copy(path, backup_path)
+    except OSError:
+        return None
+    _secure_file(backup_path)
+    return backup_path
+
+
+def _read_vip_aliases(filepath: Path) -> str:
+    """Pull the comma-separated alias list back out of the '# High Priority
+    People' section of an existing envoy.md, so re-running init can prefill it."""
+    if not filepath.exists():
+        return ""
+    try:
+        text = filepath.read_text()
+    except OSError:
+        return ""
+    in_section = False
+    aliases = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("# "):
+            in_section = stripped == "# High Priority People"
+            continue
+        if in_section and stripped.startswith("-"):
+            parts = [p.strip() for p in stripped.lstrip("- ").split("|")]
+            if len(parts) >= 2 and parts[1]:
+                aliases.append(parts[1])
+    return ", ".join(aliases)
 
 
 def _ask(prompt: str, default: str = "") -> str:
@@ -50,16 +112,19 @@ def _read_field(filepath: Path, key: str) -> str:
 def _set_field(filepath: Path, key: str, value: str):
     if not filepath.exists():
         filepath.write_text(f"- {key}: {value}\n")
+        _secure_file(filepath)
         return
     lines = filepath.read_text().splitlines()
     for i, line in enumerate(lines):
         if line.strip().startswith(f"- {key}:"):
             lines[i] = f"- {key}: {value}"
             filepath.write_text("\n".join(lines) + "\n")
+            _secure_file(filepath)
             return
     # Not found — append under a sensible header
     lines.append(f"- {key}: {value}")
     filepath.write_text("\n".join(lines) + "\n")
+    _secure_file(filepath)
 
 
 def run_settings():
@@ -169,11 +234,19 @@ Make it feel like a real character description, not a boring config file. Be cre
         console.print()
         choice = _ask("Save this? (yes/edit/no)", "yes")
         if choice.lower() in ("y", "yes"):
+            backup_path = _backup_before_overwrite(SOUL_FILE)
             SOUL_FILE.write_text(soul_content.strip() + "\n")
+            _secure_file(SOUL_FILE)
             console.print(f"[green]✓ Saved {SOUL_FILE}[/green]")
+            if backup_path:
+                console.print(f"[dim]  Previous soul.md backed up to {backup_path}[/dim]")
         elif choice.lower() in ("e", "edit"):
+            backup_path = _backup_before_overwrite(SOUL_FILE)
             SOUL_FILE.write_text(soul_content.strip() + "\n")
+            _secure_file(SOUL_FILE)
             console.print(f"[green]✓ Saved {SOUL_FILE}[/green] — edit it at {SOUL_FILE}")
+            if backup_path:
+                console.print(f"[dim]  Previous soul.md backed up to {backup_path}[/dim]")
         else:
             console.print("[dim]Discarded.[/dim]")
     except Exception as e:
@@ -182,7 +255,12 @@ Make it feel like a real character description, not a boring config file. Be cre
 
 
 def run_init():
-    CONFIG_DIR.mkdir(exist_ok=True)
+    CONFIG_DIR.mkdir(mode=0o700, exist_ok=True)
+    _secure_dir(CONFIG_DIR)  # belt-and-suspenders: mkdir's mode is subject to umask
+
+    # Detect a genuine re-run (existing, non-empty config) before we touch anything,
+    # so we know whether to prefill prompts / mention the auto-backup.
+    is_rerun = ENVOY_FILE.exists() and bool(ENVOY_FILE.read_text().strip())
 
     # Migrate old files if needed
     old_guidance = CONFIG_DIR / "guidance.md"
@@ -197,6 +275,7 @@ def run_init():
             src = TEMPLATES_DIR / filename
             if src.exists():
                 shutil.copy(src, target)
+                _secure_file(target)
 
     # Install bundled skills (don't overwrite user-modified ones)
     bundled_skills = TEMPLATES_DIR / "skills"
@@ -211,11 +290,21 @@ def run_init():
 
     console.print(Panel("🔏 Envoy Setup", style="bold cyan"))
     console.print("Let me learn about you so I can be a better assistant.\n")
+    if is_rerun:
+        console.print(
+            "[dim]Existing config found — name, alias, and VIP list are prefilled below; "
+            "your previous envoy.md/soul.md will be backed up automatically before they're "
+            "overwritten. Other fields are not prefilled — re-enter them or edit the files "
+            "directly afterwards.[/dim]\n"
+        )
 
-    alias = _ask("Your alias", os.environ.get("USER", ""))
+    alias = _ask("Your alias", _read_field(ENVOY_FILE, "Alias") or os.environ.get("USER", ""))
 
-    # Try Phonetool lookup
-    name, title, manager, directs = "", "", "", []
+    # Try Phonetool lookup (prefill from existing config as a fallback default)
+    name = _read_field(ENVOY_FILE, "Name")
+    title = _read_field(ENVOY_FILE, "Role")
+    manager = _read_field(ENVOY_FILE, "Manager")
+    directs = []
     try:
         console.print(f"[dim]Looking you up in Phonetool...[/dim]")
 
@@ -257,7 +346,8 @@ def run_init():
     agent_name = _ask("Name for your agent (or Enter to keep 'Envoy')", "")
     agent_sig = _ask("Signature for agent-sent emails/Slack (or Enter for none)", "")
     priorities = _ask("Top 3 priorities right now (comma-separated)", "")
-    vips_raw = _ask("People whose emails should always be flagged high priority (aliases, comma-separated)", "")
+    vips_raw = _ask("People whose emails should always be flagged high priority (aliases, comma-separated)",
+                     _read_vip_aliases(ENVOY_FILE))
 
     # Look up VIPs via Phonetool
     vip_entries = []
@@ -356,8 +446,12 @@ def run_init():
     if ea_entry:
         envoy += f"\n# Executive Assistant\n\n- {ea_entry['name'] or ea_alias} | {ea_entry['alias']} | {ea_entry['email']} | {ea_entry['title']}\n"
 
+    envoy_backup = _backup_before_overwrite(ENVOY_FILE)
     ENVOY_FILE.write_text(envoy)
+    _secure_file(ENVOY_FILE)
     console.print(f"\n[green]✓ Saved {ENVOY_FILE}[/green]")
+    if envoy_backup:
+        console.print(f"[dim]  Previous config backed up to {envoy_backup}[/dim]")
 
     # --- Write soul.md (agent identity) or generate with AI ---
     console.print()
@@ -392,14 +486,19 @@ I am your AI chief of staff — sharp, proactive, and always one step ahead.
 - Be proactive with recommendations based on what I find
 - When corrected, update the appropriate config file to remember
 """
+        soul_backup = _backup_before_overwrite(SOUL_FILE)
         SOUL_FILE.write_text(soul)
+        _secure_file(SOUL_FILE)
         console.print(f"[green]✓ Saved {SOUL_FILE}[/green]")
+        if soul_backup:
+            console.print(f"[dim]  Previous config backed up to {soul_backup}[/dim]")
 
     # Ensure process.md exists
     if not PROCESS_FILE.exists():
         src = TEMPLATES_DIR / "process.md"
         if src.exists():
             shutil.copy(src, PROCESS_FILE)
+            _secure_file(PROCESS_FILE)
         console.print(f"[green]✓ Created {PROCESS_FILE}[/green]")
 
     console.print(f"\n[bold]Setup complete.[/bold] Edit files anytime, use /settings, or just tell me to adjust.\n")
@@ -417,8 +516,10 @@ def _load_user_mcps() -> dict:
 
 
 def _save_user_mcps(data: dict):
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    CONFIG_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+    _secure_dir(CONFIG_DIR)
     _MCP_JSON.write_text(json.dumps(data, indent=2) + "\n")
+    _secure_file(_MCP_JSON)
 
 
 def run_mcp(arg: str) -> str:

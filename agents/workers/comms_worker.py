@@ -26,11 +26,18 @@ def create(session_mgr=None):
     @tool
     def send_message(recipient: str, message: str, thread_ts: str = "") -> str:
         """Send a Slack message to a person, group, or channel. Supports threaded replies.
+        This action requires user confirmation; if the tool returns a confirmation-required
+        message, relay it to the user verbatim and retry only after the user confirms.
+
         Args:
             recipient: Single alias, comma-separated aliases for group DM, or channel ID (C/G/D prefix)
             message: Message text
             thread_ts: Parent message timestamp for threaded reply (optional)
         """
+        from agents.confirm import require_confirmation
+        pending = require_confirmation("send slack message", f"To: {recipient} — {message[:120]}")
+        if pending:
+            return pending
         return run(slack_mod.send_dm(recipient, message, thread_ts))
 
     @tool

@@ -29,16 +29,22 @@ def _find_cli() -> tuple[str, str]:
 def create(session_mgr=None):
 
     @tool
-    def run_coding_agent(task: str, working_directory: str = "", allow_edits: bool = True) -> str:
+    def run_coding_agent(task: str, working_directory: str = "", allow_edits: bool = False) -> str:
         """Run an autonomous coding agent (Claude Code or Kiro) to completion on a task.
-        The agent can read/write files, run commands, and iterate until done.
-        Use for: writing code, fixing bugs, refactoring, creating files, running tests,
-        generating scripts, code review, or any development task.
+        The agent can read files and, only if explicitly permitted, write files and run
+        commands, iterating until done. Use for: writing code, fixing bugs, refactoring,
+        creating files, running tests, generating scripts, code review, or any development task.
+
+        Runs in read-only/plan mode by default. Edits, file writes, and shell commands
+        require explicit allow_edits=True — only set that when the user has clearly asked
+        for changes to be made, not just analyzed.
 
         Args:
             task: Detailed description of the coding task to accomplish
-            working_directory: Directory to run in (default: current directory)
-            allow_edits: Whether the agent may edit files (default: True). Set False for read-only analysis.
+            working_directory: Directory to run in (default: current directory). Must be
+                under an allow-listed directory (see local_files' allowed_dirs config).
+            allow_edits: Whether the agent may edit files / run commands (default: False —
+                read-only plan mode). Requires explicit allow_edits=True to permit edits.
         """
         cli_path, cli_name = _find_cli()
         if not cli_path:
@@ -47,6 +53,22 @@ def create(session_mgr=None):
         cwd = working_directory or os.getcwd()
         if not os.path.isdir(cwd):
             return f"⚠️ Directory not found: {cwd}"
+
+        # Restrict to the same filesystem allow-list local_files enforces — the
+        # compensating control for allow_edits=True / shell access. Validated
+        # even when working_directory was left blank (defaulting to the
+        # current directory), per C5 in PROJECT-REVIEW-2026-07-06.md.
+        try:
+            from tools import _allowed_dirs, _is_path_allowed
+            allowed = _allowed_dirs()
+        except Exception:
+            allowed = []
+        if not allowed:
+            return ("⚠️ No directories allowed for the coding agent. Add allowed_dirs to "
+                     '~/.envoy/config.json:\n{"allowed_dirs": ["~/Projects"]}')
+        if not _is_path_allowed(cwd, allowed):
+            return (f"⚠️ Directory not allowed: {cwd}. Add it (or a parent directory) to "
+                     f"allowed_dirs in ~/.envoy/config.json — the same allow-list local_files uses: {allowed}")
 
         # Pre-flight against the per-request budget. The subprocess makes its
         # own opaque LLM calls, so we can't enforce mid-flight — but we can

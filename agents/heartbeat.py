@@ -183,7 +183,10 @@ Your job: check routines against current data and report anything that needs att
 
 Respond with ONLY the alerts or ALL_CLEAR. No preamble."""
 
-    result = invoke_ai(prompt, max_tokens=800, tier="medium")
+    # invoke_ai() is a blocking Bedrock call (10-60s). This coroutine already
+    # runs on the shared MCP event loop, so calling it inline would stall all
+    # other MCP traffic (watcher, gather, etc.) for the duration.
+    result = await asyncio.to_thread(invoke_ai, prompt, max_tokens=800, tier="medium")
 
     if not result or "ALL_CLEAR" in result.upper():
         state["last_run"] = datetime.now().isoformat()
@@ -215,16 +218,25 @@ Respond with ONLY the alerts or ALL_CLEAR. No preamble."""
         print(message)
 
     # --- Weekly learning loop (piggybacks on heartbeat, rate-limited internally) ---
-    _run_weekly_learning(notify)
+    await _run_weekly_learning(notify)
 
     return result
 
 
-def _run_weekly_learning(notify: str = "none"):
-    """Run self-analysis + skill suggestion if due (rate-limited to weekly)."""
+async def _run_weekly_learning(notify: str = "none"):
+    """Run self-analysis + skill suggestion if due (rate-limited to weekly).
+
+    Called from _run_heartbeat_async, which already runs on the shared MCP
+    event loop. self_analyze() makes a blocking invoke_ai() call, so it's
+    pushed to a thread rather than run inline (would otherwise stall MCP
+    traffic for the duration of the Bedrock call). The Slack DM is a
+    coroutine already, so it's awaited directly rather than passed through
+    run() — calling run() from the loop thread itself would deadlock (and
+    now raises immediately thanks to the guard in agents.base.run()).
+    """
     try:
         from agents.learning import self_analyze, auto_apply_analysis, suggest_skill
-        analysis = self_analyze()
+        analysis = await asyncio.to_thread(self_analyze)
         if analysis:
             applied = auto_apply_analysis(analysis)
             suggestion = suggest_skill()
@@ -235,7 +247,7 @@ def _run_weekly_learning(notify: str = "none"):
                 if suggestion:
                     msg += f"\n\n{suggestion}"
                 if notify == "slack":
-                    run(slack_agent.send_dm(_USER(), msg))
+                    await slack_agent.send_dm(_USER(), msg)
     except Exception:
         pass  # Never break heartbeat
 

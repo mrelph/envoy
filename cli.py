@@ -323,7 +323,7 @@ def _run_agent_command(prompt: str, output: str = None, no_display: bool = False
         agent = create_agent()
         result = agent(prompt)
 
-    response = result.message if hasattr(result, 'message') else str(result)
+    response = str(result)
 
     if output:
         with open(output, 'w') as f:
@@ -507,6 +507,7 @@ def watch(interval, once):
 def doctor():
     """Health check — MCP connections, AWS credentials, config, models, memory, skills."""
     from dispatch import _run_doctor
+    from rich.markdown import Markdown
     console.print(Markdown(_run_doctor()))
 
 

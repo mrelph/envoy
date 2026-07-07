@@ -63,6 +63,9 @@ def create(session_mgr=None):
     @tool
     def send_email(to: str, subject: str, body: str, cc: str = "", bcc: str = "") -> str:
         """Send a new email.
+        This action requires user confirmation; if the tool returns a confirmation-required
+        message, relay it to the user verbatim and retry only after the user confirms.
+
         Args:
             to: Comma-separated recipient emails
             subject: Email subject
@@ -70,6 +73,10 @@ def create(session_mgr=None):
             cc: Comma-separated CC emails
             bcc: Comma-separated BCC emails
         """
+        from agents.confirm import require_confirmation
+        pending = require_confirmation("send email", f"To: {to} — Subject: {subject}")
+        if pending:
+            return pending
         from tools import _outlook_tool
         def _emails(s): return [e.strip() for e in s.split(",") if e.strip()]
         args = {"to": _emails(to), "subject": subject, "body": _format_html(body)}
@@ -80,22 +87,36 @@ def create(session_mgr=None):
     @tool
     def reply_email(conversation_id: str, body: str, reply_all: bool = False) -> str:
         """Reply to an email thread. Automatically finds the latest message and replies in-thread.
+        This action requires user confirmation; if the tool returns a confirmation-required
+        message, relay it to the user verbatim and retry only after the user confirms.
+
         Args:
             conversation_id: Conversation ID from reading or searching the email
             body: Reply body (plain text — will be formatted as HTML automatically)
             reply_all: Reply to all recipients
         """
+        from agents.confirm import require_confirmation
+        pending = require_confirmation("send email", f"Reply to conversation {conversation_id} (reply_all={reply_all})")
+        if pending:
+            return pending
         return run(email_mod.reply_to_email(conversation_id, _format_html(body), reply_all))
 
     @tool
     def forward_email(item_id: str, item_change_key: str, to: str, body: str = "") -> str:
         """Forward an email.
+        This action requires user confirmation; if the tool returns a confirmation-required
+        message, relay it to the user verbatim and retry only after the user confirms.
+
         Args:
             item_id: Item ID from reading the email
             item_change_key: Change key from reading the email
             to: Comma-separated recipient emails
             body: Optional additional message (plain text — will be formatted as HTML)
         """
+        from agents.confirm import require_confirmation
+        pending = require_confirmation("send email", f"Forward item {item_id} to: {to}")
+        if pending:
+            return pending
         from tools import _outlook_tool
         def _emails(s): return [e.strip() for e in s.split(",") if e.strip()]
         args = {"itemId": item_id, "itemChangeKey": item_change_key, "to": _emails(to)}
@@ -148,12 +169,19 @@ def create(session_mgr=None):
     @tool
     def delete(conversation_ids: str) -> str:
         """Delete emails by moving to Deleted Items.
+        This action requires user confirmation; if the tool returns a confirmation-required
+        message, relay it to the user verbatim and retry only after the user confirms.
+
         Args:
             conversation_ids: Comma-separated conversation IDs
         """
         ids = [c.strip() for c in conversation_ids.split(",") if c.strip()]
         if not ids:
             return "No IDs provided."
+        from agents.confirm import require_confirmation
+        pending = require_confirmation("delete email", f"Delete conversations: {', '.join(ids)}")
+        if pending:
+            return pending
         result = run(email_mod.delete_emails(ids))
         return f"Deleted {result.get('deleted',0)}, {result.get('failed',0)} failed."
 

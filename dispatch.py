@@ -105,6 +105,12 @@ def dispatch(raw: str, agent):
     If handled is False, response_text is None and the caller should call agent(prompt).
     Returns (prompt_or_result, handled_internally).
     """
+    try:
+        from agents.confirm import set_user_turn
+        set_user_turn(raw)
+    except Exception:
+        pass
+
     stripped = raw.strip()
     if not stripped:
         return None, True

@@ -10,7 +10,7 @@ from textual.widgets import Static, Input, RichLog, Label, TextArea, OptionList
 from textual.widgets.option_list import Option, Separator
 from textual.binding import Binding
 from textual.worker import get_current_worker
-from textual import work, on
+from textual import events, work, on
 from rich.markdown import Markdown
 from rich.text import Text
 
@@ -112,7 +112,17 @@ class MCPBar(Static):
             t.append(name, style="#e6edf3" if ok else "#484f58")
             t.append("  ")
         self._content = t
-        self.app.call_from_thread(self.refresh)
+
+        def _done() -> None:
+            self.refresh()
+            # Stop the global spinner /status and F5 (action_refresh_mcp) start —
+            # otherwise it spins forever once the check completes.
+            try:
+                self.app.query_one("#spinner", Spinner).stop()
+            except Exception:
+                pass
+
+        self.app.call_from_thread(_done)
 
 
 class Spinner(Static):
@@ -274,18 +284,6 @@ class ModelPickerScreen(ModalScreen[str | None]):
     def on_mount(self) -> None:
         self._show_tier_list()
 
-    def _show_tier_list(self) -> None:
-        from agents.base import _load_models, DEFAULT_MODELS, MODEL_CATALOG
-        models = _load_models()
-        ol = self.query_one("#picker-list", OptionList)
-        ol.clear_options()
-        for tier in DEFAULT_MODELS:
-            mid = models.get(tier, DEFAULT_MODELS[tier])
-            name = next((c[1] for c in MODEL_CATALOG if c[0] == mid), mid.split(".")[-1])
-            ol.add_option(Option(f"  {tier:<8} → {name}", id=tier))
-        ol.add_option(Separator())
-        ol.add_option(Option("  ↩ Cancel", id="__cancel__"))
-
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         if self._phase == "tier":
             if event.option.id == "__cancel__":
@@ -368,6 +366,34 @@ class ModelPickerScreen(ModalScreen[str | None]):
         self.dismiss(None)
 
 
+# ── Chat input widget ────────────────────────────────────
+
+
+class ChatInput(TextArea):
+    """TextArea that flags paste-inserted text so Enter-submit logic can skip it.
+
+    Textual dispatches privately-named `_on_xxx` handlers by walking the MRO:
+    overriding `_on_paste` does NOT replace TextArea's own `_on_paste` — both
+    get invoked independently for every `Paste` event (this subclass's
+    version runs first, since subclasses precede base classes in the MRO
+    walk). So this method only sets the flag; TextArea's own handler (run
+    right after, by the framework) performs the actual verbatim insert.
+    Calling `super()._on_paste()` here would insert the pasted text twice.
+    The App's `_on_input_changed` handler consumes (and clears) the flag
+    once, so a pasted block — even one ending in a newline — lands intact
+    instead of auto-submitting.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.suppress_next_submit = False
+
+    async def _on_paste(self, event: events.Paste) -> None:
+        if self.read_only:
+            return
+        self.suppress_next_submit = True
+
+
 # ── App ──────────────────────────────────────────────────
 
 
@@ -383,6 +409,7 @@ class EnvoyApp(App):
         Binding("ctrl+y", "copy_output", "Copy selection", show=False),
         Binding("f5", "refresh_mcp", "Refresh", show=False),
         Binding("escape", "focus_input", "", show=False),
+        Binding("alt+enter", "insert_newline", "Newline", show=False),
         Binding("ctrl+up", "history_prev", "Previous command", show=False),
         Binding("ctrl+down", "history_next", "Next command", show=False),
     ]
@@ -393,7 +420,6 @@ class EnvoyApp(App):
     def __init__(self):
         super().__init__()
         self._agent = None
-        self._pending_prompt = None  # e.g. "models" → next input is interpreted as /models <args>
         self._busy = False  # True while a command is in flight (prevents concurrent agent calls)
         self._history: list[str] = []
         self._history_pos: int | None = None  # None = not browsing; else index into _history
@@ -413,17 +439,34 @@ class EnvoyApp(App):
         yield Spinner(id="spinner")
         with Horizontal(id="input-area"):
             yield Label("›", id="prompt-label")
-            yield TextArea(id="input", language=None, soft_wrap=True, show_line_numbers=False)
+            yield ChatInput(id="input", language=None, soft_wrap=True, show_line_numbers=False)
         yield StatusBar(id="status-bar")
 
     def on_mount(self) -> None:
         out = self.query_one("#output", RichLog)
         out.write(Text.from_markup(LOGO.format(version=VERSION)))
+        self._show_update_notice(out)
         out.write(Text())
         self.query_one("#spinner", Spinner).display = False
         self.query_one("#input", TextArea).focus()
         self._load_history()
         self._init_agent()
+
+    def _show_update_notice(self, out: RichLog) -> None:
+        """Surface the `envoy` wrapper's update stamp file, if present.
+
+        The wrapper writes ~/.envoy/update-available with the newer version
+        string when it detects a newer git tag (absence/empty = up to date).
+        Read defensively — this must never block or crash startup.
+        """
+        try:
+            stamp = CONFIG_DIR / "update-available"
+            latest = stamp.read_text().strip()
+            if latest:
+                ver = latest.lstrip("vV")
+                out.write(Text(f"  ⬆ Envoy v{ver} available — run 'envoy update'", style="#d29922"))
+        except Exception:
+            pass
 
     @work(thread=True, exclusive=True, group="init")
     def _init_agent(self) -> None:
@@ -450,8 +493,21 @@ class EnvoyApp(App):
 
     @on(TextArea.Changed, "#input")
     def _on_input_changed(self, event: TextArea.Changed) -> None:
-        """Submit on Enter (newline). Shift+Enter for actual newline."""
+        """Submit on Enter; Alt+Enter and paste insert a literal newline instead.
+
+        Textual's TextArea always inserts a literal "\\n" when Enter is
+        pressed and posts this Changed event — that's the actual submit
+        signal, detected here as "text ends with a newline". Multi-line
+        pastes (even ones ending in a newline) and Alt+Enter-inserted
+        newlines (see `action_insert_newline`) are flagged via
+        `suppress_next_submit` (set by `ChatInput._on_paste` or
+        `action_insert_newline`) so this handler skips the submit check for
+        that one Changed event and lets the text land intact.
+        """
         ta = event.text_area
+        if getattr(ta, "suppress_next_submit", False):
+            ta.suppress_next_submit = False
+            return
         text = ta.text
         if text.endswith("\n"):
             raw = text.rstrip("\n")
@@ -483,7 +539,7 @@ class EnvoyApp(App):
         if cmd == "/help":
             self._show_help()
             return
-        if cmd in ("/exit", "/quit") or raw.lower() in ("quit", "exit", "q"):
+        if cmd in ("/exit", "/quit") or raw.strip().lower() in ("quit", "exit"):
             self.exit()
             return
         if cmd == "/status":
@@ -494,6 +550,9 @@ class EnvoyApp(App):
             return
         if cmd == "/settings":
             out.write(Text("  Use 'envoy settings' from CLI to edit config.", style="#8b949e"))
+            return
+        if cmd == "/backup":
+            self._run_backup()
             return
 
         # After a bare `/models`, open the interactive picker modal
@@ -599,6 +658,13 @@ class EnvoyApp(App):
                 else:
                     out.write(Text(f"\n  ⚠️  {type(error).__name__}: {msg}\n", style="#f85149"))
                 return
+            if not handled:
+                # dispatch() punted a system command back to us that this TUI
+                # doesn't (yet) implement — don't echo the raw command string
+                # as if it were a real response.
+                cmd_name = result if isinstance(result, str) else raw.split()[0]
+                out.write(Text(f"  ⚠ {cmd_name} is not available in the TUI", style="#d29922"))
+                return
             if not result:
                 return
 
@@ -631,8 +697,10 @@ class EnvoyApp(App):
             else:
                 out.write(Text(f"\n{text}\n"))
 
-            # Toast notification
-            self.notify(f"✓ {hint} done", timeout=3)
+            # Toast notification — skip for usage errors / warnings so a
+            # rejected command doesn't get a false "done" toast.
+            if not text.startswith("Usage:") and not text.startswith("⚠"):
+                self.notify(f"✓ {hint} done", timeout=3)
             # Refresh status bar to show updated TTFT/tokens
             self.query_one("#status-bar", StatusBar).refresh()
 
@@ -665,6 +733,41 @@ class EnvoyApp(App):
             self.notify("✓ Midway refreshed", timeout=3)
 
         self.call_later(_do_mwinit)
+
+    def _run_backup(self) -> None:
+        out = self.query_one("#output", RichLog)
+        out.write(Text("  Backing up config, memory, and state…", style="#8b949e"))
+        self._do_backup()
+
+    @work(thread=True, exclusive=True, group="backup")
+    def _do_backup(self) -> None:
+        import contextlib
+        import io
+
+        from backup import run_backup
+
+        path = None
+        err = None
+        try:
+            # run_backup() prints progress via a rich Console tied to
+            # sys.stdout; redirect so it can't scribble on the TUI's
+            # alternate screen buffer.
+            with contextlib.redirect_stdout(io.StringIO()):
+                path = run_backup()
+        except Exception as e:
+            err = f"{type(e).__name__}: {e}"
+
+        def _report():
+            out = self.query_one("#output", RichLog)
+            if err:
+                out.write(Text(f"  ⚠️  Backup failed: {err}", style="#f85149"))
+            elif path:
+                out.write(Text(f"  ✓ Backup saved → {path.name}", style="#3fb950"))
+                self.notify("✓ Backup complete", timeout=3)
+            else:
+                out.write(Text("  Nothing to back up — no config files found.", style="#d29922"))
+
+        self.app.call_from_thread(_report)
 
     # ── Helpers ──
 
@@ -741,7 +844,19 @@ class EnvoyApp(App):
         self.query_one(MCPBar).check()
 
     def action_focus_input(self) -> None:
+        """Escape: cancel the in-flight command if one is running, else just focus input."""
+        if self._busy:
+            self.workers.cancel_group(self, "cmd")
+            self.query_one("#spinner", Spinner).stop()
+            self._busy = False
+            self.query_one("#output", RichLog).write(Text("  ✗ cancelled", style="#f85149"))
         self.query_one("#input", TextArea).focus()
+
+    def action_insert_newline(self) -> None:
+        """Alt+Enter: insert a literal newline into the input without submitting."""
+        ta = self.query_one("#input", TextArea)
+        ta.suppress_next_submit = True
+        ta.insert("\n")
 
     def action_copy_output(self) -> None:
         """Copy selected text (or last output) to clipboard."""

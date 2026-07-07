@@ -2,9 +2,15 @@
 
 Four mechanisms:
 1. reflect()          — log what happened after each command (fast, no AI)
-2. detect_correction() — spot user corrections and auto-save to process.md (fast regex, AI only on match)
-3. self_analyze()     — periodic pattern analysis + auto-apply (AI, runs weekly via heartbeat)
+2. detect_correction() — spot user corrections/preferences and queue a rule for confirmation
+3. self_analyze()     — periodic pattern analysis + auto-queue (AI, runs weekly via heartbeat)
 4. suggest_skill()    — detect repeated multi-step patterns and suggest skill creation (AI, rare)
+
+Learned rules are never written straight into process.md (which is injected into every
+supervisor + worker system prompt forever). Instead they land in a pending-confirmation
+queue (~/.envoy/pending_rules.json) via `apply_learning`/`apply_correction`, and only become
+permanent once a human confirms them with `confirm_pending()`. See the "Pending queue" API
+near the bottom of this module.
 """
 
 import os
@@ -15,10 +21,18 @@ from pathlib import Path
 _ENVOY_DIR = Path.home() / ".envoy"
 _LAST_ANALYSIS = _ENVOY_DIR / "learning_state.json"
 _PROCESS_FILE = os.path.expanduser("~/.envoy/process.md")
+_PENDING_FILE = _ENVOY_DIR / "pending_rules.json"
+
+_PENDING_CAP = 10          # max queued-but-unconfirmed rules; oldest dropped beyond this
+_PROCESS_SECTION_CAP = 30  # max rules per process.md section; confirm_pending refuses beyond this
 
 
-def apply_learning(pattern: str, section: str = "General") -> str:
-    """Append a learned rule to process.md under the given section."""
+def _write_process_rule(pattern: str, section: str = "General") -> str:
+    """Append a rule to process.md under the given section.
+
+    Internal write path — this is the only place that mutates process.md. It should
+    only be reached via confirm_pending() (i.e. after a human has approved the rule).
+    """
     header = f"## {section}"
     if not os.path.exists(_PROCESS_FILE):
         tmpl = os.path.join(os.path.dirname(os.path.dirname(__file__)), "templates", "process.md")
@@ -28,7 +42,7 @@ def apply_learning(pattern: str, section: str = "General") -> str:
         else:
             with open(_PROCESS_FILE, "w") as f:
                 f.write(f"# Process Memory\n\n{header}\n- {pattern}\n")
-            return f"Created process memory: [{section}] {pattern}"
+            return f"Learned: [{section}] {pattern}"
     with open(_PROCESS_FILE) as f:
         content = f.read()
     if header in content:
@@ -38,6 +52,15 @@ def apply_learning(pattern: str, section: str = "General") -> str:
     with open(_PROCESS_FILE, "w") as f:
         f.write(content)
     return f"Learned: [{section}] {pattern}"
+
+
+def apply_learning(pattern: str, section: str = "General") -> str:
+    """Queue a learned rule for user confirmation (does NOT write to process.md directly).
+
+    Kept for backward compatibility — this used to write straight into process.md.
+    It now stages the rule in the pending-confirmation queue; see confirm_pending().
+    """
+    return _queue_rule(section, pattern, source="preference")
 
 
 def analyze_patterns(days: int = 7) -> str:
@@ -66,16 +89,24 @@ _CORRECTION_PATTERNS = re.compile(
     re.IGNORECASE
 )
 
+# Anchored to directive phrasing at (or near) the start of the message, so a mention of
+# "always"/"prefer"/etc. buried in an unrelated sentence — e.g. "Email Sarah that I'll
+# always be available Fridays" — is not mistaken for a standing preference.
 _PREFERENCE_PATTERNS = re.compile(
-    r"(always|never|prefer|from now on|going forward|in the future|remember that|"
-    r"next time|don'?t ever|make sure you)",
+    r"^(?:please\s+|from now on,?\s+|going forward,?\s+|in the future,?\s+|envoy,?\s+)?"
+    r"(?:always|never|don'?t ever)\b"
+    r"|^(?:from now on|going forward|in the future)\b"
+    r"|^remember (?:that|to)\b"
+    r"|^i prefer\b"
+    r"|^make sure (?:you|to)\b"
+    r"|^next time\b",
     re.IGNORECASE
 )
 
 
 def reflect(command: str, response: str, user_reply: str = "") -> None:
     """Log a clean structured observation after each command. No AI call.
-    
+
     Stores WHAT HAPPENED, not raw output. Format: [domain] action — outcome
     """
     # Skip trivial interactions
@@ -146,7 +177,7 @@ def _extract_outcome(response: str) -> str:
 
 def detect_correction(user_input: str, prev_response: str = "") -> str | None:
     """Check if user input is a correction/preference statement.
-    
+
     Returns a process rule string if correction detected, None otherwise.
     Fast path: regex only. AI only called on match to formulate the rule.
     """
@@ -186,20 +217,182 @@ def detect_correction(user_input: str, prev_response: str = "") -> str | None:
 
 
 def apply_correction(rule: str) -> str:
-    """Apply a detected correction to process.md. Returns confirmation message."""
+    """Queue a detected correction for user confirmation. Returns a status message.
+
+    Historically this wrote straight into process.md; it now stages the rule in the
+    pending-confirmation queue (see confirm_pending/reject_pending below).
+    """
     if not rule or "]" not in rule:
         return ""
     section = rule.split("]")[0].strip("[")
     text = rule.split("]", 1)[1].strip()
     try:
-        return apply_learning(text, section)
+        return _queue_rule(section, text, source="correction")
     except Exception as e:
-        return f"Failed to save: {e}"
+        return f"Failed to queue: {e}"
+
+
+# ---------------------------------------------------------------------------
+# Pending-confirmation queue
+# ---------------------------------------------------------------------------
+#
+# Detected rules (from corrections, preferences, or weekly self-analysis) are staged
+# here instead of being written into process.md directly. A front-end (TUI/REPL/dispatch)
+# is expected to surface pending_summary() and let the user run something like
+# `/learn confirm 1` / `/learn reject 1`, which map to confirm_pending()/reject_pending().
+
+def _load_pending() -> list[dict]:
+    import json
+    try:
+        return json.loads(_PENDING_FILE.read_text())
+    except Exception:
+        return []
+
+
+def _save_pending(items: list[dict]) -> None:
+    import json
+    _ENVOY_DIR.mkdir(parents=True, exist_ok=True)
+    _PENDING_FILE.write_text(json.dumps(items, indent=2))
+
+
+def _normalize_words(text: str) -> set:
+    return set(re.findall(r"[a-z0-9']+", (text or "").lower()))
+
+
+def _has_similar(text: str, existing_lines: list[str], threshold: float = 0.8) -> bool:
+    """Normalized token-overlap (Jaccard) duplicate check.
+
+    Local, simple re-implementation of the idea behind tools.py's
+    `_config_has_similar` (kept separate to avoid importing tools.py here).
+    """
+    new_words = _normalize_words(text)
+    if not new_words:
+        return False
+    for line in existing_lines:
+        existing_words = _normalize_words(line)
+        if not existing_words:
+            continue
+        overlap = len(new_words & existing_words) / len(new_words | existing_words)
+        if overlap >= threshold:
+            return True
+    return False
+
+
+def _existing_rule_lines() -> list[str]:
+    """All rule texts currently in process.md plus everything already queued."""
+    lines = []
+    if os.path.exists(_PROCESS_FILE):
+        with open(_PROCESS_FILE) as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("- "):
+                    lines.append(line[2:].strip())
+    lines.extend(item.get("rule", "") for item in _load_pending())
+    return lines
+
+
+def _section_rule_count(section: str) -> int:
+    """Count existing '- ' rule lines under a process.md section header."""
+    if not os.path.exists(_PROCESS_FILE):
+        return 0
+    header = f"## {section}"
+    content = open(_PROCESS_FILE).read()
+    if header not in content:
+        return 0
+    after = content.split(header, 1)[1]
+    section_body = after.split("\n## ", 1)[0]
+    return sum(1 for line in section_body.splitlines() if line.strip().startswith("- "))
+
+
+def _queue_rule(section: str, rule: str, source: str) -> str:
+    """Stage a rule in the pending-confirmation queue, skipping near-duplicates.
+
+    Caps the queue at _PENDING_CAP entries, dropping the oldest when full.
+    """
+    rule = (rule or "").strip()
+    if not rule:
+        return ""
+    section = (section or "General").strip() or "General"
+
+    if _has_similar(rule, _existing_rule_lines()):
+        return f"Skipped (similar rule already exists): [{section}] {rule}"
+
+    import datetime
+    items = _load_pending()
+    items.append({
+        "section": section,
+        "rule": rule,
+        "detected_at": datetime.datetime.now().isoformat(),
+        "source": source,
+    })
+    if len(items) > _PENDING_CAP:
+        items = items[-_PENDING_CAP:]
+    _save_pending(items)
+    return f"Queued for confirmation: [{section}] {rule}"
+
+
+def list_pending() -> list[dict]:
+    """Return the queue of rules awaiting user confirmation, oldest first."""
+    return _load_pending()
+
+
+def confirm_pending(index: int) -> str:
+    """Apply the pending rule at `index` to process.md and remove it from the queue.
+
+    Refuses (and leaves the rule pending) if its section is already at the
+    _PROCESS_SECTION_CAP rule limit.
+    """
+    items = _load_pending()
+    if index < 0 or index >= len(items):
+        return f"No pending rule at index {index}."
+
+    item = items[index]
+    section = item.get("section", "General")
+    rule = item.get("rule", "")
+    if not rule:
+        items.pop(index)
+        _save_pending(items)
+        return "Discarded empty pending rule."
+
+    if _section_rule_count(section) >= _PROCESS_SECTION_CAP:
+        return (
+            f"⚠️ [{section}] already has {_PROCESS_SECTION_CAP} rules — prune some in "
+            f"process.md before adding more. Rule left pending."
+        )
+
+    message = _write_process_rule(rule, section)
+    items.pop(index)
+    _save_pending(items)
+    return message
+
+
+def reject_pending(index: int) -> str:
+    """Discard the pending rule at `index` without applying it."""
+    items = _load_pending()
+    if index < 0 or index >= len(items):
+        return f"No pending rule at index {index}."
+    item = items.pop(index)
+    _save_pending(items)
+    return f"Rejected: [{item.get('section', 'General')}] {item.get('rule', '')}"
+
+
+def pending_summary() -> str | None:
+    """Short user-facing nudge for front-ends to surface, or None if the queue is empty."""
+    items = _load_pending()
+    if not items:
+        return None
+    rule = items[0].get("rule", "")
+    count = len(items)
+    plural = "s" if count != 1 else ""
+    return (
+        f"💡 {count} learned rule{plural} pending: \"{rule}\" — "
+        f"/learn confirm 1 or /learn reject 1"
+    )
 
 
 def self_analyze() -> str:
     """Run periodic pattern analysis on observations. Returns suggested rules.
-    
+
     Designed to run weekly via heartbeat. Uses AI (medium tier) but only on
     accumulated observations — not per-interaction.
     """
@@ -243,7 +436,7 @@ def self_analyze() -> str:
 
 
 def auto_apply_analysis(analysis: str) -> list[str]:
-    """Apply high-confidence rules from self_analyze. Returns list of applied rules."""
+    """Queue high-confidence rules from self_analyze for confirmation. Returns list of queued rules."""
     if not analysis:
         return []
     applied = []
@@ -265,7 +458,7 @@ def auto_apply_analysis(analysis: str) -> list[str]:
 
 def suggest_skill(observations: list[dict] = None) -> str | None:
     """Detect repeated multi-step patterns that could become a skill.
-    
+
     Only runs during self_analyze (weekly). Returns a suggestion string or None.
     """
     try:

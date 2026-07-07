@@ -25,6 +25,28 @@ def _load_config() -> dict:
 def _allowed_dirs() -> list:
     """Return the list of allowed filesystem directories from config."""
     return _load_config().get("allowed_dirs", [])
+
+
+def _is_path_allowed(path: str, allowed: list = None) -> bool:
+    """True if `path` is inside (or equal to) one of the allow-listed dirs.
+
+    Uses os.path.commonpath rather than a plain string prefix match, so an
+    allowed dir of "~/Documents" does NOT also match a sibling directory
+    like "~/Documents-secret" (a `path.startswith(allowed_dir)` check would
+    incorrectly allow that).
+    """
+    if allowed is None:
+        allowed = _allowed_dirs()
+    real_path = os.path.realpath(os.path.expanduser(path))
+    for d in allowed:
+        real_dir = os.path.realpath(os.path.expanduser(d))
+        try:
+            if os.path.commonpath([real_path, real_dir]) == real_dir:
+                return True
+        except ValueError:
+            # e.g. paths on different drives on Windows — never allowed
+            continue
+    return False
 from agents import workflows as wf
 from agents.workers import get_worker
 from agents.skills import get_skills, activate as activate_skill_fn
@@ -970,8 +992,10 @@ def local_files(action: str, path: str = "", content: str = "") -> str:
     path = os.path.expanduser(path)
     path = os.path.realpath(path)
 
-    # Enforce allow-list
-    if not any(path.startswith(os.path.realpath(os.path.expanduser(d))) for d in allowed):
+    # Enforce allow-list (commonpath equality, not a prefix/startswith match —
+    # startswith would let "/x/Documents-secret" through when "/x/Documents"
+    # is the allowed dir).
+    if not _is_path_allowed(path, allowed):
         return f"⚠️ Access denied. Path not in allowed_dirs: {allowed}"
 
     if action == "list":

@@ -27,8 +27,15 @@ def _worker_gather(**tasks) -> dict:
 
     async def _run_one(name, worker_name, request):
         try:
-            result = get_worker(worker_name)(request)
-            return name, str(result.message) if hasattr(result, 'message') else str(result)
+            # The Strands worker call is synchronous and internally calls
+            # agents.base.run() (e.g. from agents/email.py wrappers), which
+            # schedules onto this same shared event loop. Running it inline
+            # here would deadlock the loop against itself; asyncio.to_thread
+            # moves the blocking call off-loop so it can actually run.
+            result = await asyncio.to_thread(get_worker(worker_name), request)
+            # str(result) uses Strands' AgentResult.__str__ (the response
+            # text) — str(result.message) is a raw dict repr.
+            return name, str(result)
         except Exception as e:
             return name, f"⚠️ {worker_name} unavailable: {e}"
 
