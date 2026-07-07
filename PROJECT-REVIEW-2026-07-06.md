@@ -175,6 +175,15 @@ Still open from April:
 
 Ordered by leverage; S/M/L effort.
 
+**Implementation status (2026-07-07):** all 15 items below are DONE (multi-agent implementation pass on
+`claude/code-review-recommendations-nk65nw`; 409 unit tests passing, 153 added). Also fixed beyond this
+list: REPL exception guard (H10), `/mwinit` MCP-subprocess leak in both front-ends, supervisor `_next_ref`
+collision, `team`/`bosses` gather clobber, `people.get_management_chain` duplicate fetches, context-bus
+hard cap, `/models` bogus tip, `_expand_batch` + serial MCP loop parallelization (item 12 covered in full).
+Notable design decisions: destructive-action confirmation is enforced in code via `agents/confirm.py`
+(only `dispatch()` can register the user's turn, so injected content cannot self-confirm); learned rules
+now queue to `~/.envoy/pending_rules.json` and require `/learn confirm <n>`.
+
 | # | Action | Effort | Files |
 |---|--------|--------|-------|
 | 1 | Fix `_worker_gather`: `asyncio.to_thread` around worker calls + loop-thread guard in `run()` | S | `agents/workflows.py`, `agents/base.py`, `agents/heartbeat.py` |

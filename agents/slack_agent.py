@@ -437,23 +437,30 @@ async def search_slack(query: str) -> str:
 
 
 async def check_slack_replies() -> str:
+    import asyncio
     entries = load_sent()
     slack_entries = [e for e in entries if e["medium"] == "slack" and e.get("channel")]
     if not slack_entries:
         return ""
     results = []
     try:
+        sem = asyncio.Semaphore(8)
         async with slack() as session:
-            for entry in slack_entries[-20:]:
-                try:
-                    search_result = await session.call_tool("search", arguments={"query": entry["tag"]})
-                    search_text = str(search_result.content[0].text) if search_result.content else ""
-                    if "thread_ts" in search_text or "reply" in search_text.lower():
-                        results.append(f"💬 **Reply found** to message for {entry['recipient']} ({entry['tag']}): {entry['summary'][:80]}")
-                    elif entry["tag"] in search_text:
-                        results.append(f"⏳ **No reply yet** from {entry['recipient']} — sent {entry['sent_at'][:10]}: {entry['summary'][:80]}")
-                except Exception:
-                    pass
+            async def _check_one(entry):
+                async with sem:
+                    try:
+                        search_result = await session.call_tool("search", arguments={"query": entry["tag"]})
+                        search_text = str(search_result.content[0].text) if search_result.content else ""
+                        if "thread_ts" in search_text or "reply" in search_text.lower():
+                            return f"💬 **Reply found** to message for {entry['recipient']} ({entry['tag']}): {entry['summary'][:80]}"
+                        elif entry["tag"] in search_text:
+                            return f"⏳ **No reply yet** from {entry['recipient']} — sent {entry['sent_at'][:10]}: {entry['summary'][:80]}"
+                    except Exception:
+                        return None
+
+            targets = slack_entries[-20:]
+            outcomes = await asyncio.gather(*[_check_one(e) for e in targets])
+            results = [r for r in outcomes if r]
     except Exception:
         pass
     return "\n".join(results)

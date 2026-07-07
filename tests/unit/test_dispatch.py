@@ -11,6 +11,9 @@ These tests cover:
 A FakeAgent records the prompt it was given so we can assert on substitution.
 """
 
+import importlib
+import os
+
 import pytest
 
 import dispatch
@@ -112,35 +115,45 @@ class TestCommandsTableIntegrity:
 # =========================================================================
 
 class TestDigestAndDaysSubstitution:
-    def test_digest_no_arg_uses_default_days(self):
+    """digest/customers/catchup all have a matching templates/commands.md section,
+    so their prompt is built from that shared template (see
+    TestTemplateSourcedPrompts below) rather than the short hardcoded string in
+    COMMANDS. These tests just check day-substitution ended up in the prompt —
+    the exact-text assertions live in TestTemplateSourcedPrompts."""
+
+    def test_digest_no_arg_uses_default_days(self, monkeypatch):
+        monkeypatch.setenv("USER", "jsmith")
         agent = FakeAgent()
         result, handled = dispatch.dispatch("/digest", agent)
         assert handled is True
         assert result == "AGENT_RESPONSE"
-        assert agent.last_prompt == f"Generate a team digest for the last {DEFAULT_DAYS['/digest']} days"
-        assert "7" in agent.last_prompt  # confirms default
+        assert f"`{DEFAULT_DAYS['/digest']}`" in agent.last_prompt
+        assert "team email digest" in agent.last_prompt
 
-    def test_digest_with_explicit_days(self):
+    def test_digest_with_explicit_days(self, monkeypatch):
+        monkeypatch.setenv("USER", "jsmith")
         agent = FakeAgent()
         dispatch.dispatch("/digest 14", agent)
-        assert agent.last_prompt == "Generate a team digest for the last 14 days"
+        assert "`14`" in agent.last_prompt
+        assert "team email digest" in agent.last_prompt
 
-    def test_customers_with_explicit_days(self):
+    def test_customers_with_explicit_days(self, monkeypatch):
+        monkeypatch.setenv("USER", "jsmith")
         agent = FakeAgent()
         dispatch.dispatch("/customers 30", agent)
-        assert agent.last_prompt == (
-            "Scan for external customer emails with action items from the last 30 days"
-        )
+        assert "`30`" in agent.last_prompt
+        assert "customer emails" in agent.last_prompt
 
-    def test_customers_no_arg_uses_default_14(self):
+    def test_customers_no_arg_uses_default_14(self, monkeypatch):
+        monkeypatch.setenv("USER", "jsmith")
         agent = FakeAgent()
         dispatch.dispatch("/customers", agent)
-        assert "14 days" in agent.last_prompt
+        assert "`14`" in agent.last_prompt
 
     def test_catchup_no_arg_uses_default_5(self):
         agent = FakeAgent()
         dispatch.dispatch("/catchup", agent)
-        assert "5 days" in agent.last_prompt
+        assert "`5`" in agent.last_prompt
 
     def test_briefing_ignores_extra_numeric_arg(self):
         """/briefing has no {days} placeholder — numeric arg shouldn't appear in prompt."""
@@ -165,11 +178,13 @@ class TestDigestAndDaysSubstitution:
         assert "/help" in result
         assert agent.last_prompt is None  # agent was NOT called
 
-    def test_command_is_case_insensitive(self):
+    def test_command_is_case_insensitive(self, monkeypatch):
         """parts[0].lower() — uppercase slash commands should still match."""
+        monkeypatch.setenv("USER", "jsmith")
         agent = FakeAgent()
         dispatch.dispatch("/DIGEST 10", agent)
-        assert agent.last_prompt == "Generate a team digest for the last 10 days"
+        assert "`10`" in agent.last_prompt
+        assert "team email digest" in agent.last_prompt
 
 
 # =========================================================================
@@ -178,11 +193,14 @@ class TestDigestAndDaysSubstitution:
 
 class TestArgCommands:
     def test_prep_1on1_with_alias_substitutes_arg(self):
+        """prep-1on1 has a matching commands.md section — {arg} maps to {person}
+        there (see dispatch._template_kwargs); exact-text coverage lives in
+        TestTemplateSourcedPrompts."""
         agent = FakeAgent()
         result, handled = dispatch.dispatch("/prep-1on1 jsmith", agent)
         assert handled is True
         assert "jsmith" in agent.last_prompt
-        assert agent.last_prompt == "Generate a 1:1 prep brief for my meeting with jsmith"
+        assert "1:1" in agent.last_prompt.lower()
 
     def test_prep_1on1_no_arg_returns_usage_message(self):
         """ARG_COMMANDS with no arg are intercepted with a Usage: hint — agent NOT called."""
@@ -227,12 +245,13 @@ class TestArgCommands:
 
     def test_prep_meeting_no_arg_uses_default_subject(self):
         """/prep-meeting with no arg defaults to "my next meeting" rather than nagging
-        the user — it's the only ARG-style command with a sensible default."""
+        the user — it's the only ARG-style command with a sensible default. prep-meeting
+        has a matching commands.md section, so the prompt comes from there."""
         agent = FakeAgent()
         result, handled = dispatch.dispatch("/prep-meeting", agent)
         assert handled is True
         assert result == "AGENT_RESPONSE"
-        assert agent.last_prompt == "Generate a prep brief for my meeting: my next meeting"
+        assert "my next meeting" in agent.last_prompt
 
 
 # =========================================================================
@@ -468,3 +487,186 @@ class TestNaturalLanguagePassthrough:
         assert handled is True
         assert result is None
         assert agent.prompts == []
+
+
+# =========================================================================
+# 6. Shared command-prompt templates (templates/commands.md via dispatch)
+# =========================================================================
+
+class TestTemplateSourcedPrompts:
+    """Commands with a matching templates/commands.md section (digest, customers,
+    prep-1on1, ...) build their prompt from that shared template — the same one
+    cli.py's subcommands consume, with ~/.envoy/commands.md override support —
+    via dispatch._load_commands()/_build_prompt(), instead of the short
+    hardcoded string in COMMANDS. This is what keeps `/digest` (TUI/REPL) and
+    `envoy digest` (CLI) from drifting apart."""
+
+    def test_digest_prompt_matches_commands_md_template(self, monkeypatch):
+        monkeypatch.setenv("USER", "jsmith")
+        agent = FakeAgent()
+        dispatch.dispatch("/digest 21", agent)
+        expected = dispatch._build_prompt(
+            dispatch._load_commands()["digest"], days=21, alias="jsmith",
+        )
+        assert agent.last_prompt == expected
+        # Sanity: it's the full template body, not the old one-liner.
+        assert "team email digest" in expected
+        assert "`21`" in expected
+        assert "`jsmith`" in expected
+
+    def test_customers_prompt_matches_commands_md_template(self, monkeypatch):
+        monkeypatch.setenv("USER", "asmith")
+        agent = FakeAgent()
+        dispatch.dispatch("/customers 9", agent)
+        expected = dispatch._build_prompt(
+            dispatch._load_commands()["customers"], days=9, alias="asmith",
+        )
+        assert agent.last_prompt == expected
+
+    def test_prep_1on1_prompt_maps_arg_to_person(self, monkeypatch):
+        monkeypatch.setenv("USER", "asmith")
+        agent = FakeAgent()
+        dispatch.dispatch("/prep-1on1 bwilliams", agent)
+        expected = dispatch._build_prompt(
+            dispatch._load_commands()["prep-1on1"], person="bwilliams", days=7,
+            alias="asmith",
+        )
+        assert agent.last_prompt == expected
+        assert "bwilliams" in expected
+
+    def test_cleanup_prompt_includes_default_limit(self, monkeypatch):
+        monkeypatch.setenv("USER", "asmith")
+        agent = FakeAgent()
+        dispatch.dispatch("/cleanup", agent)
+        expected = dispatch._build_prompt(
+            dispatch._load_commands()["cleanup"], days=14, limit=100, alias="asmith",
+        )
+        assert agent.last_prompt == expected
+        assert "`100`" in agent.last_prompt
+
+    def test_fallback_to_hardcoded_template_when_no_commands_md_section(self):
+        """/briefing has no matching commands.md section — commands.md only has
+        an unrelated 'morning-briefing' entry that no CLI subcommand consumes
+        either — so it falls back to the hardcoded COMMANDS entry unchanged."""
+        assert "briefing" not in dispatch._load_commands()
+        agent = FakeAgent()
+        dispatch.dispatch("/briefing", agent)
+        assert agent.last_prompt == "Give me a full briefing — calendar, inbox, and Slack"
+
+    def test_fallback_when_load_commands_raises(self, monkeypatch):
+        """Never crash: if templates/commands.md can't be read, dispatch still
+        returns the hardcoded fallback prompt instead of blowing up."""
+        def _boom():
+            raise FileNotFoundError("no commands.md")
+        monkeypatch.setattr(dispatch, "_load_commands", _boom)
+        agent = FakeAgent()
+        result, handled = dispatch.dispatch("/digest 14", agent)
+        assert handled is True
+        assert agent.last_prompt == "Generate a team digest for the last 14 days"
+
+    def test_fallback_when_template_section_body_empty(self, monkeypatch):
+        """A command whose template lookup returns nothing (e.g. section missing
+        from a stripped-down ~/.envoy/commands.md override) still gets a prompt."""
+        monkeypatch.setattr(dispatch, "_load_commands", lambda: {})
+        agent = FakeAgent()
+        dispatch.dispatch("/catchup 3", agent)
+        assert agent.last_prompt == "I was out of office for 3 days, give me a full catch-up"
+
+
+# =========================================================================
+# 7. /learn — surfaces agents.learning's pending-confirmation queue
+# =========================================================================
+
+class TestLearnCommand:
+    @pytest.fixture
+    def learning_mod(self, envoy_home):
+        import agents.learning as learning
+        importlib.reload(learning)
+        return learning
+
+    def test_learn_registered_in_commands_and_system_group(self):
+        assert "/learn" in COMMANDS
+        assert COMMANDS["/learn"][1] is None
+        system_group = next(cmds for name, cmds in COMMAND_GROUPS if name == "System")
+        assert "/learn" in system_group
+
+    def test_learn_no_pending_rules(self, learning_mod):
+        agent = FakeAgent()
+        result, handled = dispatch.dispatch("/learn", agent)
+        assert handled is True
+        assert "No pending" in result
+        assert agent.prompts == []
+
+    def test_learn_list_shows_numbered_rules(self, learning_mod):
+        learning_mod.apply_learning("check calendar before booking", "Calendar")
+        learning_mod.apply_learning("always CC the EA", "Email")
+        agent = FakeAgent()
+        result, handled = dispatch.dispatch("/learn list", agent)
+        assert handled is True
+        assert "`1`" in result and "check calendar before booking" in result
+        assert "`2`" in result and "always CC the EA" in result
+
+    def test_learn_confirm_writes_rule_and_dequeues(self, learning_mod):
+        learning_mod.apply_learning("batch digests every morning", "General")
+        agent = FakeAgent()
+        result, handled = dispatch.dispatch("/learn confirm 1", agent)
+        assert handled is True
+        assert "Learned" in result
+        assert learning_mod.list_pending() == []
+
+    def test_learn_reject_discards_rule(self, learning_mod):
+        learning_mod.apply_learning("never book meetings after 5pm", "Calendar")
+        agent = FakeAgent()
+        result, handled = dispatch.dispatch("/learn reject 1", agent)
+        assert handled is True
+        assert "Rejected" in result
+        assert learning_mod.list_pending() == []
+
+    def test_learn_confirm_no_number_shows_usage(self, learning_mod):
+        agent = FakeAgent()
+        result, handled = dispatch.dispatch("/learn confirm", agent)
+        assert handled is True
+        assert "Usage" in result
+
+    def test_learn_unknown_subcommand_shows_usage(self, learning_mod):
+        agent = FakeAgent()
+        result, handled = dispatch.dispatch("/learn frobnicate", agent)
+        assert handled is True
+        assert "Usage" in result
+
+
+# =========================================================================
+# 8. dispatch_with_learning — pending-rule summary hint appended to responses
+# =========================================================================
+
+class TestPendingSummaryHint:
+    def test_freeform_response_gets_pending_summary_appended(self, envoy_home):
+        import agents.learning as learning
+        importlib.reload(learning)
+        learning.apply_learning("always confirm before sending external mail", "Email")
+
+        agent = FakeAgent(response="Here is your briefing, it is a fairly long response indeed.")
+        result, handled = dispatch.dispatch_with_learning("what's on my plate today", agent)
+        assert handled is True
+        assert result.startswith("Here is your briefing")
+        assert "learned rule" in result
+        assert "/learn confirm 1" in result
+
+    def test_no_summary_appended_when_queue_empty(self, envoy_home):
+        import agents.learning as learning
+        importlib.reload(learning)
+
+        agent = FakeAgent(response="Here is your briefing, it is a fairly long response indeed.")
+        result, handled = dispatch.dispatch_with_learning("what's on my plate today", agent)
+        assert result == "Here is your briefing, it is a fairly long response indeed."
+
+    def test_learn_commands_own_output_not_double_annotated(self, envoy_home):
+        """/learn's own output already lists the pending queue — dispatch_with_learning
+        should not also tack the one-line hint onto it."""
+        import agents.learning as learning
+        importlib.reload(learning)
+        learning.apply_learning("always confirm before sending external mail", "Email")
+
+        agent = FakeAgent()
+        result, handled = dispatch.dispatch_with_learning("/learn list", agent)
+        assert result.count("learned rule") <= 1

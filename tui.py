@@ -726,9 +726,10 @@ class EnvoyApp(App):
         def _do_mwinit():
             with self.suspend():
                 subprocess.run(["mwinit", "-o"])
-            # Reconnect MCP sessions with fresh creds
-            from agents.base import _persistent
-            _persistent.clear()
+            # Close (not just forget) persistent MCP sessions so their
+            # subprocesses don't leak, then reconnect with fresh creds.
+            from agents.base import _cleanup_persistent
+            _cleanup_persistent()
             self.action_refresh_mcp()
             self.notify("✓ Midway refreshed", timeout=3)
 
