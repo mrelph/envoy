@@ -27,11 +27,16 @@ envoy/
 ├── init_cmd.py              # envoy init / settings interactive setup
 ├── envoy_logger.py          # Structured JSON logging
 ├── templates/
-│   ├── commands.md          # Core command prompts (editable)
+│   ├── commands.md          # Core command prompts (editable) — shared by dispatch.py and cli.py, user-overridable via ~/.envoy/commands.md
 │   ├── skills/              # Bundled Agent Skills (11 skills)
 │   └── soul.md / envoy.md / process.md  # Config templates
 ├── agents/
 │   ├── base.py              # MCP connections (persistent), Bedrock client, run() helper
+│   ├── base_modules/        # Focused sub-modules extracted from base.py
+│   │   └── parsers.py       # Email/todo MCP response parsers
+│   ├── budget.py            # Per-request latency/AI-cost tracking (RequestBudget)
+│   ├── confirm.py           # Code-level confirmation gate — require_confirmation()/set_user_turn() for destructive actions
+│   ├── fetch.py             # Shared fetch_* functions — single source of truth for gather() and workers
 │   ├── workers/             # Domain-specific Strands worker agents
 │   │   ├── __init__.py      # Worker factory + shared infra (_model, _USER, get_worker)
 │   │   ├── email_worker.py  # Email operations worker
@@ -39,7 +44,9 @@ envoy/
 │   │   ├── calendar_worker.py   # Calendar management worker
 │   │   ├── productivity_worker.py  # To-dos, tickets, memory, cron
 │   │   ├── research_worker.py     # Phonetool, Kingpin, Wiki, web search, InstructAI, QuickSight
-│   │   └── sharepoint_worker.py   # SharePoint/OneDrive worker
+│   │   ├── sharepoint_worker.py   # SharePoint/OneDrive worker
+│   │   ├── coding_worker.py       # Coding delegation (Claude Code/Kiro) — read-only by default, dir allow-list
+│   │   └── result.py              # WorkerResult structured return envelope
 │   ├── skills.py            # Agent Skills loader (agentskills.io)
 │   ├── skill_builder.py     # /build-skill + /suggest-skills generators
 │   ├── learning.py          # Active learning loop (reflection, correction, self-analysis)
@@ -77,10 +84,11 @@ envoy/
 |---|---|---|---|
 | Email | Medium | inbox, read full threads, search, send (CC/BCC), reply, forward, draft, move, flag/categorize/importance, cleanup, digest, contacts, attachments | Email operations |
 | Comms | Medium | Slack scan (user ID resolution + thread replies), send (DM/channel/threaded), search, mark read, reactions, drafts, file downloads, Slack Lists, EA delegation | Slack messaging |
-| Calendar | Light | view, create (recurring, optional attendees, room resources, reminders, showAs, all-day), find times, book rooms, shared calendars | Calendar management |
+| Calendar | Medium | view, create (recurring, optional attendees, room resources, reminders, showAs, all-day — rejects bare attendee names), find times, book rooms, shared calendars | Calendar management |
 | Productivity | Medium | to-dos (list, add with due dates/importance/reminders, complete, update, delete), tickets, memory, cron, briefings | Task management |
 | Research | Medium | Phonetool, Kingpin, Wiki, Taskei, Broadcast, web search (Brave), InstructAI, QuickSight Q | Internal & external lookups |
 | SharePoint | Medium | search, files, read, write, lists, analyze | SharePoint/OneDrive |
+| Coding | Medium | Delegate to Claude Code/Kiro as a subprocess — read-only plan mode by default, `allow_edits` opt-in, `working_directory` restricted to allow-listed directories | Coding/dev task delegation |
 
 ### MCP Servers
 
@@ -194,10 +202,13 @@ Bundled skills live in `templates/skills/` and are copied to `~/.envoy/skills/` 
 
 ## Security Notes
 
+- Destructive tools (send/forward/delete email, Slack send) go through `agents/confirm.py`'s `require_confirmation()` — a preview is returned first, and the action only proceeds once `dispatch()` records a matching affirmative *user* turn. Only `dispatch()` can call `set_user_turn()`, so content arriving through a tool call (an injected email/Slack message) can never supply the confirmation itself.
+- Coding delegation (`agents/workers/coding_worker.py`) defaults `allow_edits=False` (read-only plan mode) and restricts `working_directory` to the same allow-list `local_files` enforces.
 - Cron commands are whitelisted to known envoy subcommands; shell metacharacters rejected
 - Self-modification tools require user confirmation before writing
 - Memory files enforce 2MB size limits
 - MCP server stderr is suppressed (routed to `/dev/null`)
+- `.env` is excluded from `/backup` archives
 - Never store credentials in code — use `.env` or `aws login`
 
 ## Dependencies

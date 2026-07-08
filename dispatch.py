@@ -252,7 +252,22 @@ def dispatch(raw: str, agent):
     # --- Slash command with template ---
     entry = COMMANDS.get(cmd)
     if entry and entry[1]:
-        days = int(arg) if arg.isdigit() else DEFAULT_DAYS.get(cmd, 7)
+        # Days-taking commands (those listed in DEFAULT_DAYS) silently dropped
+        # non-numeric args (e.g. "/digest last week") and fell back to the
+        # default with no indication anything was ignored. If the command's
+        # template actually has a place for free-text ({arg}), pass it through
+        # there instead of discarding it.
+        day_notice = ""
+        supports_arg = "{arg}" in entry[1]
+        if arg and not arg.isdigit() and cmd in DEFAULT_DAYS and not supports_arg:
+            days = DEFAULT_DAYS.get(cmd, 7)
+            day_notice = (
+                f"\n\n_(note: '{arg}' isn't a number — used default {days} days; "
+                f"try `{cmd} {days}`.)_"
+            )
+        else:
+            days = int(arg) if arg.isdigit() else DEFAULT_DAYS.get(cmd, 7)
+
         if not arg and cmd == "/prep-meeting":
             arg = "my next meeting"
 
@@ -270,7 +285,10 @@ def dispatch(raw: str, agent):
             prompt = None
         if not prompt:
             prompt = entry[1].format(days=days, arg=arg)
-        return (agent(prompt), True)
+        result = agent(prompt)
+        if day_notice and isinstance(result, str):
+            result = f"{result}{day_notice}"
+        return (result, True)
 
     # --- System commands return None — caller handles ---
     if cmd in ("/help", "/status", "/settings", "/backup", "/exit", "/mwinit"):
@@ -383,7 +401,10 @@ def _run_doctor() -> str:
         identity = sts.get_caller_identity()
         _ok(f"Authenticated as {identity.get('Arn', 'unknown')[:80]}")
     except Exception as e:
-        _err(f"AWS credentials invalid — run `aws login` or check .env ({e})")
+        _err(
+            "AWS credentials invalid — refresh your AWS credentials (e.g. `mwinit` on "
+            f"Amazon-internal setups, or your organization's AWS SSO login) or check .env ({e})"
+        )
 
     # --- Models ---
     lines.append("\n## AI Models")

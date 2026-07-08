@@ -27,20 +27,40 @@ def _aws_cfg():
     return cfg
 
 
+def _read_cache() -> list | None:
+    """Return cached catalog items if the on-disk cache is fresh, else None.
+
+    Pure disk read (no boto3/network) — cheap enough to call straight from
+    the UI thread. Split out of `_fetch_model_catalog` so callers that only
+    care about the cheap cache-hit path (e.g. the TUI model picker) don't
+    have to go through a background worker just to check the cache.
+    """
+    if not os.path.exists(CATALOG_CACHE):
+        return None
+    try:
+        with open(CATALOG_CACHE) as f:
+            data = json.load(f)
+        if (time.time() - data.get("ts", 0)) < _CATALOG_TTL:
+            return [tuple(x) for x in data.get("items", [])]
+    except (json.JSONDecodeError, OSError):
+        pass
+    return None
+
+
 def _fetch_model_catalog(refresh: bool = False) -> list:
     """Return a merged list of (model_id, name, provider_or_desc).
 
     Combines on-demand foundation models AND cross-region inference profiles
     (which are what DEFAULT_MODELS actually uses). Cached for 1h unless refresh=True.
+
+    On a cache miss this makes synchronous boto3 network calls — callers on
+    a UI thread should check `_read_cache()` first and only fall back to
+    this (e.g. in a background worker) when that returns None.
     """
-    if not refresh and os.path.exists(CATALOG_CACHE):
-        try:
-            with open(CATALOG_CACHE) as f:
-                data = json.load(f)
-            if (time.time() - data.get("ts", 0)) < _CATALOG_TTL:
-                return [tuple(x) for x in data.get("items", [])]
-        except (json.JSONDecodeError, OSError):
-            pass
+    if not refresh:
+        cached = _read_cache()
+        if cached is not None:
+            return cached
 
     import boto3
     items = []

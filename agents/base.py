@@ -78,18 +78,94 @@ _MCP_PARAM_DEFS = {
 # Format matches standard mcpServers convention:
 #   { "MyServer": { "command": "my-mcp", "args": ["--flag"], "env": {"KEY": "val"} } }
 # Entries override built-ins by name; new names are added.
-_user_mcp_path = os.path.join(os.path.expanduser("~"), ".envoy", "mcp.json")
-if os.path.exists(_user_mcp_path):
+#
+# SECURITY: unlike _MCP_PARAM_DEFS above, these entries are user-writable data
+# (anything that can write ~/.envoy/mcp.json — e.g. via /mcp add or a
+# compromised process — gets its `command` spawned on next launch). MCP
+# servers are always spawned argv-style (no shell), so a legitimate config
+# never needs a bare shell interpreter or shell metacharacters. Reject those
+# so mcp.json can't become a code-execution channel; only user-loaded entries
+# are validated — the built-in _MCP_PARAM_DEFS above are trusted as-is.
+_SHELL_BASENAMES = {"sh", "bash", "zsh", "dash", "ksh", "fish"}
+_SHELL_METACHARS = (";", "|", "&", "$(", "`")
+
+
+def _unsafe_mcp_command_reason(definition: dict):
+    """Return a human-readable rejection reason, or None if the entry looks safe."""
+    command = str(definition.get("command", ""))
+    args = definition.get("args", []) or []
+    basename = os.path.basename(command)
+    if basename in _SHELL_BASENAMES:
+        return f"command {command!r} is a shell interpreter"
+    for part in [command] + [str(a) for a in args]:
+        for meta in _SHELL_METACHARS:
+            if meta in part:
+                return f"shell metacharacter {meta!r} found in command/args"
+    return None
+
+
+def _load_user_mcp_overrides(path: str):
+    """Load and validate ~/.envoy/mcp.json overrides.
+
+    Returns (accepted, rejected):
+      - accepted: {name: definition} for entries that pass validation
+        (with `env` merged over os.environ, matching the pre-existing
+        override behavior)
+      - rejected: [(name, reason), ...] for entries skipped because their
+        command looks unsafe (see _unsafe_mcp_command_reason)
+
+    Also tightens the file's permissions to 0600 if it's group/world
+    readable or writable (best-effort — a chmod failure is swallowed).
+    Never raises: a missing, unreadable, or malformed mcp.json degrades to
+    "no user overrides" rather than blocking startup.
+    """
+    accepted = {}
+    rejected = []
+    if not os.path.exists(path):
+        return accepted, rejected
+
     try:
-        import json as _json
-        with open(_user_mcp_path) as _f:
-            for _name, _def in _json.load(_f).items():
-                if "env" in _def:
-                    _def["env"] = {**os.environ, **_def["env"]}
-                _MCP_PARAM_DEFS[_name] = _def
-    except Exception as _e:
+        mode = os.stat(path).st_mode
+        if mode & 0o077:  # group or world readable/writable
+            try:
+                get_logger().log("WARNING", "mcp_json_permissions",
+                                  f"{path} is group/world-readable — tightening to 0600",
+                                  path=path)
+            except Exception:
+                pass
+            try:
+                os.chmod(path, 0o600)
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+    try:
+        with open(path) as f:
+            defs = json.load(f)
+        for name, definition in defs.items():
+            reason = _unsafe_mcp_command_reason(definition)
+            if reason:
+                rejected.append((name, reason))
+                try:
+                    get_logger().log("WARNING", "mcp_command_rejected",
+                                      f"Skipping MCP server '{name}' from {path}: {reason}",
+                                      server_name=name, reason=reason)
+                except Exception:
+                    pass
+                continue
+            if "env" in definition:
+                definition = {**definition, "env": {**os.environ, **definition["env"]}}
+            accepted[name] = definition
+    except Exception as e:
         import sys
-        print(f"⚠ Failed to load {_user_mcp_path}: {_e}", file=sys.stderr)
+        print(f"⚠ Failed to load {path}: {e}", file=sys.stderr)
+    return accepted, rejected
+
+
+_user_mcp_path = os.path.join(os.path.expanduser("~"), ".envoy", "mcp.json")
+_user_mcp_accepted, _mcp_rejected = _load_user_mcp_overrides(_user_mcp_path)
+_MCP_PARAM_DEFS.update(_user_mcp_accepted)
 
 _mcp_params_cache = {}
 
@@ -690,23 +766,35 @@ def check_mcp_connections() -> Dict[str, bool]:
                 out[r[0]] = r[1]
         return out
 
-    return run(_test_all())
+    result = run(_test_all())
+    # Surface servers skipped for unsafe commands (see mcp.json validation
+    # above) as a visible, always-failing entry rather than letting them
+    # vanish silently from the connection status.
+    for _name, _reason in _mcp_rejected:
+        result[f"{_name} — blocked (unsafe command)"] = False
+    return result
 
 
 # --- AI / Bedrock ---
 
 MODELS_FILE = os.path.expanduser("~/.envoy/models.json")
 DEFAULT_MODELS = {
-    "agent":  "us.anthropic.claude-opus-4-7-v1",
+    # "agent" is the supervisor tier — it fires on every prompt, including
+    # trivial routing, so it stays on Sonnet by default (~5x cheaper than
+    # Opus with no perceptible quality loss for routing/synthesis). "heavy"
+    # is the tier workers explicitly opt into for hard reasoning and stays
+    # on Opus. Users' ~/.envoy/models.json overrides this — only fresh
+    # installs are affected by this default.
+    "agent":  "us.anthropic.claude-sonnet-4-6-v1",
     "heavy":  "us.anthropic.claude-opus-4-7-v1",
     "medium": "us.anthropic.claude-sonnet-4-6-v1",
     "light":  "us.amazon.nova-micro-v1:0",
     "memory": "us.amazon.nova-micro-v1:0",
 }
 MODEL_CATALOG = [
-    ("us.anthropic.claude-opus-4-7-v1",              "Claude Opus 4.7",   "Best reasoning, highest cost"),
+    ("us.anthropic.claude-opus-4-7-v1",              "Claude Opus 4.7",   "Best reasoning, highest cost — used for 'heavy' tasks"),
     ("us.anthropic.claude-opus-4-6-v1",              "Claude Opus 4.6",   "Previous gen Opus, strong reasoning"),
-    ("us.anthropic.claude-sonnet-4-6-v1",            "Claude Sonnet 4.6", "Strong balance of speed & quality"),
+    ("us.anthropic.claude-sonnet-4-6-v1",            "Claude Sonnet 4.6", "Strong balance of speed & quality — default for 'agent' routing/synthesis"),
     ("us.anthropic.claude-sonnet-4-20250514-v1:0",   "Claude Sonnet 4",   "Previous gen Sonnet"),
     ("us.anthropic.claude-3-5-haiku-20241022-v1:0",  "Claude 3.5 Haiku",  "Fast & cheap, good for simple tasks"),
     ("us.amazon.nova-pro-v1:0",                      "Nova Pro",          "Best Nova quality, multimodal"),
@@ -1007,6 +1095,30 @@ def load_sent() -> list:
     return []
 
 
+# --- Parse-failure logging helper ---
+#
+# Both parsers below return an empty ([]/{}) result on any shape they don't
+# recognize, so callers can treat "couldn't parse" the same as "no data" and
+# never crash. But that also means an MCP schema change silently reads as
+# "no emails found" / "no todos" forever, with no signal anywhere. Log a
+# WARNING (with a truncated payload preview) whenever the expected shape
+# isn't found — logging failures must never affect the parser's return value.
+
+def _log_parse_failure(kind: str, payload, error: Exception = None) -> None:
+    try:
+        from envoy_logger import get_logger as _get_logger
+        preview = repr(payload)
+        if len(preview) > 200:
+            preview = preview[:200] + "..."
+        message = f"{kind}: MCP payload did not match the expected shape"
+        if error is not None:
+            message += f" ({error})"
+        _get_logger().log("WARNING", "mcp_parse_failure", message,
+                           parser=kind, payload_preview=preview)
+    except Exception:
+        pass
+
+
 # --- Email parsing helper ---
 
 def parse_email_search_result(result, extra_fields=None) -> List[Dict]:
@@ -1028,8 +1140,10 @@ def parse_email_search_result(result, extra_fields=None) -> List[Dict]:
                     'snippet': email.get('preview', ''),
                 }
                 emails.append(entry)
+        else:
+            _log_parse_failure('parse_email_search_result', content)
     except Exception as e:
-        get_logger().log_error(f"Error parsing email data: {e}")
+        _log_parse_failure('parse_email_search_result', content, error=e)
     return emails
 
 
@@ -1045,5 +1159,6 @@ def parse_todo_response(result) -> dict:
         if isinstance(data.get('content'), dict):
             return data['content']
         return data
-    except (json.JSONDecodeError, KeyError, IndexError):
+    except (json.JSONDecodeError, KeyError, IndexError) as e:
+        _log_parse_failure('parse_todo_response', raw, error=e)
         return {}

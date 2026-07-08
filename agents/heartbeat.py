@@ -5,8 +5,10 @@ existing tools, deduplicates against recent alerts, and notifies via Slack DM.
 """
 
 import asyncio
+import hashlib
 import json
 import os
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -18,6 +20,17 @@ _ENVOY_DIR = Path.home() / ".envoy"
 _ROUTINES_FILE = _ENVOY_DIR / "routines.md"
 _STATE_FILE = _ENVOY_DIR / "heartbeat_state.json"
 _MAX_ALERTS_PER_RUN = 10
+
+# --- Dedup tuning ---
+# Stable-ID/fingerprint dedup window (separate from the 24h "recent_alerts"
+# prompt hint below, which is a much shorter-lived secondary layer).
+_DEDUP_WINDOW_ENTRIES = 200
+_DEDUP_WINDOW_DAYS = 7
+_ITEM_TRUNCATE_BUDGET = 2000
+
+# Severity → rank, used to keep the most severe alerts when truncating to
+# _MAX_ALERTS_PER_RUN. Higher rank == more severe == kept first.
+_SEVERITY_RANK = {"🔴": 3, "🟡": 2, "🔵": 1}
 
 # Migrate old filenames silently
 _OLD_ORDERS = _ENVOY_DIR / "standing_orders.md"
@@ -86,6 +99,143 @@ def _prune_old_alerts(state: dict, hours: int = 24) -> dict:
     return state
 
 
+# --- Stable-ID / fingerprint dedup ---
+#
+# The "Already Reported" prompt hint (below) asks the model to skip items it
+# already reported, but the model regenerates that text from scratch every
+# run — timestamps shift, wording changes, ordering changes — so a purely
+# text-comparison-in-the-prompt approach re-pings Slack for the same
+# underlying item on every cron tick. These helpers add a code-level layer
+# on top: dedup on a stable identifier when one is recoverable (e.g. an email
+# conversationId embedded by _gather_context as "[id:...]"), falling back to
+# a normalized-text fingerprint (hash of the alert with digits/timestamps/
+# punctuation stripped) when no such identifier is available. The prompt
+# hint remains a secondary layer — it still helps the model avoid restating
+# an item within a single response.
+
+_ID_TAG_RE = re.compile(r"\[id:([^\]]+)\]")
+_EMOJI_RE = re.compile(
+    "[\U0001F300-\U0001FAFF\U00002600-\U000027BF\U0001F1E6-\U0001F1FF]"
+)
+
+
+def _extract_stable_id(line: str) -> str | None:
+    """Pull a stable identifier out of an alert line, if one is present.
+
+    The prompt instructs the model to copy any "[id:...]" tag from the
+    source data verbatim into its alert line (see the instructions block in
+    _run_heartbeat_async). That tag currently carries an email conversationId;
+    it's a code-supplied value the model can copy but not paraphrase, so it's
+    safe to key dedup on directly.
+    """
+    m = _ID_TAG_RE.search(line)
+    val = m.group(1).strip() if m else ""
+    return val or None
+
+
+def _fingerprint(line: str) -> str:
+    """Normalized-text fingerprint fallback for alerts with no stable ID.
+
+    Strips the id tag, emoji, digits (timestamps/dates/counts), and
+    punctuation, then lowercases and collapses whitespace — so the same
+    underlying alert re-worded with a different time or ordering on the next
+    run still hashes identically.
+    """
+    text = _ID_TAG_RE.sub("", line)
+    text = _EMOJI_RE.sub("", text)
+    text = text.lower()
+    text = re.sub(r"\d+", "", text)
+    text = re.sub(r"[^a-z\s]", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
+
+
+def _alert_key(line: str) -> tuple:
+    """Return (kind, key) for an alert line — a stable ID beats a fingerprint."""
+    stable = _extract_stable_id(line)
+    if stable:
+        return ("id", stable)
+    return ("fingerprint", _fingerprint(line))
+
+
+def _severity_rank(line: str) -> int:
+    for emoji, rank in _SEVERITY_RANK.items():
+        if emoji in line:
+            return rank
+    return 0
+
+
+def _dedup_and_cap(lines: list, state: dict) -> tuple:
+    """Filter out already-seen alerts and enforce _MAX_ALERTS_PER_RUN.
+
+    Dedup is keyed on stable ID first, normalized-text fingerprint second
+    (see module docstring above). Seen keys are persisted in state under
+    "seen_keys", bounded to _DEDUP_WINDOW_ENTRIES entries within
+    _DEDUP_WINDOW_DAYS days.
+
+    When more than _MAX_ALERTS_PER_RUN fresh alerts remain, the most severe
+    are kept (🔴 > 🟡 > 🔵 > unranked); ties keep original order.
+
+    Returns (kept_lines, num_deduped, num_truncated).
+    """
+    seen = state.setdefault("seen_keys", [])
+    seen_set = {(e.get("kind"), e.get("key")) for e in seen}
+
+    fresh = []
+    for line in lines:
+        kind, key = _alert_key(line)
+        if (kind, key) in seen_set:
+            continue
+        fresh.append((line, kind, key))
+
+    num_deduped = len(lines) - len(fresh)
+
+    num_truncated = 0
+    if len(fresh) > _MAX_ALERTS_PER_RUN:
+        ranked = sorted(
+            range(len(fresh)),
+            key=lambda i: (-_severity_rank(fresh[i][0]), i),
+        )
+        keep_idx = set(ranked[:_MAX_ALERTS_PER_RUN])
+        num_truncated = len(fresh) - _MAX_ALERTS_PER_RUN
+        fresh = [item for i, item in enumerate(fresh) if i in keep_idx]
+
+    now = datetime.now().isoformat()
+    for line, kind, key in fresh:
+        seen.append({"kind": kind, "key": key, "ts": now, "summary": line[:200]})
+
+    cutoff = (datetime.now() - timedelta(days=_DEDUP_WINDOW_DAYS)).isoformat()
+    seen = [e for e in seen if e.get("ts", "") > cutoff]
+    if len(seen) > _DEDUP_WINDOW_ENTRIES:
+        seen = seen[-_DEDUP_WINDOW_ENTRIES:]
+    state["seen_keys"] = seen
+
+    return [line for line, _, _ in fresh], num_deduped, num_truncated
+
+
+def _truncate_by_item(text: str, budget: int = _ITEM_TRUNCATE_BUDGET) -> str:
+    """Truncate text to a character budget without slicing an item in half.
+
+    Mirrors the per-item truncation pattern in supervisor._gather_async:
+    keep whole lines up to the budget rather than a flat character slice,
+    which can cut the last included item off mid-sentence. If a single line
+    alone exceeds the budget, hard-cut just that line as a last resort.
+    """
+    if len(text) <= budget:
+        return text
+    kept = []
+    total = 0
+    for line in text.splitlines():
+        add = len(line) + 1  # +1 for the joining newline
+        if total + add > budget:
+            break
+        kept.append(line)
+        total += add
+    if not kept:
+        return text[:budget]
+    return "\n".join(kept)
+
+
 # --- Data gathering ---
 
 async def _gather_context(days: int = 1) -> str:
@@ -126,11 +276,11 @@ async def _gather_context(days: int = 1) -> str:
                     text = "\n".join(f"- {e['from']}: {e['subject']} ({e['date']}) [id:{e.get('conversationId','')}]"
                                      for e in data[:20])
                 else:
-                    text = str(data)[:2000]
+                    text = _truncate_by_item(str(data))
             elif isinstance(data, tuple):
-                text = str(data[0])[:2000]
+                text = _truncate_by_item(str(data[0]))
             else:
-                text = str(data)[:2000]
+                text = _truncate_by_item(str(data))
             sections.append(f"### {name}\n{text}")
 
     if failed_sources:
@@ -180,6 +330,10 @@ Your job: check routines against current data and report anything that needs att
 4. If nothing needs attention, respond with exactly: ALL_CLEAR
 5. Format alerts as a numbered list. Include enough context to be actionable.
 6. Prefix each with: 🔴 (urgent), 🟡 (important), 🔵 (informational)
+7. If the data item you're alerting on carries a "[id:...]" tag (e.g. an
+   email conversationId), copy that exact tag to the end of your alert
+   line, unchanged. It's used for reliable duplicate detection across runs
+   — do not invent one, and omit it entirely if the source item has none.
 
 Respond with ONLY the alerts or ALL_CLEAR. No preamble."""
 
@@ -195,19 +349,38 @@ Respond with ONLY the alerts or ALL_CLEAR. No preamble."""
             print("✅ Heartbeat complete — all clear.")
         return "All clear."
 
-    for line in result.strip().splitlines():
-        line = line.strip()
-        if line and (line[0].isdigit() or line[0] in "🔴🟡🔵"):
-            state["recent_alerts"].append({
-                "ts": datetime.now().isoformat(),
-                "summary": line[:200],
-            })
+    alert_lines = [
+        line.strip() for line in result.strip().splitlines()
+        if line.strip() and (line.strip()[0].isdigit() or line.strip()[0] in "🔴🟡🔵")
+    ]
 
-    state["last_run"] = datetime.now().isoformat()
+    kept_lines, num_deduped, num_truncated = _dedup_and_cap(alert_lines, state)
+
+    if num_truncated:
+        print(f"⚠️ Heartbeat: dropped {num_truncated} lowest-severity alert(s) to "
+              f"stay within _MAX_ALERTS_PER_RUN={_MAX_ALERTS_PER_RUN} (kept the most severe).")
+
+    # Secondary layer: the short-lived "Already Reported" prompt hint, fed
+    # from the alerts that actually got sent this run.
+    now_iso = datetime.now().isoformat()
+    for line in kept_lines:
+        state["recent_alerts"].append({"ts": now_iso, "summary": line[:200]})
+
+    state["last_run"] = now_iso
     _save_state(state)
 
+    if not kept_lines:
+        if not quiet:
+            if num_deduped:
+                print(f"✅ Heartbeat complete — all {num_deduped} alert(s) already reported, nothing new.")
+            else:
+                print("✅ Heartbeat complete — all clear.")
+        return "All clear."
+
+    deduped_result = "\n".join(kept_lines)
+
     header = f"🔔 Envoy Heartbeat — {datetime.now().strftime('%a %I:%M%p')}"
-    message = f"{header}\n\n{result}"
+    message = f"{header}\n\n{deduped_result}"
 
     if notify == "slack":
         await slack_agent.send_dm(_USER(), message)
@@ -220,7 +393,7 @@ Respond with ONLY the alerts or ALL_CLEAR. No preamble."""
     # --- Weekly learning loop (piggybacks on heartbeat, rate-limited internally) ---
     await _run_weekly_learning(notify)
 
-    return result
+    return deduped_result
 
 
 async def _run_weekly_learning(notify: str = "none"):

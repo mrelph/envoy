@@ -150,7 +150,7 @@ def clear_bus():
 
 _workers = {}
 
-WORKER_NAMES = ["email", "comms", "calendar", "productivity", "research", "sharepoint", "coding"]
+WORKER_NAMES = ["email", "comms", "calendar", "productivity", "research", "sharepoint"]
 
 
 def _session_message_dirs(worker_name: str) -> list:
@@ -248,7 +248,6 @@ def get_worker(name: str):
         "productivity": lambda: _import_create("productivity_worker", name),
         "research": lambda: _import_create("research_worker", name),
         "sharepoint": lambda: _import_create("sharepoint_worker", name),
-        "coding": lambda: _import_create("coding_worker", name),
     }
     factory = factories.get(name)
     if not factory:

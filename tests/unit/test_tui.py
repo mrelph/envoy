@@ -8,12 +8,13 @@ would otherwise run.
 """
 
 import asyncio
+import threading
 
 import pytest
 from textual import events
 
 import tui
-from tui import ChatInput, EnvoyApp
+from tui import ChatInput, EnvoyApp, _looks_like_markdown, _should_rerender_as_markdown
 
 
 def _make_app(monkeypatch):
@@ -223,6 +224,158 @@ def test_update_notice_absent_when_no_stamp(monkeypatch, envoy_home):
         async with app.run_test():
             out_lines = "\n".join(str(l) for l in app.query_one("#output").lines)
             assert "available" not in out_lines
+
+    asyncio.run(scenario())
+
+
+class TestMarkdownDetectionHeuristic:
+    """PROJECT-REVIEW item: `- ` alone used to false-positive on plain prose."""
+
+    @pytest.mark.parametrize("text", [
+        "just a plain sentence with no markdown at all",
+        "day-to-day operations - that's the plan",
+        "- a single leading dash, still not enough signal",
+        "a pipe | in the middle of a sentence, not a table",
+    ])
+    def test_plain_prose_is_not_markdown(self, text):
+        assert _looks_like_markdown(text) is False
+
+    @pytest.mark.parametrize("text", [
+        "# Heading\nsome body text",
+        "## Sub heading\nbody",
+        "### Third level\nbody",
+        "wrapped\n```python\ncode()\n```\nmore",
+        "| col1 | col2 |\n| --- | --- |\n| a | b |",
+        "one bold word: **hello** stands out",
+        "**bold one** and **bold two** in the same reply",
+    ])
+    def test_strong_signals_are_markdown(self, text):
+        assert _looks_like_markdown(text) is True
+
+
+class TestShouldRerenderAsMarkdown:
+    """Factored decision from `_show()` — no duplicate rendering once streamed."""
+
+    def test_never_rerenders_once_anything_streamed(self):
+        # Even text with strong markdown signals is skipped once streaming
+        # already put the plain-text record on screen.
+        assert _should_rerender_as_markdown(True, "# Heading\nbody") is False
+
+    def test_rerenders_non_streamed_markdown_text(self):
+        assert _should_rerender_as_markdown(False, "# Heading\nbody") is True
+
+    def test_does_not_rerender_non_streamed_plain_text(self):
+        assert _should_rerender_as_markdown(False, "just plain prose - nothing fancy") is False
+
+
+class TestStreamPendingLockDrain:
+    """H/Low item: `_stream_pending` append (worker thread) vs. drain (UI
+    thread) must not race — `_flush_stream` should observe every appended
+    chunk exactly once even under concurrent appends."""
+
+    def test_concurrent_appends_are_not_lost_or_duplicated(self, monkeypatch):
+        app = _make_app(monkeypatch)
+        chunks = [f"chunk{i} " for i in range(200)]
+        drained = []
+
+        def fake_call_from_thread(fn, *a, **k):
+            # In the real app this hops to the UI thread; here we just run
+            # it inline so the test can drive `_flush_stream` deterministically.
+            return fn(*a, **k)
+
+        app.app.call_from_thread = fake_call_from_thread
+
+        def real_flush():
+            with app._stream_lock:
+                pending = app._stream_pending
+                app._stream_pending = ""
+            if pending:
+                drained.append(pending)
+
+        monkeypatch.setattr(app, "_flush_stream", real_flush)
+
+        threads = [
+            threading.Thread(target=app._ingest_stream_chunk, args=(c,))
+            for c in chunks
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        # Drain whatever's left after all threads finished appending.
+        real_flush()
+
+        total = "".join(drained)
+        # Every chunk landed exactly once — no chunk lost or duplicated by a
+        # torn read/write of `_stream_pending`.
+        for c in chunks:
+            assert total.count(c) == 1
+
+
+def test_tool_event_restarts_spinner_during_silent_gap(monkeypatch):
+    """Medium item: a tool-use event mid-turn should restart the spinner
+    with a friendly label once the initial stream has gone quiet."""
+    app = _make_app(monkeypatch)
+
+    async def scenario():
+        async with app.run_test():
+            app._busy = True
+            app._last_text_ts = 0.0  # "long ago" — no recent text
+            app._on_tool_event("email_worker")
+            spinner = app.query_one("#spinner", tui.Spinner)
+            assert spinner._hint  # spinner is showing something
+            assert "Email" in spinner._hint or "📧" in spinner._hint
+
+    asyncio.run(scenario())
+
+
+def test_tool_event_skipped_while_text_actively_streaming(monkeypatch):
+    app = _make_app(monkeypatch)
+
+    async def scenario():
+        async with app.run_test():
+            import time
+            app._busy = True
+            app._last_text_ts = time.monotonic()  # text just streamed
+            app._on_tool_event("email_worker")
+            spinner = app.query_one("#spinner", tui.Spinner)
+            assert not spinner._hint  # left alone — stream is the indicator
+
+    asyncio.run(scenario())
+
+
+def test_settings_command_intercepted_in_tui(monkeypatch):
+    """Medium item: `/settings` should run the CLI settings flow under
+    `self.suspend()`, not punt with a static 'use the CLI' message."""
+    app = _make_app(monkeypatch)
+
+    import init_cmd
+    calls = []
+    monkeypatch.setattr(init_cmd, "run_settings", lambda: calls.append(True))
+
+    class _FakeSuspend:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(app, "suspend", lambda: _FakeSuspend())
+
+    import agent as agent_module
+    reload_calls = []
+    monkeypatch.setattr(agent_module, "reload_agent", lambda: reload_calls.append(True))
+    monkeypatch.setattr(agent_module, "get_agent", lambda: "fake-agent")
+
+    async def scenario():
+        async with app.run_test() as pilot:
+            app._submit("/settings")
+            await pilot.pause()
+            assert calls == [True]
+            assert reload_calls == [True]
+            assert app._agent == "fake-agent"
+            out_lines = "\n".join(str(l) for l in app.query_one("#output").lines)
+            assert "Use 'envoy settings' from CLI" not in out_lines
 
     asyncio.run(scenario())
 

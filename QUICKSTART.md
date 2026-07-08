@@ -14,7 +14,9 @@ envoy            # launch TUI
 
 Or one-liner: `curl -fsSL https://raw.githubusercontent.com/mrelph/envoy/main/get-envoy.sh | bash`
 
-Prerequisites: Python 3.7+, `builder-mcp`, `aws-outlook-mcp` in PATH, AWS credentials (`aws login` or `.env`).
+Prerequisites: Python 3.10+, `builder-mcp`, `aws-outlook-mcp` in PATH, AWS credentials (`aws login` or `.env`).
+
+The TUI checks for new releases at startup and shows `⬆ Envoy vX available` when one exists; run `envoy update` to upgrade in place.
 
 ## Commands
 
@@ -41,7 +43,8 @@ Prerequisites: Python 3.7+, `builder-mcp`, `aws-outlook-mcp` in PATH, AWS creden
 /skills            List configured skills
 /mcp               Add/remove/list MCP servers
 /doctor            Health check (MCP, AWS, config, memory)
-/backup            Back up config, memory, and state
+/backup            Back up config, memory, and state (excludes .env)
+/learn             Review auto-detected corrections/preferences awaiting confirmation
 /help              All commands
 ```
 
@@ -55,6 +58,8 @@ Most commands accept a number of days as an argument.
 - View attachments: "what's attached to that email?"
 - Contact lookup: "find contacts at acme.com"
 
+Sending, forwarding, and deleting show a preview and wait for a short confirmation ("yes"/"confirm") before executing — one extra turn, by design, so injected email content can't trigger an action on its own.
+
 ## Slack Features
 
 - Channel posting: "post to #team-updates that the release is done"
@@ -63,6 +68,8 @@ Most commands accept a number of days as an argument.
 - File downloads: "download that canvas from Slack"
 - Slack Lists: "show items in that Slack List"
 
+Sends require the same preview-and-confirm step as email.
+
 ## Calendar Features
 
 - Recurring meetings: "set up a weekly 1:1 with alice every Tuesday at 10am"
@@ -70,6 +77,8 @@ Most commands accept a number of days as an argument.
 - Room booking: "book a room in SEA54 for the meeting"
 - Shared calendars: "show me the team calendar"
 - All-day events: "block off Friday as an all-day focus day"
+
+Attendees need full email addresses — a bare name like "sarah" is rejected rather than guessed.
 
 ## To-Do Features
 

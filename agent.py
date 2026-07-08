@@ -204,17 +204,45 @@ When a task matches a skill's description, call the activate_skill tool with the
 
 
 # --- Streaming consumer registry ---
-# UI layers (TUI) can register a callable to receive streaming text chunks.
-# When set, `data` events are forwarded to the consumer instead of being
-# suppressed. None = legacy behavior (silent until the final result lands).
+# UI layers (TUI) can register a callable to receive streaming events. When
+# set, events are forwarded to the consumer instead of being suppressed.
+# None = legacy behavior (silent until the final result lands).
+#
+# The consumer contract has two event shapes:
+#   - a plain `str`            → a streamed text chunk, append verbatim.
+#   - a `("tool", tool_name)`  → a worker/tool just started running. The TUI
+#     uses this to restart its spinner during long, silent worker
+#     delegations (streaming stops the spinner at the first token, but a
+#     tool call afterwards can run for seconds to minutes with no further
+#     text — this event lets the UI show *something* is happening).
 
 _stream_consumer = None
 
 
 def set_stream_consumer(fn):
-    """Register a callable invoked with each streaming text chunk, or None to clear."""
+    """Register a callable invoked with each streaming event, or None to clear.
+
+    See the module comment above for the two event shapes the callable
+    must accept: a `str` text chunk, or a `("tool", tool_name)` tuple.
+    """
     global _stream_consumer
     _stream_consumer = fn
+
+
+# Friendly labels for worker/tool names — shared by the reasoning callback's
+# log lines and the TUI's tool-activity spinner (`tui.py`'s `_on_tool_event`).
+_LABELS = {
+    "email_worker": "📧 Email",
+    "comms_worker": "💬 Slack",
+    "calendar_worker": "📅 Calendar",
+    "productivity_worker": "✅ Productivity",
+    "research_worker": "🔎 Research",
+    "sharepoint_worker": "📁 SharePoint",
+    "coding_worker": "💻 Coding",
+    "gather": "📊 Gathering data",
+    "observe_interaction": "👁 Observing",
+    "activate_skill": "🧩 Loading skill",
+}
 
 
 def _create_reasoning_callback_handler():
@@ -222,26 +250,13 @@ def _create_reasoning_callback_handler():
 
     Strands calls this handler for every event: streaming text chunks, tool selections,
     and results. Streamed text is forwarded to the registered consumer (if any) so the
-    TUI can render partial output; tool selections still emit clean log events.
+    TUI can render partial output; tool selections still emit clean log events and are
+    also forwarded as `("tool", name)` events (see `set_stream_consumer`).
     """
     state = {
         "step_number": 0,
         "started": False,
         "seen_tools": set(),
-    }
-
-    # Friendly labels for worker/tool names
-    _LABELS = {
-        "email_worker": "📧 Email",
-        "comms_worker": "💬 Slack",
-        "calendar_worker": "📅 Calendar",
-        "productivity_worker": "✅ Productivity",
-        "research_worker": "🔎 Research",
-        "sharepoint_worker": "📁 SharePoint",
-        "coding_worker": "💻 Coding",
-        "gather": "📊 Gathering data",
-        "observe_interaction": "👁 Observing",
-        "activate_skill": "🧩 Loading skill",
     }
 
     def reasoning_callback_handler(**kwargs):
@@ -280,6 +295,11 @@ def _create_reasoning_callback_handler():
                         step_number=state["step_number"],
                         chosen_action=tool_name,
                     )
+                    if _stream_consumer is not None:
+                        try:
+                            _stream_consumer(("tool", tool_name))
+                        except Exception:
+                            pass
 
             if kwargs.get("result") is not None and state["started"]:
                 logger.log(

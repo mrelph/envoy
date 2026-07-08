@@ -33,7 +33,7 @@ VERSION = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'VERSION
 
 @click.group(invoke_without_command=True)
 @click.version_option(version=VERSION)
-@click.option('--verbose', '-v', is_flag=True, default=False, help='Enable chain-of-thought verbose output')
+@click.option('--verbose', '-v', is_flag=True, default=False, help='Enable DEBUG-level logging to ~/.envoy/logs/')
 @click.pass_context
 def cli(ctx, verbose):
     """Envoy — Your AI Chief of Staff.
@@ -55,6 +55,10 @@ def cli(ctx, verbose):
     # Store on context for subcommands if needed
     ctx.ensure_object(dict)
     ctx.obj['verbose'] = is_verbose
+
+    if is_verbose:
+        get_logger().set_level("DEBUG")
+        console.print("[dim]verbose logging enabled → ~/.envoy/logs/[/dim]")
 
     if ctx.invoked_subcommand is None:
         try:

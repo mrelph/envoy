@@ -9,6 +9,7 @@ patch those module-level constants whenever the fixture moves $HOME.
 import importlib
 import json
 import os
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -242,3 +243,290 @@ class TestPruning:
         # Default caps are far above one tiny entry.
         memory2._prune_if_needed()
         assert called["n"] == 0
+
+    def test_size_gate_skips_readlines_when_file_too_small(self, envoy_home, monkeypatch):
+        """Regression test: _prune_if_needed used to readlines() the whole
+        entries file on every call, regardless of size. It should now only
+        do that once the file is big enough that MAX_ENTRIES could plausibly
+        be exceeded (size >= MAX_ENTRIES * MIN_ENTRY_BYTES)."""
+        memory2 = _reload_memory(envoy_home)
+        memory2.remember("one small entry")
+        # Raise MAX_ENTRIES so the byte-size gate can't possibly be satisfied
+        # by this tiny file, regardless of actual line count.
+        monkeypatch.setattr(memory2, "MAX_ENTRIES", 10_000_000)
+
+        opened = []
+        real_open = open
+
+        def spy_open(path, *a, **kw):
+            opened.append(str(path))
+            return real_open(path, *a, **kw)
+
+        monkeypatch.setattr("builtins.open", spy_open)
+        memory2._prune_if_needed()
+        assert memory2.ENTRIES_FILE not in opened
+
+    def test_size_gate_does_not_suppress_the_byte_size_cap(self, envoy_home, monkeypatch):
+        """MAX_FILE_SIZE is checked by stat alone — it must still trigger
+        compress() even though the line-count path is gated off."""
+        memory2 = _reload_memory(envoy_home)
+        memory2.remember("small entry")
+
+        called = {"n": 0}
+        monkeypatch.setattr(memory2, "compress", lambda force=False: called.update(n=called["n"] + 1) or "ok")
+        monkeypatch.setattr(memory2, "MAX_FILE_SIZE", 1)
+
+        opened = []
+        real_open = open
+
+        def spy_open(path, *a, **kw):
+            opened.append(str(path))
+            return real_open(path, *a, **kw)
+
+        monkeypatch.setattr("builtins.open", spy_open)
+        memory2._prune_if_needed()
+        assert called["n"] == 1
+        # The oversized-file branch returns before any readlines() call.
+        assert memory2.ENTRIES_FILE not in opened
+
+    def test_size_gate_opens_when_file_is_large_enough(self, envoy_home, monkeypatch):
+        """Once the file is big enough that MAX_ENTRIES could plausibly be
+        exceeded, the line count is actually performed."""
+        memory2 = _reload_memory(envoy_home)
+        memory2.remember("entry one")
+        memory2.remember("entry two")
+        memory2.remember("entry three")
+
+        called = {"n": 0}
+        monkeypatch.setattr(memory2, "compress", lambda force=False: called.update(n=called["n"] + 1) or "ok")
+        monkeypatch.setattr(memory2, "MAX_ENTRIES", 2)
+        monkeypatch.setattr(memory2, "MIN_ENTRY_BYTES", 1)  # force the size gate open
+        memory2._prune_if_needed()
+        assert called["n"] == 1
+
+
+# --- entity index: in-memory cache + debounced flush -------------------------
+
+class TestEntityIndexDebounce:
+    @staticmethod
+    def _freeze_clock(memory2, monkeypatch, start=1000.0):
+        fake_time = {"t": start}
+        monkeypatch.setattr(memory2.time, "monotonic", lambda: fake_time["t"])
+        return fake_time
+
+    def test_readers_see_in_memory_updates_before_any_flush(self, envoy_home, monkeypatch):
+        memory2 = _reload_memory(envoy_home)
+        monkeypatch.setattr(memory2, "INDEX_FLUSH_EVERY_N", 1_000_000)
+        monkeypatch.setattr(memory2, "INDEX_FLUSH_INTERVAL", 1_000_000)
+        self._freeze_clock(memory2, monkeypatch)
+
+        memory2.remember("ping alice@amazon.com")
+        memory2.remember("ping bob@amazon.com")
+        # Debounced — nothing written to disk yet.
+        assert not os.path.exists(memory2.ENTITIES_FILE)
+
+        # But _load_index() / known_entities() still see both updates.
+        index = memory2._load_index()
+        assert "alice" in index and "bob" in index
+        assert "alice" in memory2.known_entities()
+
+    def test_flush_every_n_updates_triggers_disk_write(self, envoy_home, monkeypatch):
+        memory2 = _reload_memory(envoy_home)
+        monkeypatch.setattr(memory2, "INDEX_FLUSH_EVERY_N", 3)
+        monkeypatch.setattr(memory2, "INDEX_FLUSH_INTERVAL", 1_000_000)
+        self._freeze_clock(memory2, monkeypatch)
+
+        memory2.remember("ping alice@amazon.com")
+        memory2.remember("ping bob@amazon.com")
+        assert not os.path.exists(memory2.ENTITIES_FILE)
+
+        memory2.remember("ping carol@amazon.com")  # 3rd update — hits EVERY_N
+        on_disk = json.loads(open(memory2.ENTITIES_FILE).read())
+        assert "alice" in on_disk and "bob" in on_disk and "carol" in on_disk
+
+    def test_flush_after_interval_elapses(self, envoy_home, monkeypatch):
+        memory2 = _reload_memory(envoy_home)
+        monkeypatch.setattr(memory2, "INDEX_FLUSH_EVERY_N", 1_000_000)
+        monkeypatch.setattr(memory2, "INDEX_FLUSH_INTERVAL", 30)
+        fake_time = self._freeze_clock(memory2, monkeypatch)
+
+        # The very first update after a fresh module load always flushes
+        # (module-level _index_last_flush starts at 0.0 — "infinitely long
+        # ago" — so we don't leave the first write unflushed indefinitely).
+        memory2.remember("ping alice@amazon.com")
+        on_disk = json.loads(open(memory2.ENTITIES_FILE).read())
+        assert "alice" in on_disk
+
+        # Too soon after that flush — debounced, not yet on disk.
+        memory2.remember("ping bob@amazon.com")
+        on_disk = json.loads(open(memory2.ENTITIES_FILE).read())
+        assert "bob" not in on_disk
+
+        fake_time["t"] += 31  # past INDEX_FLUSH_INTERVAL since the last flush
+        memory2.remember("ping dave@amazon.com")
+
+        on_disk = json.loads(open(memory2.ENTITIES_FILE).read())
+        assert "bob" in on_disk
+        assert "dave" in on_disk
+
+    def test_atexit_hook_flushes_dirty_index(self, envoy_home, monkeypatch):
+        """This is exactly what atexit.register(_flush_index_if_dirty) calls
+        on interpreter shutdown, so debounced updates aren't lost."""
+        memory2 = _reload_memory(envoy_home)
+        monkeypatch.setattr(memory2, "INDEX_FLUSH_EVERY_N", 1_000_000)
+        monkeypatch.setattr(memory2, "INDEX_FLUSH_INTERVAL", 1_000_000)
+        self._freeze_clock(memory2, monkeypatch)
+
+        memory2.remember("ping alice@amazon.com")
+        assert not os.path.exists(memory2.ENTITIES_FILE)
+
+        memory2._flush_index_if_dirty()
+
+        on_disk = json.loads(open(memory2.ENTITIES_FILE).read())
+        assert "alice" in on_disk
+
+    def test_atexit_hook_is_a_noop_when_nothing_dirty(self, envoy_home, monkeypatch):
+        memory2 = _reload_memory(envoy_home)
+        # No remember() calls at all — cache never loaded, nothing dirty.
+        memory2._flush_index_if_dirty()
+        assert not os.path.exists(memory2.ENTITIES_FILE)
+
+    def test_save_index_full_replace_flushes_immediately(self, envoy_home, monkeypatch):
+        """compress()/rebuild_entity_index() call _save_index() directly and
+        expect an immediate flush regardless of debounce settings."""
+        memory2 = _reload_memory(envoy_home)
+        monkeypatch.setattr(memory2, "INDEX_FLUSH_EVERY_N", 1_000_000)
+        monkeypatch.setattr(memory2, "INDEX_FLUSH_INTERVAL", 1_000_000)
+        self._freeze_clock(memory2, monkeypatch)
+
+        memory2._save_index({"someone": ["e1"]})
+        on_disk = json.loads(open(memory2.ENTITIES_FILE).read())
+        assert on_disk == {"someone": ["e1"]}
+
+
+# --- compress() failure backoff ----------------------------------------------
+
+class TestCompressFailureBackoff:
+    """compress() is reached from the remember() -> _prune_if_needed() hot
+    path with force=False. These tests seed a genuinely old entry (rather
+    than using force=True) so compress() actually attempts AI compression
+    without needing to bypass the 'nothing old enough' gate — that keeps the
+    backoff assertions exercising the same force=False path the hot loop
+    uses, instead of force=True (which is a deliberate escape hatch — see
+    test_force_bypasses_the_backoff below)."""
+
+    @staticmethod
+    def _seed_old_entry(memory2, text="an old note"):
+        memory2._ensure_dir()
+        old_ts = (datetime.now() - timedelta(days=memory2.COMPRESS_AFTER_DAYS + 1)).isoformat()
+        entry = {
+            "id": "seed00000000000001",
+            "ts": old_ts,
+            "type": "action",
+            "importance": "notable",
+            "text": text,
+            "entities": [],
+        }
+        with open(memory2.ENTRIES_FILE, "w") as f:
+            f.write(json.dumps(entry) + "\n")
+
+    def test_repeated_failure_is_not_retried_within_backoff_window(
+        self, envoy_home, monkeypatch
+    ):
+        memory2 = _reload_memory(envoy_home)
+        self._seed_old_entry(memory2)
+
+        calls = {"n": 0}
+
+        def fake_invoke_ai(prompt, max_tokens=1500, tier="memory"):
+            calls["n"] += 1
+            return "not valid json"
+
+        monkeypatch.setattr(memory2, "invoke_ai", fake_invoke_ai)
+        fake_time = {"t": 1000.0}
+        monkeypatch.setattr(memory2.time, "monotonic", lambda: fake_time["t"])
+
+        out1 = memory2.compress()
+        assert "Compression failed" in out1
+        assert calls["n"] == 1
+
+        # Immediate retry — backoff should skip it without calling invoke_ai again.
+        out2 = memory2.compress()
+        assert "skipped" in out2.lower()
+        assert calls["n"] == 1
+
+    def test_retries_after_backoff_window_elapses(self, envoy_home, monkeypatch):
+        memory2 = _reload_memory(envoy_home)
+        self._seed_old_entry(memory2)
+
+        calls = {"n": 0}
+
+        def fake_invoke_ai(prompt, max_tokens=1500, tier="memory"):
+            calls["n"] += 1
+            return "not valid json"
+
+        monkeypatch.setattr(memory2, "invoke_ai", fake_invoke_ai)
+        fake_time = {"t": 1000.0}
+        monkeypatch.setattr(memory2.time, "monotonic", lambda: fake_time["t"])
+
+        memory2.compress()
+        assert calls["n"] == 1
+
+        fake_time["t"] += memory2.COMPRESS_FAILURE_BACKOFF + 1
+        memory2.compress()
+        assert calls["n"] == 2
+
+    def test_successful_compress_resets_the_backoff(self, envoy_home, monkeypatch):
+        memory2 = _reload_memory(envoy_home)
+        self._seed_old_entry(memory2)
+
+        calls = {"n": 0}
+
+        def flaky_invoke_ai(prompt, max_tokens=1500, tier="memory"):
+            calls["n"] += 1
+            return "not valid json" if calls["n"] == 1 else "{}"
+
+        monkeypatch.setattr(memory2, "invoke_ai", flaky_invoke_ai)
+        fake_time = {"t": 1000.0}
+        monkeypatch.setattr(memory2.time, "monotonic", lambda: fake_time["t"])
+
+        memory2.compress()
+        assert memory2._last_compress_failure != 0.0
+
+        # The failed attempt returns before rewriting entries.jsonl, so the
+        # same old entry is still there for the retry after backoff elapses.
+        fake_time["t"] += memory2.COMPRESS_FAILURE_BACKOFF + 1
+        memory2.compress()
+        assert memory2._last_compress_failure == 0.0
+
+    def test_backoff_does_not_apply_without_a_prior_failure(self, envoy_home, monkeypatch):
+        memory2 = _reload_memory(envoy_home)
+        self._seed_old_entry(memory2)
+        monkeypatch.setattr(memory2, "invoke_ai", lambda *a, **k: "{}")
+        out = memory2.compress()
+        assert "skipped" not in out.lower()
+
+    def test_force_bypasses_the_backoff(self, envoy_home, monkeypatch):
+        """force=True is an explicit user-initiated retry (e.g. a manual
+        /memory compress) and should not be blocked by the automatic
+        backoff that protects the remember() -> _prune_if_needed() hot path."""
+        memory2 = _reload_memory(envoy_home)
+        self._seed_old_entry(memory2)
+
+        calls = {"n": 0}
+
+        def fake_invoke_ai(prompt, max_tokens=1500, tier="memory"):
+            calls["n"] += 1
+            return "not valid json"
+
+        monkeypatch.setattr(memory2, "invoke_ai", fake_invoke_ai)
+        fake_time = {"t": 1000.0}
+        monkeypatch.setattr(memory2.time, "monotonic", lambda: fake_time["t"])
+
+        memory2.compress()  # records a failure (force=False, as the hot path does)
+        assert calls["n"] == 1
+
+        fake_time["t"] += 1  # still well within the backoff window
+        out = memory2.compress(force=True)
+        assert "skipped" not in out.lower()
+        assert calls["n"] == 2

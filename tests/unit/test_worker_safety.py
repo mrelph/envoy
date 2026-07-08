@@ -46,20 +46,25 @@ def _tools_by_name(agent_module, session_mgr=None):
 
 
 # --- Coding worker: allow_edits default + working_directory allow-list ----
+#
+# coding_worker no longer wraps a Strands agent (see M8 in
+# PROJECT-REVIEW-2026-07-06.md — the medium-tier agent whose only job was to
+# re-prompt run_coding_agent was removed). run_coding_agent is now a plain
+# module-level function called directly by tools.coding_worker, so these
+# tests exercise it (and the tools.py tool) directly instead of pulling it
+# out of a captured Agent(tools=[...]) kwarg.
 
 class TestCodingWorkerSafety:
     def test_run_coding_agent_defaults_to_no_edits(self):
         import inspect
         from agents.workers import coding_worker
-        tools = _tools_by_name(coding_worker)
-        sig = inspect.signature(tools["run_coding_agent"])
+        sig = inspect.signature(coding_worker.run_coding_agent)
         assert sig.parameters["allow_edits"].default is False
 
     def test_no_allowed_dirs_configured_returns_graceful_error(self, envoy_home, monkeypatch):
         _patch_config_file(monkeypatch, envoy_home)
         from agents.workers import coding_worker
-        tool_fns = _tools_by_name(coding_worker)
-        result = tool_fns["run_coding_agent"]("do something", working_directory="")
+        result = coding_worker.run_coding_agent("do something", working_directory="")
         assert "allowed_dirs" in result
 
     def test_working_directory_outside_allow_list_rejected(self, envoy_home, monkeypatch, tmp_path):
@@ -73,8 +78,7 @@ class TestCodingWorkerSafety:
         outside.mkdir()
 
         from agents.workers import coding_worker
-        tool_fns = _tools_by_name(coding_worker)
-        result = tool_fns["run_coding_agent"]("do something", working_directory=str(outside))
+        result = coding_worker.run_coding_agent("do something", working_directory=str(outside))
         assert "not allowed" in result.lower()
 
     def test_working_directory_inside_allow_list_proceeds_past_validation(self, envoy_home, monkeypatch, tmp_path):
@@ -86,8 +90,7 @@ class TestCodingWorkerSafety:
 
         from agents.workers import coding_worker
         monkeypatch.setattr(coding_worker, "_find_cli", lambda: ("", ""))
-        tool_fns = _tools_by_name(coding_worker)
-        result = tool_fns["run_coding_agent"]("do something", working_directory=str(allowed))
+        result = coding_worker.run_coding_agent("do something", working_directory=str(allowed))
         # Passed the allow-list check and reached the "no CLI found" branch,
         # not the directory-rejection branch.
         assert "No coding CLI found" in result
@@ -102,9 +105,63 @@ class TestCodingWorkerSafety:
 
         # cwd (os.getcwd()) is very unlikely to be under tmp_path/Projects.
         from agents.workers import coding_worker
-        tool_fns = _tools_by_name(coding_worker)
-        result = tool_fns["run_coding_agent"]("do something", working_directory="")
+        result = coding_worker.run_coding_agent("do something", working_directory="")
         assert "not allowed" in result.lower()
+
+
+# --- tools.coding_worker: direct call to run_coding_agent, no worker hop ---
+
+class TestCodingWorkerToolDirectCall:
+    def test_tool_calls_module_function_directly_no_agent_hop(self, monkeypatch):
+        """tools.coding_worker must call run_coding_agent directly rather than
+        going through _delegate/get_worker — the M8 double-hop this replaces.
+        """
+        import tools
+
+        called = {}
+
+        def _fake_run_coding_agent(task, working_directory="", allow_edits=False):
+            called["args"] = (task, working_directory, allow_edits)
+            return "✅ done"
+
+        monkeypatch.setattr("agents.workers.coding_worker.run_coding_agent", _fake_run_coding_agent)
+
+        def _fail_if_delegated(*a, **k):
+            raise AssertionError("coding_worker tool should not call _delegate")
+        monkeypatch.setattr(tools, "_delegate", _fail_if_delegated)
+
+        result = tools.coding_worker("fix the bug", working_directory="/tmp/proj", allow_edits=True)
+
+        assert result == "✅ done"
+        assert called["args"] == ("fix the bug", "/tmp/proj", True)
+
+    def test_tool_defaults_allow_edits_false(self, monkeypatch):
+        import tools
+
+        called = {}
+
+        def _fake_run_coding_agent(task, working_directory="", allow_edits=False):
+            called["allow_edits"] = allow_edits
+            return "ok"
+
+        monkeypatch.setattr("agents.workers.coding_worker.run_coding_agent", _fake_run_coding_agent)
+
+        tools.coding_worker("look at this")
+
+        assert called["allow_edits"] is False
+
+
+# --- agents/workers/__init__.py: coding is deregistered as a worker --------
+
+class TestCodingWorkerDeregistered:
+    def test_coding_not_in_worker_names(self):
+        from agents.workers import WORKER_NAMES
+        assert "coding" not in WORKER_NAMES
+
+    def test_get_worker_rejects_coding(self):
+        from agents.workers import get_worker
+        with pytest.raises(ValueError):
+            get_worker("coding")
 
 
 # --- Email worker: confirmation gate on send/reply/forward/delete ---------

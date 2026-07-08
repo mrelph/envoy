@@ -1,6 +1,11 @@
 #!/bin/bash
 # get-envoy.sh — Download, install, or update Envoy
 # Usage: curl -fsSL https://raw.githubusercontent.com/mrelph/envoy/main/get-envoy.sh | bash
+#
+# Piping curl straight to bash runs this script with your privileges before
+# you've read it. If you'd rather inspect it first, see the download-then-
+# inspect-then-run alternative in INSTALL.md ("One-liner install" section)
+# instead of using the one-liner above.
 set -e
 
 REPO="https://github.com/mrelph/envoy.git"

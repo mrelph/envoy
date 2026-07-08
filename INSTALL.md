@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- **Python 3.7+** — `python3 --version`
+- **Python 3.10+** — `python3 --version`
 - **AWS credentials** — for AI features (Amazon Bedrock / Claude)
 - **MCP servers** installed and in PATH:
   - `builder-mcp` — Phonetool, Wiki, Taskei, Broadcast
@@ -37,6 +37,18 @@ That's it. `envoy init` walks you through:
 5. AI-generated agent personality (optional)
 
 Config is saved to `~/.envoy/`.
+
+## One-liner install (optional)
+
+`curl -fsSL https://raw.githubusercontent.com/mrelph/envoy/main/get-envoy.sh | bash` clones the repo to `~/.envoy` (or `$ENVOY_DIR`), sets up the venv, and links `envoy` onto your `PATH` — but piping `curl` straight into `bash` runs the script with your privileges before you've reviewed it. If you'd rather inspect it first:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mrelph/envoy/main/get-envoy.sh -o get-envoy.sh
+less get-envoy.sh        # read it
+bash get-envoy.sh        # run it once you're satisfied
+```
+
+Or skip the script entirely and follow the tarball/git-clone steps above.
 
 ## AWS Credentials
 

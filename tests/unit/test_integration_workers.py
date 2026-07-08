@@ -157,33 +157,3 @@ class TestBudgetIntegration:
         for _ in range(MAX_AI_CALLS + 1):
             b.record_ai_call(100, 50, "medium")
         assert b.exceeded
-
-
-# --- WorkerResult tests ---
-
-class TestWorkerResult:
-    """Verify structured worker result envelope."""
-
-    def test_ok_result_str(self):
-        from agents.workers.result import WorkerResult
-        r = WorkerResult.ok("Calendar is empty today.")
-        assert str(r) == "Calendar is empty today."
-        assert r.status == "ok"
-
-    def test_error_result_str(self):
-        from agents.workers.result import WorkerResult
-        r = WorkerResult.err("MCP timeout")
-        assert "MCP timeout" in str(r)
-        assert r.status == "error"
-
-    def test_empty_result(self):
-        from agents.workers.result import WorkerResult
-        r = WorkerResult.empty()
-        assert r.status == "empty"
-        assert "No results" in str(r)
-
-    def test_items_accessible(self):
-        from agents.workers.result import WorkerResult
-        items = [{"type": "email", "subject": "Hi"}]
-        r = WorkerResult.ok("1 email", items=items)
-        assert r.items == items

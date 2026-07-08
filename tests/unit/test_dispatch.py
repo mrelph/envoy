@@ -188,6 +188,63 @@ class TestDigestAndDaysSubstitution:
 
 
 # =========================================================================
+# 2b. Non-numeric day args — previously silently dropped, now hinted
+# =========================================================================
+
+class TestNonNumericDayArg:
+    """/digest last week (etc.) used to silently fall back to the default with
+    no indication the arg was ignored. Days-taking commands now append a
+    one-line notice to the response instead of swallowing the arg silently."""
+
+    def test_digest_non_numeric_arg_falls_back_and_notes_it(self, monkeypatch):
+        monkeypatch.setenv("USER", "jsmith")
+        agent = FakeAgent(response="Here is your digest.")
+        result, handled = dispatch.dispatch("/digest last week", agent)
+        assert handled is True
+        # Falls back to the default day count for the prompt sent to the agent.
+        assert f"`{DEFAULT_DAYS['/digest']}`" in agent.last_prompt
+        # The original non-numeric text is never silently discarded — it's
+        # surfaced in the final response as a one-line notice.
+        assert result.startswith("Here is your digest.")
+        assert "last week" in result
+        assert "isn't a number" in result
+        assert f"/digest {DEFAULT_DAYS['/digest']}" in result
+
+    def test_catchup_non_numeric_arg_uses_default_and_notes_it(self):
+        agent = FakeAgent(response="Catch-up report.")
+        result, handled = dispatch.dispatch("/catchup a couple weeks", agent)
+        assert handled is True
+        assert f"`{DEFAULT_DAYS['/catchup']}`" in agent.last_prompt
+        assert "a couple weeks" in result
+        assert "isn't a number" in result
+
+    def test_digest_numeric_arg_still_works_without_notice(self, monkeypatch):
+        """Sanity check: numeric day args are unaffected by the new notice logic."""
+        monkeypatch.setenv("USER", "jsmith")
+        agent = FakeAgent(response="Here is your digest.")
+        result, handled = dispatch.dispatch("/digest 30", agent)
+        assert handled is True
+        assert "`30`" in agent.last_prompt
+        assert result == "Here is your digest."
+        assert "isn't a number" not in result
+
+    def test_no_notice_when_no_arg_given(self):
+        """No arg at all (not a bad one) shouldn't trigger the hint."""
+        agent = FakeAgent(response="Digest here.")
+        result, handled = dispatch.dispatch("/digest", agent)
+        assert handled is True
+        assert result == "Digest here."
+
+    def test_non_day_command_ignores_non_numeric_arg_without_notice(self):
+        """/calendar has no {days} placeholder and isn't in DEFAULT_DAYS — a
+        stray non-numeric arg is just ignored as before, no notice appended."""
+        agent = FakeAgent(response="Your calendar.")
+        result, handled = dispatch.dispatch("/calendar tomorrow", agent)
+        assert handled is True
+        assert result == "Your calendar."
+
+
+# =========================================================================
 # 3. ARG_COMMANDS handling
 # =========================================================================
 
@@ -323,6 +380,19 @@ class TestSystemCommands:
         assert "eod" in result
         assert "End of day summary" in result
         assert agent.prompts == []
+
+    def test_doctor_aws_hint_is_actionable(self, envoy_home, monkeypatch):
+        """envoy doctor previously suggested `aws login`, which isn't a real
+        AWS CLI command. It should now point at mwinit / SSO instead — and no
+        longer mention the nonexistent `aws login`."""
+        import boto3
+        def _boom_client(*a, **k):
+            raise RuntimeError("Unable to locate credentials")
+        monkeypatch.setattr(boto3, "client", _boom_client)
+        output = dispatch._run_doctor()
+        assert "aws login" not in output
+        assert "mwinit" in output
+        assert "AWS SSO" in output
 
     def test_mcp_command_handled(self, monkeypatch):
         import sys
