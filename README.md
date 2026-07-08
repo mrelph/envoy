@@ -37,7 +37,7 @@ Envoy checks for new releases at launch; when one's available the TUI shows `⬆
 Running `envoy` launches a full-screen Textual TUI with animated progress, MCP status, and toast notifications. Illustrative sample output (exact layout evolves faster than this doc):
 
 ```
-┌─ ✈ Envoy v3.2.0 ──────────────────────────────────────┐
+┌─ ✈ Envoy v3.3.0 ──────────────────────────────────────┐
 │ ● Outlook  ● Phonetool  ● Slack  ● TeamSnap           │
 │                                                         │
 │  ███████╗███╗   ██╗██╗   ██╗ ██████╗ ██╗   ██╗        │
