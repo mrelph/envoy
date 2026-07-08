@@ -18,9 +18,8 @@ from rich.markdown import Markdown
 from rich.text import Text
 
 from dispatch import COMMANDS, COMMAND_GROUPS, dispatch_with_learning as dispatch
+from agents.paths import CONFIG_DIR, SOUL_FILE
 
-CONFIG_DIR = Path.home() / ".envoy"
-SOUL_FILE = CONFIG_DIR / "soul.md"
 VERSION = (Path(__file__).parent / "VERSION").read_text().strip()
 
 LOGO = r"""[bold #58a6ff]

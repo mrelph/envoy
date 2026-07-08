@@ -12,7 +12,8 @@ import time as _time
 from pathlib import Path
 
 from agents.base import current_user as _USER  # call-time alias resolution
-_SESSIONS_DIR = Path.home() / ".envoy" / "sessions" / "workers"
+from agents.paths import SESSIONS_DIR as _ENVOY_SESSIONS_DIR, process_file
+_SESSIONS_DIR = _ENVOY_SESSIONS_DIR / "workers"
 
 # Worker sessions get unbounded — every supervisor call appends. We cap to keep
 # replay latency sane: in production we saw email worker hit 74 messages and
@@ -207,7 +208,7 @@ def _load_process_rules(worker_module) -> str:
     Section list is declared on each worker module as RELEVANT_SECTIONS so
     new workers only need to edit their own file.
     """
-    path = Path.home() / ".envoy" / "process.md"
+    path = process_file()
     if not path.exists():
         return ""
     sections = _worker_sections(worker_module)

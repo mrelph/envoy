@@ -9,11 +9,8 @@ from rich.console import Console
 from rich.panel import Panel
 from agents.base import invoke_ai, builder, run
 from agents import people
+from agents.paths import CONFIG_DIR, SOUL_FILE, ENVOY_FILE, PROCESS_FILE, MCP_FILE as _MCP_JSON
 
-CONFIG_DIR = Path.home() / ".envoy"
-SOUL_FILE = CONFIG_DIR / "soul.md"
-ENVOY_FILE = CONFIG_DIR / "envoy.md"
-PROCESS_FILE = CONFIG_DIR / "process.md"
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 console = Console()
@@ -505,9 +502,6 @@ I am your AI chief of staff — sharp, proactive, and always one step ahead.
 
 
 # --- MCP server management ---
-
-_MCP_JSON = CONFIG_DIR / "mcp.json"
-
 
 def _load_user_mcps() -> dict:
     if _MCP_JSON.exists():

@@ -5,12 +5,14 @@ import shutil
 import time as _time
 from pathlib import Path
 from envoy_logger import get_logger
+from agents.paths import (
+    CONFIG_DIR,
+    SOUL_FILE,
+    ENVOY_FILE,
+    PROCESS_FILE,
+    SESSIONS_DIR,
+)
 
-CONFIG_DIR = Path.home() / ".envoy"
-SOUL_FILE = CONFIG_DIR / "soul.md"
-ENVOY_FILE = CONFIG_DIR / "envoy.md"
-PROCESS_FILE = CONFIG_DIR / "process.md"
-SESSIONS_DIR = CONFIG_DIR / "sessions"
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 

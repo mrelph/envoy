@@ -83,12 +83,15 @@ class EnvoyLogger:
 
     def __init__(
         self,
-        log_dir: str = "~/.envoy/logs/",
+        log_dir: str = None,
         file_level: str = "INFO",
         console_level: str = "WARNING",
         retention_days: int = 14,
         max_output_length: int = 500,
     ):
+        if log_dir is None:
+            from agents.paths import logs_dir
+            log_dir = str(logs_dir())
         self.log_dir = os.path.expanduser(log_dir)
         self.max_output_length = max_output_length
         self.retention_days = retention_days

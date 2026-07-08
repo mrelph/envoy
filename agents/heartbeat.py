@@ -16,7 +16,8 @@ from agents.base import invoke_ai, outlook, MCPConnectionError, run
 from agents import email, slack_agent, calendar, todo, tickets, people, memory2 as memory
 
 from agents.base import current_user as _USER  # call-time alias resolution
-_ENVOY_DIR = Path.home() / ".envoy"
+from agents.paths import config_dir
+_ENVOY_DIR = config_dir()
 _ROUTINES_FILE = _ENVOY_DIR / "routines.md"
 _STATE_FILE = _ENVOY_DIR / "heartbeat_state.json"
 _MAX_ALERTS_PER_RUN = 10

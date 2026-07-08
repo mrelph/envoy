@@ -114,8 +114,9 @@ def _load_commands() -> dict:
     templates/commands.md if present.
     """
     import re
+    from agents.paths import commands_file
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates', 'commands.md')
-    user_path = os.path.expanduser('~/.envoy/commands.md')
+    user_path = str(commands_file())
     if os.path.exists(user_path):
         path = user_path
     with open(path) as f:
@@ -410,8 +411,9 @@ def _run_doctor() -> str:
     lines.append("\n## AI Models")
     try:
         from agents.base import _load_models, DEFAULT_MODELS
+        from agents.paths import models_file as _models_file
         models = _load_models()
-        models_file = Path.home() / ".envoy" / "models.json"
+        models_file = _models_file()
         customized = models_file.exists()
         for tier in DEFAULT_MODELS:
             mid = models.get(tier, DEFAULT_MODELS[tier])
@@ -428,7 +430,8 @@ def _run_doctor() -> str:
 
     # --- Config Files ---
     lines.append("\n## Configuration")
-    config_dir = Path.home() / ".envoy"
+    from agents.paths import config_dir as _config_dir
+    config_dir = _config_dir()
     for name, required_fields in [
         ("soul.md", ["Agent name"]),
         ("envoy.md", ["Alias"]),

@@ -131,7 +131,8 @@ def logs(ctx, level, event_type, tail):
     from datetime import datetime as _dt
 
     today = _dt.now().strftime("%Y-%m-%d")
-    log_dir = os.path.expanduser("~/.envoy/logs/")
+    from agents.paths import logs_dir
+    log_dir = str(logs_dir())
     log_path = os.path.join(log_dir, f"envoy-{today}.log")
 
     if not os.path.isfile(log_path):

@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 from typing import Dict, Optional
 
-CONFIG_DIR = Path.home() / ".envoy"
+from agents.paths import CONFIG_DIR
 
 # Scan paths in priority order (project > user-client > user-shared)
 SKILL_PATHS = [

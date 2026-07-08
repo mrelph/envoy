@@ -4,7 +4,9 @@ import os
 import json
 import time
 
-CATALOG_CACHE = os.path.expanduser("~/.envoy/models_catalog.json")
+from agents.paths import config_dir
+
+CATALOG_CACHE = str(config_dir() / "models_catalog.json")
 _CATALOG_TTL = 3600  # 1h
 
 

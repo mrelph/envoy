@@ -4,8 +4,7 @@ import tarfile
 from datetime import datetime
 from pathlib import Path
 
-CONFIG_DIR = Path.home() / ".envoy"
-BACKUP_DIR = CONFIG_DIR / "backups"
+from agents.paths import CONFIG_DIR, BACKUPS_DIR as BACKUP_DIR
 
 # Files and dirs to back up (relative to ~/.envoy)
 # NOTE: ".env" is intentionally excluded — it holds AWS/API credentials and

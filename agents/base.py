@@ -10,6 +10,7 @@ from typing import List, Dict
 
 from dotenv import load_dotenv
 from envoy_logger import get_logger
+from agents.paths import ENV_FILE, MODELS_FILE, SENT_FILE as SENT_LOG, soul_file, envoy_file, mcp_file, env_file
 
 # Lazy-loaded heavy modules (mcp ~2s, boto3 ~0.7s)
 ClientSession = None
@@ -25,7 +26,7 @@ def _ensure_mcp():
         StdioServerParameters = _SP
         stdio_client = _sc
 
-load_dotenv(os.path.expanduser("~/.envoy/.env"))
+load_dotenv(str(ENV_FILE))
 load_dotenv()  # fallback to project-dir .env
 
 # Suppress MCP server stderr noise (Node warnings, internal errors)
@@ -163,7 +164,7 @@ def _load_user_mcp_overrides(path: str):
     return accepted, rejected
 
 
-_user_mcp_path = os.path.join(os.path.expanduser("~"), ".envoy", "mcp.json")
+_user_mcp_path = str(mcp_file())
 _user_mcp_accepted, _mcp_rejected = _load_user_mcp_overrides(_user_mcp_path)
 _MCP_PARAM_DEFS.update(_user_mcp_accepted)
 
@@ -777,7 +778,6 @@ def check_mcp_connections() -> Dict[str, bool]:
 
 # --- AI / Bedrock ---
 
-MODELS_FILE = os.path.expanduser("~/.envoy/models.json")
 DEFAULT_MODELS = {
     # "agent" is the supervisor tier — it fires on every prompt, including
     # trivial routing, so it stays on Sonnet by default (~5x cheaper than
@@ -907,7 +907,7 @@ def invoke_ai(prompt: str, max_tokens: int = 10000, tier: str = "heavy") -> str:
         global _bedrock_client
         _bedrock_client = None
         try:
-            load_dotenv(os.path.expanduser("~/.envoy/.env"), override=True)
+            load_dotenv(str(env_file()), override=True)
             load_dotenv(override=True)
         except Exception:
             pass
@@ -1003,7 +1003,7 @@ def _invoke_ai_once(prompt: str, max_tokens: int, tier: str) -> str:
 # --- Agent identity ---
 
 def agent_name() -> str:
-    p = os.path.expanduser("~/.envoy/soul.md")
+    p = soul_file()
     if os.path.exists(p):
         with open(p) as f:
             for line in f:
@@ -1027,7 +1027,7 @@ def current_user() -> str:
     global _user_cache
     if _user_cache is not None:
         return _user_cache
-    p = os.path.expanduser("~/.envoy/envoy.md")
+    p = envoy_file()
     if os.path.exists(p):
         try:
             with open(p) as f:
@@ -1052,7 +1052,6 @@ def reload_user() -> None:
 
 # --- Sent message tracking ---
 
-SENT_LOG = os.path.expanduser("~/.envoy/sent.json")
 TAG_PREFIX = "⚡att:"
 
 

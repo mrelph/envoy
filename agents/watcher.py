@@ -23,7 +23,7 @@ from agents import slack_agent
 from agents.heartbeat import _run_heartbeat_async
 
 from agents.base import current_user as _USER  # call-time alias resolution
-_ENVOY_DIR = Path.home() / ".envoy"
+from agents.paths import CONFIG_DIR as _ENVOY_DIR
 _STATE_FILE = _ENVOY_DIR / "watcher_state.json"
 _stop = False
 

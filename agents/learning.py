@@ -18,9 +18,11 @@ import re
 import time
 from pathlib import Path
 
-_ENVOY_DIR = Path.home() / ".envoy"
+from agents.paths import config_dir
+
+_ENVOY_DIR = config_dir()
 _LAST_ANALYSIS = _ENVOY_DIR / "learning_state.json"
-_PROCESS_FILE = os.path.expanduser("~/.envoy/process.md")
+_PROCESS_FILE = str(_ENVOY_DIR / "process.md")
 _PENDING_FILE = _ENVOY_DIR / "pending_rules.json"
 
 _PENDING_CAP = 10          # max queued-but-unconfirmed rules; oldest dropped beyond this

@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 from typing import List, Dict
 
 from agents.base import invoke_ai, run
+from agents.paths import config_dir
 
 from agents.base import current_user as _USER  # call-time alias resolution
 
@@ -412,7 +413,7 @@ Data:
 
 # --- Response learning ---
 
-RESPONSE_PATTERNS_FILE = os.path.expanduser("~/.envoy/response_patterns.jsonl")
+RESPONSE_PATTERNS_FILE = str(config_dir() / "response_patterns.jsonl")
 MAX_PATTERNS = 200
 
 

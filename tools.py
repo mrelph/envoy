@@ -5,11 +5,9 @@ from strands import tool
 from envoy_logger import logged_tool, get_logger
 from agents.base import outlook, builder, invoke_ai, check_mcp_connections, _load_models, MODEL_CATALOG, MODELS_FILE, get_token_usage, format_token_usage, reset_token_usage, run
 from agents import email, slack_agent, calendar, todo, tickets, memory2 as memory, teamsnap_agent, people, internal, export
+from agents.paths import CONFIG_JSON_FILE as _CONFIG_FILE, soul_file, envoy_file, process_file, env_file
 
 # --- Filesystem allow-list config ---
-
-_CONFIG_FILE = os.path.expanduser("~/.envoy/config.json")
-
 
 def _load_config() -> dict:
     """Load ~/.envoy/config.json."""
@@ -114,7 +112,7 @@ def update_soul(rule: str) -> str:
     Args:
         rule: The rule or personality directive to add (will be appended)
     """
-    path = os.path.expanduser("~/.envoy/soul.md")
+    path = str(soul_file())
     existing = _config_has_similar(path, rule)
     if existing:
         return f"⚠️ Similar rule already exists: \"{existing}\"\nNo change made. Use `/settings` to edit manually."
@@ -132,7 +130,7 @@ def update_envoy(preference: str) -> str:
     Args:
         preference: The preference to add (will be appended)
     """
-    path = os.path.expanduser("~/.envoy/envoy.md")
+    path = str(envoy_file())
     existing = _config_has_similar(path, preference)
     if existing:
         return f"⚠️ Similar preference already exists: \"{existing}\"\nNo change made. Use `/settings` to edit manually."
@@ -152,7 +150,7 @@ def update_process(rule: str, section: str = "General") -> str:
         rule: The process rule to add
         section: Section to file it under (Email, Meetings, Cleanup, Slack, Calendar, or any new section)
     """
-    path = os.path.expanduser("~/.envoy/process.md")
+    path = str(process_file())
     header = f"## {section}"
     existing = _config_has_similar(path, rule)
     if existing:
@@ -210,7 +208,7 @@ def add_vip(alias: str) -> str:
 
     # Append to envoy.md under # High Priority People
     entry = f"- {info['name'] or alias} | {info['alias']} | {info['email']} | {info['title']}"
-    path = os.path.expanduser("~/.envoy/envoy.md")
+    path = str(envoy_file())
     content = open(path).read() if os.path.exists(path) else ""
     section = "# High Priority People"
     if section in content:
@@ -840,7 +838,7 @@ def _refresh_worker_credentials() -> None:
     """
     try:
         from dotenv import load_dotenv
-        load_dotenv(os.path.expanduser("~/.envoy/.env"), override=True)
+        load_dotenv(str(env_file()), override=True)
         load_dotenv(override=True)
     except Exception:
         pass

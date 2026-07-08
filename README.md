@@ -28,6 +28,8 @@ envoy            # launch TUI
 
 See [INSTALL.md](INSTALL.md) for detailed setup instructions. Re-running `envoy init` later is safe — it backs up your existing `soul.md`/`envoy.md` and prefills answers from them instead of silently wiping your config.
 
+All user config/state lives under `~/.envoy/` by default — set the `ENVOY_CONFIG` environment variable to relocate it (e.g. `ENVOY_CONFIG=~/work-envoy envoy`).
+
 Envoy checks for new releases at launch; when one's available the TUI shows `⬆ Envoy vX available` and `envoy update` upgrades in place.
 
 ## TUI Interface
@@ -369,6 +371,7 @@ envoy/
 ├── agents/
 │   ├── base.py              # MCP connections (persistent), Bedrock client, run() helper
 │   ├── base_modules/        # Focused sub-modules extracted from base.py (parsers.py, etc.)
+│   ├── paths.py             # Centralized ~/.envoy path resolution (honors ENVOY_CONFIG)
 │   ├── budget.py            # Per-request latency/AI-cost tracking
 │   ├── confirm.py           # Code-level confirmation gate for destructive actions (send/forward/delete)
 │   ├── fetch.py             # Shared data-fetch functions (single source for gather() + workers)

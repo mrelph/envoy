@@ -20,8 +20,9 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 
 from agents.base import invoke_ai
+from agents.paths import config_dir
 
-MEMORY_DIR = os.path.expanduser("~/.envoy/memory")
+MEMORY_DIR = str(config_dir() / "memory")
 ENTRIES_FILE = os.path.join(MEMORY_DIR, "entries.jsonl")
 ENTITIES_FILE = os.path.join(MEMORY_DIR, "entities.json")
 SUMMARY_FILE = os.path.join(MEMORY_DIR, "summary.json")
@@ -61,7 +62,7 @@ INDEX_FLUSH_EVERY_N = 20   # updates
 COMPRESS_FAILURE_BACKOFF = 600  # 10 minutes
 
 # External vault paths (Obsidian, directories) — searched on recall fallback
-VAULT_CONFIG_FILE = os.path.join(os.path.expanduser("~/.envoy"), "config.json")
+VAULT_CONFIG_FILE = str(config_dir() / "config.json")
 
 
 def _ensure_dir():

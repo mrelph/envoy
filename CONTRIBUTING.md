@@ -34,6 +34,7 @@ envoy/
 │   ├── base.py              # MCP connections (persistent), Bedrock client, run() helper
 │   ├── base_modules/        # Focused sub-modules extracted from base.py
 │   │   └── parsers.py       # Email/todo MCP response parsers
+│   ├── paths.py             # Centralized ~/.envoy path resolution (CONFIG_DIR, SOUL_FILE, ... + config_dir(), honors ENVOY_CONFIG)
 │   ├── budget.py            # Per-request latency/AI-cost tracking (RequestBudget)
 │   ├── confirm.py           # Code-level confirmation gate — require_confirmation()/set_user_turn() for destructive actions
 │   ├── fetch.py             # Shared fetch_* functions — single source of truth for gather() and workers
@@ -234,6 +235,8 @@ Unit tests live under `tests/unit/`. They stub out `strands` and `mcp` at import
 ./venv/bin/pytest tests/ -q              # full suite
 ./venv/bin/pytest tests/unit/test_dispatch.py -v   # one file
 ```
+
+All well-known `~/.envoy/*` paths are centralized in `agents/paths.py` (`CONFIG_DIR`/`SOUL_FILE`/... constants plus a `config_dir()`-style function per path); the location itself can be overridden via the `ENVOY_CONFIG` environment variable.
 
 Shared fixtures (`tests/conftest.py`):
 - `envoy_home` — redirects `$HOME` so `~/.envoy` writes land in a tmpdir
