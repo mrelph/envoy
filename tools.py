@@ -2,14 +2,12 @@
 import os
 import re
 from strands import tool
-from envoy_logger import logged_tool
+from envoy_logger import logged_tool, get_logger
 from agents.base import outlook, builder, invoke_ai, check_mcp_connections, _load_models, MODEL_CATALOG, MODELS_FILE, get_token_usage, format_token_usage, reset_token_usage, run
 from agents import email, slack_agent, calendar, todo, tickets, memory2 as memory, teamsnap_agent, people, internal, export
+from agents.paths import CONFIG_JSON_FILE as _CONFIG_FILE, soul_file, envoy_file, process_file, env_file
 
 # --- Filesystem allow-list config ---
-
-_CONFIG_FILE = os.path.expanduser("~/.envoy/config.json")
-
 
 def _load_config() -> dict:
     """Load ~/.envoy/config.json."""
@@ -25,6 +23,28 @@ def _load_config() -> dict:
 def _allowed_dirs() -> list:
     """Return the list of allowed filesystem directories from config."""
     return _load_config().get("allowed_dirs", [])
+
+
+def _is_path_allowed(path: str, allowed: list = None) -> bool:
+    """True if `path` is inside (or equal to) one of the allow-listed dirs.
+
+    Uses os.path.commonpath rather than a plain string prefix match, so an
+    allowed dir of "~/Documents" does NOT also match a sibling directory
+    like "~/Documents-secret" (a `path.startswith(allowed_dir)` check would
+    incorrectly allow that).
+    """
+    if allowed is None:
+        allowed = _allowed_dirs()
+    real_path = os.path.realpath(os.path.expanduser(path))
+    for d in allowed:
+        real_dir = os.path.realpath(os.path.expanduser(d))
+        try:
+            if os.path.commonpath([real_path, real_dir]) == real_dir:
+                return True
+        except ValueError:
+            # e.g. paths on different drives on Windows — never allowed
+            continue
+    return False
 from agents import workflows as wf
 from agents.workers import get_worker
 from agents.skills import get_skills, activate as activate_skill_fn
@@ -92,7 +112,7 @@ def update_soul(rule: str) -> str:
     Args:
         rule: The rule or personality directive to add (will be appended)
     """
-    path = os.path.expanduser("~/.envoy/soul.md")
+    path = str(soul_file())
     existing = _config_has_similar(path, rule)
     if existing:
         return f"⚠️ Similar rule already exists: \"{existing}\"\nNo change made. Use `/settings` to edit manually."
@@ -110,7 +130,7 @@ def update_envoy(preference: str) -> str:
     Args:
         preference: The preference to add (will be appended)
     """
-    path = os.path.expanduser("~/.envoy/envoy.md")
+    path = str(envoy_file())
     existing = _config_has_similar(path, preference)
     if existing:
         return f"⚠️ Similar preference already exists: \"{existing}\"\nNo change made. Use `/settings` to edit manually."
@@ -130,7 +150,7 @@ def update_process(rule: str, section: str = "General") -> str:
         rule: The process rule to add
         section: Section to file it under (Email, Meetings, Cleanup, Slack, Calendar, or any new section)
     """
-    path = os.path.expanduser("~/.envoy/process.md")
+    path = str(process_file())
     header = f"## {section}"
     existing = _config_has_similar(path, rule)
     if existing:
@@ -188,7 +208,7 @@ def add_vip(alias: str) -> str:
 
     # Append to envoy.md under # High Priority People
     entry = f"- {info['name'] or alias} | {info['alias']} | {info['email']} | {info['title']}"
-    path = os.path.expanduser("~/.envoy/envoy.md")
+    path = str(envoy_file())
     content = open(path).read() if os.path.exists(path) else ""
     section = "# High Priority People"
     if section in content:
@@ -432,7 +452,8 @@ Tell me which preset to add, or describe a custom schedule."""
             return "Rejected: schedule must be 5 fields of numbers/*/-/, (e.g. '0 8 * * 1-5')."
         if not re.fullmatch(r"[A-Za-z0-9_\-]+", name):
             return "Rejected: name may only contain letters, digits, '_' and '-'."
-        exe = _envoy_path()
+        import shlex
+        exe = shlex.quote(_envoy_path())
         full_cmd = f"{schedule}  {exe} {command}  {MARKER} {name}"
         crontab = _get_crontab()
         # Remove existing job with same name
@@ -612,14 +633,42 @@ def set_active_agent(agent):
     _active_agent = agent
 
 
+def _skill_tool_registry() -> dict:
+    """Name -> raw tool callable for every tool Envoy knows about.
+
+    Combines the skill-gated extras in _SKILL_TOOLS (not registered on the
+    agent by default — originally just the TeamSnap set) with every tool in
+    _ALL_TOOLS_RAW (registered by default). Built data-driven off the actual
+    tool list rather than a hardcoded per-skill mapping, so a skill-builder
+    skill's `allowed-tools` can reference *any* real tool — not just the
+    original 10 TeamSnap ones — instead of silently no-op'ing.
+    """
+    registry = dict(_SKILL_TOOLS)
+    for fn in _ALL_TOOLS_RAW:
+        name = getattr(fn, "__name__", None)
+        if name:
+            registry[name] = fn
+    return registry
+
+
 def _inject_skill_tools(skill_name: str, allowed_tools: str):
-    """Inject a skill's allowed-tools into the running agent's tool registry."""
+    """Inject a skill's allowed-tools into the running agent's tool registry.
+
+    Unknown tool names (typos, or a skill referencing a tool that doesn't
+    exist) are logged at DEBUG and skipped rather than silently no-op'd with
+    no trace.
+    """
     if not _active_agent or not allowed_tools:
         return
-    tool_names = allowed_tools.split()
-    for name in tool_names:
-        tool_fn = _SKILL_TOOLS.get(name)
+    registry = _skill_tool_registry()
+    for name in allowed_tools.split():
+        tool_fn = registry.get(name)
         if not tool_fn:
+            try:
+                get_logger().log_debug(f"Skill '{skill_name}' requested unknown tool '{name}' — skipping",
+                                        skill=skill_name, tool_name=name)
+            except Exception:
+                pass
             continue
         # Skip if already registered
         try:
@@ -766,9 +815,79 @@ def manage_memory_vaults(action: str, path: str = "") -> str:
 # Worker agent routing — supervisor delegates to specialists
 # ============================================================
 
+def _worker_credentials_expired(e: Exception) -> bool:
+    """True if `e` is the same AWS credential-expiry error invoke_ai retries on.
+
+    Reuses agents.base's classifier rather than duplicating its error-code
+    list here.
+    """
+    try:
+        from agents.base import _is_expired_credentials_error
+        return _is_expired_credentials_error(e)
+    except Exception:
+        return False
+
+
+def _refresh_worker_credentials() -> None:
+    """Mirror invoke_ai's one-shot credential refresh (agents/base.py
+    `invoke_ai`) for the Strands worker path: reload .env, then drop the
+    cached Bedrock client so the next call picks up fresh credentials.
+
+    Doesn't edit agents/base.py — it just pokes the same module-level globals
+    invoke_ai's own retry does, from the outside.
+    """
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(str(env_file()), override=True)
+        load_dotenv(override=True)
+    except Exception:
+        pass
+    try:
+        import agents.base as _base
+        _base._bedrock_client = None
+    except Exception:
+        pass
+
+
+def _record_worker_token_usage(worker_name: str, result) -> None:
+    """Fold a Strands worker call's token usage into the same session-wide
+    tracker invoke_ai populates (agents.base._token_usage).
+
+    _token_usage previously only saw invoke_ai calls, so /token_usage
+    under-reported the dominant Strands spend (H6 in
+    PROJECT-REVIEW-2026-07-06.md). There's no public recorder function on the
+    Strands path in agents.base to call into, so — per that item — we update
+    the shared dict directly, in the same {'input','output','calls','by_tier'}
+    shape `_invoke_ai_once` uses (agents/base.py:881-892). Best-effort: the
+    exact metrics attribute shape is an implementation detail of the strands
+    package (EventLoopMetrics.accumulated_usage with inputTokens/
+    outputTokens), and conftest's stubbed strands has no real metrics at all,
+    so any shape drift must never break a worker call.
+    """
+    try:
+        metrics = getattr(result, "metrics", None)
+        usage = getattr(metrics, "accumulated_usage", None)
+        if not usage:
+            return
+        in_tok = int(usage.get("inputTokens", 0) or 0)
+        out_tok = int(usage.get("outputTokens", 0) or 0)
+        if not in_tok and not out_tok:
+            return
+        from agents.base import _token_usage
+        _token_usage['input'] += in_tok
+        _token_usage['output'] += out_tok
+        _token_usage['calls'] += 1
+        tier_entry = _token_usage['by_tier'].setdefault(f"worker:{worker_name}",
+                                                          {'input': 0, 'output': 0, 'calls': 0})
+        tier_entry['input'] += in_tok
+        tier_entry['output'] += out_tok
+        tier_entry['calls'] += 1
+    except Exception:
+        pass
+
+
 def _delegate(worker_name: str, request: str, _retries: int = 1) -> str:
     """Route to a worker agent with retry and graceful degradation."""
-    from agents.workers.result import WorkerResult
     from agents.workers import reset_worker_session
     import sys
     last_err = None
@@ -776,6 +895,7 @@ def _delegate(worker_name: str, request: str, _retries: int = 1) -> str:
         try:
             result = get_worker(worker_name)(request)
             response = str(result.message) if hasattr(result, 'message') else str(result)
+            _record_worker_token_usage(worker_name, result)
 
             # Empty-prompt artifact: the worker model received no user message
             # (session corruption — usually a stale toolUse with no toolResult)
@@ -799,6 +919,14 @@ def _delegate(worker_name: str, request: str, _retries: int = 1) -> str:
                 err_msg = str(e)
                 if "ValidationException" in err_msg and "toolResult" in err_msg:
                     reset_worker_session(worker_name)
+                elif _worker_credentials_expired(e):
+                    # Same refresh invoke_ai's retry path does, plus drop the
+                    # cached worker instance/session so the next call builds a
+                    # fresh BedrockModel — keeps hour-plus sessions alive past
+                    # STS token expiry on the Strands path too.
+                    print(f"[{worker_name}] credentials expired — refreshing and retrying", file=sys.stderr)
+                    _refresh_worker_credentials()
+                    reset_worker_session(worker_name)
     return f"⚠️ {worker_name} worker unavailable: {last_err}. Other sources may still have the information you need."
 
 
@@ -811,8 +939,14 @@ _EMPTY_PROMPT_HINTS = (
 
 
 def _looks_like_empty_prompt(response: str) -> bool:
-    """Detect the worker artifact emitted when its user message arrives empty."""
-    if not response or len(response) > 4000:
+    """Detect the worker artifact emitted when its user message arrives empty.
+
+    Scoped to short responses (<300 chars, down from 4000) — legitimate
+    substantive answers (e.g. "Your inbox is empty, nothing to triage") can
+    contain these boilerplate phrases too; short length is what makes it an
+    empty-prompt artifact rather than actual content.
+    """
+    if not response or len(response) > 300:
         return False
     low = response.lower()
     return any(h.lower() in low for h in _EMPTY_PROMPT_HINTS)
@@ -890,20 +1024,29 @@ def sharepoint_worker(request: str) -> str:
 
 
 @tool
-def coding_worker(task: str, working_directory: str = "") -> str:
-    """Delegate coding and development tasks to an autonomous coding agent (Claude Code or Kiro).
-    The agent runs to completion — it can read/write files, run commands, run tests, and iterate.
-    Use for: writing code, fixing bugs, refactoring, creating scripts, code review, generating
-    config files, or any software development task.
+def coding_worker(task: str, working_directory: str = "", allow_edits: bool = False) -> str:
+    """Run an autonomous coding agent (Claude Code or Kiro) to completion on a task.
+    The agent can read files and, only if explicitly permitted, write files and run commands,
+    iterating until done. Use for: writing code, fixing bugs, refactoring, creating scripts,
+    code review, generating config files, or any software development task.
+
+    Calls straight through to the coding CLI subprocess — there is no intermediate agent
+    to fill in gaps, so pass a complete, self-contained task description (what to change,
+    expected behavior/edge cases, and any language/framework/style constraints).
+
+    Runs in read-only/plan mode by default. Edits, file writes, and shell commands require
+    explicit allow_edits=True — only set that when the user has clearly asked for changes
+    to be made, not just analyzed.
 
     Args:
-        task: Detailed description of the coding task to accomplish
-        working_directory: Directory to work in (default: current directory)
+        task: Detailed, self-contained description of the coding task to accomplish
+        working_directory: Directory to work in (default: current directory). Must be
+            under an allow-listed directory (see local_files' allowed_dirs config).
+        allow_edits: Whether the agent may edit files / run commands (default: False —
+            read-only plan mode). Requires explicit allow_edits=True to permit edits.
     """
-    request = task
-    if working_directory:
-        request = f"[working_directory={working_directory}] {task}"
-    return _delegate("coding", request)
+    from agents.workers.coding_worker import run_coding_agent
+    return run_coding_agent(task, working_directory=working_directory, allow_edits=allow_edits)
 
 
 # --- Export tools (stay on supervisor — they take content from other tools) ---
@@ -970,8 +1113,10 @@ def local_files(action: str, path: str = "", content: str = "") -> str:
     path = os.path.expanduser(path)
     path = os.path.realpath(path)
 
-    # Enforce allow-list
-    if not any(path.startswith(os.path.realpath(os.path.expanduser(d))) for d in allowed):
+    # Enforce allow-list (commonpath equality, not a prefix/startswith match —
+    # startswith would let "/x/Documents-secret" through when "/x/Documents"
+    # is the allowed dir).
+    if not _is_path_allowed(path, allowed):
         return f"⚠️ Access denied. Path not in allowed_dirs: {allowed}"
 
     if action == "list":

@@ -27,8 +27,14 @@ done
 if [ ! -f "$SCRIPT_DIR/venv/bin/python3" ]; then
     echo "  Setting up Python environment..."
     if ! python3 -m venv "$SCRIPT_DIR/venv" 2>/dev/null; then
-        echo "  ⚠  python3-venv not found — installing it..."
-        sudo apt install -y python3-venv || { echo "  ✗ Failed to install python3-venv"; exit 1; }
+        if [ "$(uname)" = "Linux" ] && command -v apt-get &>/dev/null; then
+            echo "  ⚠  python3-venv not found — installing it..."
+            sudo apt-get install -y python3-venv || { echo "  ✗ Failed to install python3-venv"; exit 1; }
+        else
+            echo "  ✗ python3-venv (or a Python <3.10 interpreter) not found."
+            echo "    Install python3-venv/python3.10+ via your package manager (e.g. 'brew install python3' on macOS) and re-run ./install.sh."
+            exit 1
+        fi
         python3 -m venv "$SCRIPT_DIR/venv"
     fi
     "$SCRIPT_DIR/venv/bin/pip" install -q -r "$SCRIPT_DIR/requirements.txt"
@@ -78,6 +84,6 @@ echo "  ✓ Install complete!"
 echo ""
 echo "  Next steps:"
 echo "    envoy init    # configure your identity and agent personality"
-echo "    envoy         # launch the interactive REPL"
+echo "    envoy         # launch the TUI (falls back to a plain REPL without Textual)"
 echo "    envoy --help  # see all commands"
 echo ""

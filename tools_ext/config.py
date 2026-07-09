@@ -3,6 +3,7 @@
 import os
 from strands import tool
 from agents.base import outlook, builder, run
+from agents.paths import soul_file, envoy_file, process_file
 
 
 def _config_has_similar(path: str, new_rule: str, threshold: float = 0.6) -> str:
@@ -33,7 +34,7 @@ def update_soul(rule: str) -> str:
     Args:
         rule: The rule or personality directive to add
     """
-    path = os.path.expanduser("~/.envoy/soul.md")
+    path = str(soul_file())
     existing = _config_has_similar(path, rule)
     if existing:
         return f"⚠️ Similar rule already exists: \"{existing}\"\nNo change made. Use `/settings` to edit manually."
@@ -50,7 +51,7 @@ def update_envoy(preference: str) -> str:
     Args:
         preference: The preference to add
     """
-    path = os.path.expanduser("~/.envoy/envoy.md")
+    path = str(envoy_file())
     existing = _config_has_similar(path, preference)
     if existing:
         return f"⚠️ Similar preference already exists: \"{existing}\"\nNo change made. Use `/settings` to edit manually."
@@ -68,7 +69,7 @@ def update_process(rule: str, section: str = "General") -> str:
         rule: The process rule to add
         section: Section to file it under (Email, Meetings, Cleanup, Slack, Calendar, or any new section)
     """
-    path = os.path.expanduser("~/.envoy/process.md")
+    path = str(process_file())
     header = f"## {section}"
     existing = _config_has_similar(path, rule)
     if existing:
@@ -120,7 +121,7 @@ def add_vip(alias: str) -> str:
         pass
 
     entry = f"- {info['name'] or alias} | {info['alias']} | {info['email']} | {info['title']}"
-    path = os.path.expanduser("~/.envoy/envoy.md")
+    path = str(envoy_file())
     content = open(path).read() if os.path.exists(path) else ""
     section = "# High Priority People"
     if section in content:

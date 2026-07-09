@@ -10,6 +10,7 @@ Usage:
 """
 
 import asyncio
+import hashlib
 import json
 import os
 import signal
@@ -22,7 +23,7 @@ from agents import slack_agent
 from agents.heartbeat import _run_heartbeat_async
 
 from agents.base import current_user as _USER  # call-time alias resolution
-_ENVOY_DIR = Path.home() / ".envoy"
+from agents.paths import CONFIG_DIR as _ENVOY_DIR
 _STATE_FILE = _ENVOY_DIR / "watcher_state.json"
 _stop = False
 
@@ -39,8 +40,50 @@ def _save_state(state: dict):
     _STATE_FILE.write_text(json.dumps(state, indent=2))
 
 
+def _slack_channel_lines(raw_text: str, seen_channels: dict, digest_key: str, state: dict) -> list:
+    """Return lines for channels whose unread state actually changed.
+
+    Dedups per-channel, keyed on the Slack channel id (a stable identifier)
+    rather than hashing the whole unread payload — hashing the whole blob
+    means a single new message in one channel causes every other still-
+    unread-but-already-reported channel to be re-announced too. This is the
+    same class of bug as heartbeat's model-text dedup (see heartbeat.py's
+    module comment): comparing a blob instead of stable IDs.
+
+    Falls back to the old whole-payload content-hash behavior if the tool
+    response isn't the expected {"channels": [...]} shape.
+    """
+    try:
+        channels = json.loads(raw_text).get("channels") if raw_text else []
+    except Exception:
+        channels = None
+
+    if channels is None:
+        digest = hashlib.md5(raw_text.encode()).hexdigest() if raw_text else ""
+        if not digest or digest == state.get(digest_key):
+            state[digest_key] = digest
+            return []
+        state[digest_key] = digest
+        return [raw_text.strip()] if raw_text.strip() else []
+
+    lines = []
+    for c in channels:
+        cid = c.get("id")
+        if not cid:
+            continue
+        fingerprint = f"{c.get('last_read', '')}|{c.get('unread_count', c.get('unread', ''))}"
+        if seen_channels.get(cid) == fingerprint:
+            continue
+        seen_channels[cid] = fingerprint
+        lines.append(f"- {c.get('name', cid)}: {json.dumps(c, default=str)[:300]}")
+    return lines
+
+
 async def _check_slack(state: dict) -> str:
-    """Return summary of new unread DMs/mentions since last tick, or ''."""
+    """Return summary of new unread DMs/mentions since last tick, or ''.
+
+    See _slack_channel_lines() for the per-channel dedup this delegates to.
+    """
     try:
         async with slack() as s:
             dm_result = await s.call_tool(
@@ -56,18 +99,22 @@ async def _check_slack(state: dict) -> str:
     except Exception as e:
         return f"⚠️ Slack check failed: {e}"
 
-    # Dedup via content hash of unread payload — if nothing changed, skip
-    import hashlib
-    digest = hashlib.md5((dm_text + mention_text).encode()).hexdigest()
-    if digest == state.get("last_slack_digest"):
-        return ""
-    state["last_slack_digest"] = digest
+    seen_channels = state.setdefault("seen_channels", {})
+    new_dm_lines = _slack_channel_lines(dm_text, seen_channels, "last_dm_digest", state)
+    new_mention_lines = _slack_channel_lines(mention_text, seen_channels, "last_mention_digest", state)
+
+    # Bound the per-channel state so it doesn't grow forever (dict preserves
+    # insertion order — drop the oldest-inserted entries first).
+    if len(seen_channels) > 500:
+        for k in list(seen_channels.keys())[: len(seen_channels) - 500]:
+            del seen_channels[k]
+    state["seen_channels"] = seen_channels
 
     parts = []
-    if dm_text.strip():
-        parts.append(f"**DMs/group DMs with unread:**\n{dm_text.strip()[:1500]}")
-    if mention_text.strip():
-        parts.append(f"**Channels with unread:**\n{mention_text.strip()[:1500]}")
+    if new_dm_lines:
+        parts.append("**DMs/group DMs with unread:**\n" + "\n".join(new_dm_lines)[:1500])
+    if new_mention_lines:
+        parts.append("**Channels with unread:**\n" + "\n".join(new_mention_lines)[:1500])
     return "\n\n".join(parts)
 
 

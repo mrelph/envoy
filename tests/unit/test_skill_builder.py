@@ -8,8 +8,13 @@ NOTE on observed behavior vs. spec:
     `no_ai` fixture (which patches `agents.base.invoke_ai`) does not
     intercept calls made from inside skill_builder. We patch the symbol
     on the skill_builder module directly.
+  * `generate_skill` now makes a single structured (JSON) AI call for
+    {slug, description, body}. If that response can't be parsed, it falls
+    back to the previous 3-call sequence (slug, then description, then
+    body) so behavior degrades gracefully instead of breaking.
 """
 
+import json
 from pathlib import Path
 
 import pytest
@@ -63,16 +68,18 @@ _FAKE_SKILL_MD = (
 )
 
 
+def _fake_json_response(slug="do-thing", description="Does the thing.", body=_FAKE_SKILL_MD):
+    """Build a raw AI response string containing the {slug, description, body} JSON."""
+    return json.dumps({"slug": slug, "description": description, "body": body})
+
+
 # --- generate_skill --------------------------------------------------------
 
 class TestGenerateSkill:
-    def test_with_explicit_slug_writes_skill_via_save(self, envoy_home, monkeypatch):
+    def test_single_json_call_with_explicit_slug(self, envoy_home, monkeypatch):
         user_skills = _redirect_skill_paths(monkeypatch, envoy_home)
-        # When slug is supplied, only 2 invoke_ai calls happen: description + content.
-        calls = _patch_invoke_ai(
-            monkeypatch,
-            ["Does the thing.", _FAKE_SKILL_MD],
-        )
+        # A single structured JSON call replaces the old 3-call sequence.
+        calls = _patch_invoke_ai(monkeypatch, [_fake_json_response(slug="do-thing")])
 
         content, slug = sb.generate_skill(
             request="Triage my inbox each morning",
@@ -80,11 +87,17 @@ class TestGenerateSkill:
             tools="email_worker",
         )
 
+        assert len(calls) == 1
+        assert calls[0]["tier"] == "medium"
         assert slug == "do-thing"
-        # generate_skill calls .strip() on the AI response.
         assert content == _FAKE_SKILL_MD.strip()
         # No file is written by generate_skill itself — only save_skill does that.
         assert not (user_skills / "do-thing" / "SKILL.md").exists()
+
+        # Explicit slug must be threaded into the prompt so the model uses it.
+        assert "do-thing" in calls[0]["prompt"]
+        assert "email_worker" in calls[0]["prompt"]
+        assert "Triage my inbox each morning" in calls[0]["prompt"]
 
         # Now save and confirm the file lands in the right place.
         path_str = sb.save_skill(content, slug)
@@ -97,23 +110,11 @@ class TestGenerateSkill:
         discovered = skills_mod.get_skills()
         assert "do-thing" in discovered
 
-        # --- Inspect the prompts that were sent to AI ---
-        # First call: description prompt — must include the user's request.
-        assert "Triage my inbox each morning" in calls[0]["prompt"]
-        assert calls[0]["tier"] == "light"
-        # Second call: full content prompt — must include slug, tools, request.
-        full_prompt = calls[1]["prompt"]
-        assert "do-thing" in full_prompt
-        assert "email_worker" in full_prompt
-        assert "Triage my inbox each morning" in full_prompt
-        assert calls[1]["tier"] == "medium"
-
-    def test_empty_slug_is_derived_from_request_via_ai(self, envoy_home, monkeypatch):
+    def test_single_json_call_slug_derived_by_ai(self, envoy_home, monkeypatch):
         _redirect_skill_paths(monkeypatch, envoy_home)
-        # No slug provided → 3 invoke_ai calls: slug, description, content.
         calls = _patch_invoke_ai(
             monkeypatch,
-            ['"morning-triage"', "Triages mail in the AM.", _FAKE_SKILL_MD],
+            [_fake_json_response(slug="morning-triage", description="Triages mail in the AM.")],
         )
 
         content, slug = sb.generate_skill(
@@ -122,20 +123,137 @@ class TestGenerateSkill:
             tools="",
         )
 
-        # AI returned a quoted string — implementation strips surrounding quotes.
+        assert len(calls) == 1
         assert slug == "morning-triage"
         assert content == _FAKE_SKILL_MD.strip()
 
-        # First call should have been the slug-generation prompt.
-        assert "slug" in calls[0]["prompt"].lower()
-        assert "Triage my inbox each morning" in calls[0]["prompt"]
-        assert calls[0]["tier"] == "light"
+        # When tools is empty, generate_skill falls back to a default list.
+        assert "email_worker" in calls[0]["prompt"] or "comms_worker" in calls[0]["prompt"]
 
-        # When tools is empty, generate_skill falls back to a default list —
-        # confirm something tool-ish made it into the final prompt.
-        final_prompt = calls[2]["prompt"]
-        assert "morning-triage" in final_prompt
-        assert "email_worker" in final_prompt or "comms_worker" in final_prompt
+    def test_malformed_json_falls_back_to_sequential_calls(self, envoy_home, monkeypatch):
+        _redirect_skill_paths(monkeypatch, envoy_home)
+        # First call returns unparsable garbage → triggers the 3-call fallback.
+        calls = _patch_invoke_ai(
+            monkeypatch,
+            ["not json at all", '"morning-triage"', "Triages mail in the AM.", _FAKE_SKILL_MD],
+        )
+
+        content, slug = sb.generate_skill(
+            request="Triage my inbox each morning",
+            slug="",
+            tools="",
+        )
+
+        assert len(calls) == 4
+        assert calls[0]["tier"] == "medium"  # the failed structured attempt
+        assert slug == "morning-triage"
+        assert content == _FAKE_SKILL_MD.strip()
+
+        # Fallback slug-generation prompt.
+        assert "slug" in calls[1]["prompt"].lower()
+        assert calls[1]["tier"] == "light"
+        # Fallback description prompt.
+        assert calls[2]["tier"] == "light"
+        # Fallback full-content prompt.
+        assert "morning-triage" in calls[3]["prompt"]
+        assert calls[3]["tier"] == "medium"
+
+    def test_json_missing_required_key_falls_back(self, envoy_home, monkeypatch):
+        _redirect_skill_paths(monkeypatch, envoy_home)
+        # Valid JSON, but missing "body" — still unusable, should fall back.
+        calls = _patch_invoke_ai(
+            monkeypatch,
+            [
+                json.dumps({"slug": "x", "description": "y"}),
+                '"morning-triage"',
+                "Triages mail in the AM.",
+                _FAKE_SKILL_MD,
+            ],
+        )
+
+        content, slug = sb.generate_skill(request="Triage my inbox", slug="", tools="")
+
+        assert len(calls) == 4
+        assert slug == "morning-triage"
+        assert content == _FAKE_SKILL_MD.strip()
+
+    def test_json_embedded_in_prose_is_still_parsed(self, envoy_home, monkeypatch):
+        _redirect_skill_paths(monkeypatch, envoy_home)
+        wrapped = "Sure, here you go:\n```json\n" + _fake_json_response() + "\n```"
+        calls = _patch_invoke_ai(monkeypatch, [wrapped])
+
+        content, slug = sb.generate_skill(request="Triage my inbox", slug="do-thing", tools="")
+
+        assert len(calls) == 1
+        assert slug == "do-thing"
+        assert content == _FAKE_SKILL_MD.strip()
+
+
+# --- slug sanitization ------------------------------------------------------
+
+class TestSlugSanitization:
+    def test_sanitize_slug_lowercases_and_hyphenates_spaces(self):
+        assert sb._sanitize_slug("Morning Triage") == "morning-triage"
+
+    def test_sanitize_slug_strips_disallowed_characters(self):
+        assert sb._sanitize_slug("do_thing! now?") == "dothing-now"
+
+    def test_sanitize_slug_neutralizes_path_traversal(self):
+        # Separators are stripped, so the result can never escape SKILLS_DIR.
+        assert sb._sanitize_slug("../../evil") == "evil"
+        assert "/" not in sb._sanitize_slug("../../evil")
+
+    def test_sanitize_slug_raises_when_nothing_usable_remains(self):
+        with pytest.raises(ValueError):
+            sb._sanitize_slug("../../")
+        with pytest.raises(ValueError):
+            sb._sanitize_slug("!!!")
+        with pytest.raises(ValueError):
+            sb._sanitize_slug("")
+
+    def test_generate_skill_rejects_unusable_explicit_slug(self, envoy_home, monkeypatch):
+        _redirect_skill_paths(monkeypatch, envoy_home)
+        calls = _patch_invoke_ai(monkeypatch, ["should not be called"])
+
+        content, slug = sb.generate_skill(request="Do a thing", slug="!!!", tools="")
+
+        assert slug == ""
+        assert content.startswith("Error")
+        # Invalid slug is rejected before any AI call is made.
+        assert calls == []
+
+    def test_generate_skill_normalizes_traversal_slug(self, envoy_home, monkeypatch):
+        user_skills = _redirect_skill_paths(monkeypatch, envoy_home)
+        calls = _patch_invoke_ai(monkeypatch, [_fake_json_response(slug="evil")])
+
+        content, slug = sb.generate_skill(request="Do a thing", slug="../../evil", tools="")
+
+        assert slug == "evil"
+        assert len(calls) == 1
+
+        path_str = sb.save_skill(content, slug)
+        # The file must land inside SKILLS_DIR/evil, not have escaped it.
+        assert Path(path_str) == user_skills / "evil" / "SKILL.md"
+        assert (user_skills / "evil").resolve().parent == user_skills.resolve()
+
+    def test_save_skill_rejects_unusable_slug(self, envoy_home, monkeypatch):
+        user_skills = _redirect_skill_paths(monkeypatch, envoy_home)
+
+        result = sb.save_skill(_FAKE_SKILL_MD, "../../")
+
+        assert result.startswith("Error")
+        # Nothing should have been written anywhere under skills.
+        assert list(user_skills.iterdir()) == []
+
+    def test_save_skill_normalizes_traversal_slug(self, envoy_home, monkeypatch):
+        user_skills = _redirect_skill_paths(monkeypatch, envoy_home)
+
+        path_str = sb.save_skill(_FAKE_SKILL_MD, "../../evil")
+
+        target = user_skills / "evil" / "SKILL.md"
+        assert Path(path_str) == target
+        assert target.exists()
+        assert target.resolve().parent.parent == user_skills.resolve()
 
 
 # --- save_skill -----------------------------------------------------------

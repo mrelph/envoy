@@ -2,11 +2,10 @@
 
 import os
 import re
-import yaml
 from pathlib import Path
 from typing import Dict, Optional
 
-CONFIG_DIR = Path.home() / ".envoy"
+from agents.paths import CONFIG_DIR
 
 # Scan paths in priority order (project > user-client > user-shared)
 SKILL_PATHS = [
@@ -19,6 +18,8 @@ SKILL_PATHS = [
 
 def _parse_skill_md(path: Path) -> Optional[dict]:
     """Parse a SKILL.md file into {name, description, body, location, dir}."""
+    import yaml
+
     try:
         text = path.read_text()
     except Exception:

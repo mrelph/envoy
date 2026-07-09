@@ -34,7 +34,7 @@ def run_interactive():
         stripped = raw.strip()
         if not stripped:
             continue
-        if stripped.lower() in ("quit", "exit", "q", "/exit", "/quit"):
+        if stripped.lower() in ("quit", "exit", "/exit", "/quit"):
             print("Goodbye!")
             break
 
@@ -73,16 +73,21 @@ def run_interactive():
             import subprocess
             print("  Launching mwinit — check your browser…")
             subprocess.run(["mwinit", "-o"])
-            from agents.base import _persistent
-            _persistent.clear()
+            # Close (not just forget) persistent MCP sessions so their
+            # subprocesses don't leak; they respawn with fresh creds on demand.
+            from agents.base import _cleanup_persistent
+            _cleanup_persistent()
             print("  ✓ Midway refreshed")
             continue
 
         # Refresh in case /models (or another path) called reload_agent().
         agent = get_agent()
-        result, handled = dispatch(stripped, agent)
+        try:
+            result, handled = dispatch(stripped, agent)
+        except Exception as e:
+            print(f"\n⚠ {type(e).__name__}: {e}\n")
+            continue
         if handled and result:
             print(f"\n{result}\n")
         elif not handled:
-            # System command not handled by dispatch
-            pass
+            print(f"\n⚠ {stripped.split()[0]} is not available in this interface\n")

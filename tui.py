@@ -1,6 +1,9 @@
 """Envoy — Textual TUI interface."""
 
 import os
+import re
+import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from textual.app import App, ComposeResult
@@ -10,14 +13,13 @@ from textual.widgets import Static, Input, RichLog, Label, TextArea, OptionList
 from textual.widgets.option_list import Option, Separator
 from textual.binding import Binding
 from textual.worker import get_current_worker
-from textual import work, on
+from textual import events, work, on
 from rich.markdown import Markdown
 from rich.text import Text
 
 from dispatch import COMMANDS, COMMAND_GROUPS, dispatch_with_learning as dispatch
+from agents.paths import CONFIG_DIR, SOUL_FILE
 
-CONFIG_DIR = Path.home() / ".envoy"
-SOUL_FILE = CONFIG_DIR / "soul.md"
 VERSION = (Path(__file__).parent / "VERSION").read_text().strip()
 
 LOGO = r"""[bold #58a6ff]
@@ -87,6 +89,47 @@ def _get_hint(text: str) -> str:
     return "🤔 Thinking"
 
 
+_MD_HEADING_RE = re.compile(r"(?m)^#{1,3} ")
+_MD_TABLE_ROW_RE = re.compile(r"(?m)^\s*\|.*\|\s*$")
+
+
+def _looks_like_markdown(text: str) -> bool:
+    """Heuristic: does `text` contain strong-enough markdown signals to be
+    worth reflowing through `rich.markdown.Markdown`?
+
+    Deliberately conservative — the previous heuristic (`"- " in text`)
+    reflowed ordinary prose containing a plain hyphen ("day-to-day", "- "
+    as an em-dash substitute, etc.). Require an actual heading line, a
+    fenced code block, a table row, or repeated bold markers instead.
+    """
+    if "```" in text:
+        return True
+    if _MD_HEADING_RE.search(text):
+        return True
+    if _MD_TABLE_ROW_RE.search(text):
+        return True
+    if text.count("**") >= 2:
+        return True
+    return False
+
+
+def _should_rerender_as_markdown(stream_started: bool, text: str) -> bool:
+    """Decide whether `_show()` should write a formatted Markdown render of `text`.
+
+    RichLog is append-only — it can't replace lines already written. If the
+    response streamed live, the plain text already on screen IS the
+    permanent record; re-writing the whole answer a second time as Markdown
+    would mean the user scrolls past the same answer twice, and the
+    formatting gain doesn't cover that cost. So once anything has streamed
+    for this turn, never re-render — Markdown formatting is reserved for
+    the non-streamed path (responses that arrived with no stream chunks at
+    all, e.g. a purely synchronous command).
+    """
+    if stream_started:
+        return False
+    return _looks_like_markdown(text)
+
+
 # ── Widgets ──────────────────────────────────────────────
 
 
@@ -112,7 +155,17 @@ class MCPBar(Static):
             t.append(name, style="#e6edf3" if ok else "#484f58")
             t.append("  ")
         self._content = t
-        self.app.call_from_thread(self.refresh)
+
+        def _done() -> None:
+            self.refresh()
+            # Stop the global spinner /status and F5 (action_refresh_mcp) start —
+            # otherwise it spins forever once the check completes.
+            try:
+                self.app.query_one("#spinner", Spinner).stop()
+            except Exception:
+                pass
+
+        self.app.call_from_thread(_done)
 
 
 class Spinner(Static):
@@ -166,9 +219,13 @@ class StatusBar(Static):
 
         model = ""
         try:
-            from agents.base import _load_models
-            import re
-            mid = _load_models().get("agent", "")
+            # model_for() reads models.json once and keeps it in an
+            # in-memory cache (agents.base._models_cache), invalidated only
+            # by reload_models() — unlike _load_models(), which always hits
+            # disk. Use it here so a 30s status-bar tick isn't a fresh
+            # models.json read every time.
+            from agents.base import model_for
+            mid = model_for("agent")
             m = re.search(r'claude-(?:\d+-\d+-)?(\w+)-?(\d+)?', mid)
             if m:
                 name = m.group(1)
@@ -274,18 +331,6 @@ class ModelPickerScreen(ModalScreen[str | None]):
     def on_mount(self) -> None:
         self._show_tier_list()
 
-    def _show_tier_list(self) -> None:
-        from agents.base import _load_models, DEFAULT_MODELS, MODEL_CATALOG
-        models = _load_models()
-        ol = self.query_one("#picker-list", OptionList)
-        ol.clear_options()
-        for tier in DEFAULT_MODELS:
-            mid = models.get(tier, DEFAULT_MODELS[tier])
-            name = next((c[1] for c in MODEL_CATALOG if c[0] == mid), mid.split(".")[-1])
-            ol.add_option(Option(f"  {tier:<8} → {name}", id=tier))
-        ol.add_option(Separator())
-        ol.add_option(Option("  ↩ Cancel", id="__cancel__"))
-
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         if self._phase == "tier":
             if event.option.id == "__cancel__":
@@ -306,11 +351,52 @@ class ModelPickerScreen(ModalScreen[str | None]):
             self._apply(tier, model_id)
 
     def _show_model_list(self) -> None:
-        from ui import _fetch_model_catalog
-        from agents.base import MODEL_CATALOG, _load_models, DEFAULT_MODELS
+        """Populate the model list for the selected tier.
 
-        live = _fetch_model_catalog(refresh=False)
+        `_fetch_model_catalog` makes synchronous boto3 network calls on a
+        cache miss — calling it directly here would block the UI thread for
+        as long as those calls take. `ui._read_cache()` does only a cheap
+        disk read of the same 1h cache, so a warm cache renders immediately;
+        a cold/expired cache falls back to a `@work(thread=True)` fetch with
+        a placeholder shown in the meantime.
+        """
+        from ui import _read_cache
+
+        cached = _read_cache()
+        if cached is not None:
+            self._render_model_list(cached)
+            return
+
+        ol = self.query_one("#picker-list", OptionList)
+        ol.clear_options()
+        self.query_one("#model-picker-box Static", Static).update(
+            f"⚙️  Select model for [{self._selected_tier}]"
+        )
+        ol.add_option(Option("  ⏳ loading model catalog…", id="__loading__", disabled=True))
+        self._fetch_catalog_worker()
+
+    @work(thread=True, exclusive=True, group="model-catalog")
+    def _fetch_catalog_worker(self) -> None:
+        """Background thread: the actual (possibly network-hitting) catalog fetch."""
+        from ui import _fetch_model_catalog
+        from agents.base import MODEL_CATALOG
+
+        try:
+            live = _fetch_model_catalog(refresh=False)
+        except Exception:
+            live = []
         catalog = live if live else [(mid, name, desc) for mid, name, desc in MODEL_CATALOG]
+        self.app.call_from_thread(self._render_model_list, catalog)
+
+    def _render_model_list(self, catalog) -> None:
+        """UI thread: paint the (already-fetched) catalog into the OptionList."""
+        from agents.base import _load_models, DEFAULT_MODELS
+
+        # The phase may have moved on (e.g. user backed out) while a
+        # background fetch was in flight — don't paint a stale list over
+        # whatever screen state is now current.
+        if self._phase != "model":
+            return
 
         current_mid = _load_models().get(self._selected_tier, DEFAULT_MODELS.get(self._selected_tier, ""))
 
@@ -368,6 +454,34 @@ class ModelPickerScreen(ModalScreen[str | None]):
         self.dismiss(None)
 
 
+# ── Chat input widget ────────────────────────────────────
+
+
+class ChatInput(TextArea):
+    """TextArea that flags paste-inserted text so Enter-submit logic can skip it.
+
+    Textual dispatches privately-named `_on_xxx` handlers by walking the MRO:
+    overriding `_on_paste` does NOT replace TextArea's own `_on_paste` — both
+    get invoked independently for every `Paste` event (this subclass's
+    version runs first, since subclasses precede base classes in the MRO
+    walk). So this method only sets the flag; TextArea's own handler (run
+    right after, by the framework) performs the actual verbatim insert.
+    Calling `super()._on_paste()` here would insert the pasted text twice.
+    The App's `_on_input_changed` handler consumes (and clears) the flag
+    once, so a pasted block — even one ending in a newline — lands intact
+    instead of auto-submitting.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.suppress_next_submit = False
+
+    async def _on_paste(self, event: events.Paste) -> None:
+        if self.read_only:
+            return
+        self.suppress_next_submit = True
+
+
 # ── App ──────────────────────────────────────────────────
 
 
@@ -383,6 +497,7 @@ class EnvoyApp(App):
         Binding("ctrl+y", "copy_output", "Copy selection", show=False),
         Binding("f5", "refresh_mcp", "Refresh", show=False),
         Binding("escape", "focus_input", "", show=False),
+        Binding("alt+enter", "insert_newline", "Newline", show=False),
         Binding("ctrl+up", "history_prev", "Previous command", show=False),
         Binding("ctrl+down", "history_next", "Next command", show=False),
     ]
@@ -393,7 +508,6 @@ class EnvoyApp(App):
     def __init__(self):
         super().__init__()
         self._agent = None
-        self._pending_prompt = None  # e.g. "models" → next input is interpreted as /models <args>
         self._busy = False  # True while a command is in flight (prevents concurrent agent calls)
         self._history: list[str] = []
         self._history_pos: int | None = None  # None = not browsing; else index into _history
@@ -404,8 +518,14 @@ class EnvoyApp(App):
         # Streaming state: chunks the agent emits live, written to RichLog as they arrive.
         # The final result is suppressed on render if it matches what we streamed.
         self._stream_buffer: list[str] = []
-        self._stream_pending: str = ""   # bytes not yet flushed to UI
+        self._stream_pending: str = ""   # text not yet flushed to UI
         self._stream_started: bool = False
+        # `_stream_pending` is appended to from the worker thread (inside the
+        # agent's callback handler) and drained on the UI thread (`_flush_stream`,
+        # invoked via call_from_thread) — guard both sides so a chunk arriving
+        # mid-drain can't be lost or duplicated.
+        self._stream_lock = threading.Lock()
+        self._last_text_ts: float = 0.0  # monotonic time of the last flushed text chunk
 
     def compose(self) -> ComposeResult:
         yield MCPBar(id="mcp-bar")
@@ -413,17 +533,34 @@ class EnvoyApp(App):
         yield Spinner(id="spinner")
         with Horizontal(id="input-area"):
             yield Label("›", id="prompt-label")
-            yield TextArea(id="input", language=None, soft_wrap=True, show_line_numbers=False)
+            yield ChatInput(id="input", language=None, soft_wrap=True, show_line_numbers=False)
         yield StatusBar(id="status-bar")
 
     def on_mount(self) -> None:
         out = self.query_one("#output", RichLog)
         out.write(Text.from_markup(LOGO.format(version=VERSION)))
+        self._show_update_notice(out)
         out.write(Text())
         self.query_one("#spinner", Spinner).display = False
         self.query_one("#input", TextArea).focus()
         self._load_history()
         self._init_agent()
+
+    def _show_update_notice(self, out: RichLog) -> None:
+        """Surface the `envoy` wrapper's update stamp file, if present.
+
+        The wrapper writes ~/.envoy/update-available with the newer version
+        string when it detects a newer git tag (absence/empty = up to date).
+        Read defensively — this must never block or crash startup.
+        """
+        try:
+            stamp = CONFIG_DIR / "update-available"
+            latest = stamp.read_text().strip()
+            if latest:
+                ver = latest.lstrip("vV")
+                out.write(Text(f"  ⬆ Envoy v{ver} available — run 'envoy update'", style="#d29922"))
+        except Exception:
+            pass
 
     @work(thread=True, exclusive=True, group="init")
     def _init_agent(self) -> None:
@@ -450,8 +587,21 @@ class EnvoyApp(App):
 
     @on(TextArea.Changed, "#input")
     def _on_input_changed(self, event: TextArea.Changed) -> None:
-        """Submit on Enter (newline). Shift+Enter for actual newline."""
+        """Submit on Enter; Alt+Enter and paste insert a literal newline instead.
+
+        Textual's TextArea always inserts a literal "\\n" when Enter is
+        pressed and posts this Changed event — that's the actual submit
+        signal, detected here as "text ends with a newline". Multi-line
+        pastes (even ones ending in a newline) and Alt+Enter-inserted
+        newlines (see `action_insert_newline`) are flagged via
+        `suppress_next_submit` (set by `ChatInput._on_paste` or
+        `action_insert_newline`) so this handler skips the submit check for
+        that one Changed event and lets the text land intact.
+        """
         ta = event.text_area
+        if getattr(ta, "suppress_next_submit", False):
+            ta.suppress_next_submit = False
+            return
         text = ta.text
         if text.endswith("\n"):
             raw = text.rstrip("\n")
@@ -483,7 +633,7 @@ class EnvoyApp(App):
         if cmd == "/help":
             self._show_help()
             return
-        if cmd in ("/exit", "/quit") or raw.lower() in ("quit", "exit", "q"):
+        if cmd in ("/exit", "/quit") or raw.strip().lower() in ("quit", "exit"):
             self.exit()
             return
         if cmd == "/status":
@@ -493,7 +643,10 @@ class EnvoyApp(App):
             self._run_mwinit()
             return
         if cmd == "/settings":
-            out.write(Text("  Use 'envoy settings' from CLI to edit config.", style="#8b949e"))
+            self._run_settings()
+            return
+        if cmd == "/backup":
+            self._run_backup()
             return
 
         # After a bare `/models`, open the interactive picker modal
@@ -507,32 +660,67 @@ class EnvoyApp(App):
         self._busy = True
         self._run_command(raw, hint)
 
-    def _ingest_stream_chunk(self, chunk: str) -> None:
-        """Worker-thread callback: enqueue a chunk for the UI to flush.
+    def _ingest_stream_chunk(self, chunk) -> None:
+        """Worker-thread callback: enqueue a chunk (or tool event) for the UI.
 
-        Called from inside the agent's callback handler (worker thread). We
-        accumulate into a string buffer and schedule a flush on the UI thread.
-        Splitting flush from receive lets us coalesce many small chunks into
-        a single RichLog write per UI tick.
+        Called from inside the agent's callback handler (worker thread), so
+        two event shapes arrive here (see `agent.set_stream_consumer`):
+        plain text chunks, and `("tool", tool_name)` events fired when a
+        worker/tool starts running. Text chunks accumulate into a string
+        buffer (behind `_stream_lock` — see its declaration in `__init__`)
+        and schedule a flush on the UI thread; splitting flush from receive
+        lets us coalesce many small chunks into a single RichLog write per
+        UI tick. Tool events are dispatched straight to the UI thread so the
+        spinner can restart during a silent worker delegation.
         """
+        if isinstance(chunk, tuple) and len(chunk) == 2 and chunk[0] == "tool":
+            self.app.call_from_thread(self._on_tool_event, chunk[1])
+            return
         self._stream_buffer.append(chunk)
-        self._stream_pending += chunk
+        with self._stream_lock:
+            self._stream_pending += chunk
+            pending_len = len(self._stream_pending)
         # Flush on newline boundaries to keep markdown-ish output legible
-        if "\n" in chunk or len(self._stream_pending) > 200:
+        if "\n" in chunk or pending_len > 200:
             self.app.call_from_thread(self._flush_stream)
 
     def _flush_stream(self) -> None:
         """UI thread: write accumulated streamed text to the RichLog."""
-        if not self._stream_pending:
+        with self._stream_lock:
+            pending = self._stream_pending
+            self._stream_pending = ""
+        if not pending:
             return
         out = self.query_one("#output", RichLog)
+        # Stop the spinner unconditionally: either the very first spinner
+        # (streaming IS the indicator now) or a tool-activity spinner that
+        # `_on_tool_event` restarted mid-turn — text resuming means the gap
+        # is over. Stop() is a no-op if it's already stopped.
+        self.query_one("#spinner", Spinner).stop()
         if not self._stream_started:
-            # Stop the spinner the moment real text arrives — streaming IS the indicator now
-            self.query_one("#spinner", Spinner).stop()
             out.write(Text())
             self._stream_started = True
-        out.write(Text(self._stream_pending, style="#e6edf3"))
-        self._stream_pending = ""
+        out.write(Text(pending, style="#e6edf3"))
+        self._last_text_ts = time.monotonic()
+
+    def _on_tool_event(self, tool_name: str) -> None:
+        """UI thread: a worker/tool started running mid-turn.
+
+        Restarts the spinner with a friendly label so a multi-second (to
+        multi-minute) worker delegation doesn't leave a frozen screen once
+        the initial streamed text has already stopped the spinner. Skipped
+        if text is actively streaming right now — the stream itself is
+        already a sufficient activity indicator — and it stops again the
+        moment text resumes (`_flush_stream`) or the command completes
+        (`_run_command`'s `_show`).
+        """
+        if not self._busy:
+            return
+        if time.monotonic() - self._last_text_ts < 1.0:
+            return
+        from agent import _LABELS
+        label = _LABELS.get(tool_name, tool_name)
+        self.query_one("#spinner", Spinner).start(label)
 
     @work(thread=True, exclusive=True, group="cmd")
     def _run_command(self, raw: str, hint: str) -> None:
@@ -544,8 +732,10 @@ class EnvoyApp(App):
 
         # Reset streaming state and register consumer for this turn.
         self._stream_buffer = []
-        self._stream_pending = ""
+        with self._stream_lock:
+            self._stream_pending = ""
         self._stream_started = False
+        self._last_text_ts = 0.0
         set_stream_consumer(self._ingest_stream_chunk)
 
         error = None
@@ -599,29 +789,29 @@ class EnvoyApp(App):
                 else:
                     out.write(Text(f"\n  ⚠️  {type(error).__name__}: {msg}\n", style="#f85149"))
                 return
+            if not handled:
+                # dispatch() punted a system command back to us that this TUI
+                # doesn't (yet) implement — don't echo the raw command string
+                # as if it were a real response.
+                cmd_name = result if isinstance(result, str) else raw.split()[0]
+                out.write(Text(f"  ⚠ {cmd_name} is not available in the TUI", style="#d29922"))
+                return
             if not result:
                 return
 
             text = str(result)
-            streamed = "".join(self._stream_buffer)
 
-            # If streaming covered the full response, re-render once as Markdown
-            # so headings/bullets land formatted (the live stream is plain text).
-            # Skip if the result is a plain status message (slash commands handled internally).
-            if self._stream_started and streamed and streamed.strip() == text.strip():
-                # Replace the plain stream with a formatted render
-                if any(c in text for c in ("#", "**", "- ", "| ", "```")):
-                    try:
-                        out.write(Text())
-                        out.write(Markdown(text))
-                        out.write(Text())
-                    except Exception:
-                        pass  # plain stream already on screen — no-op
-                else:
-                    out.write(Text())  # just spacing
+            # RichLog can't replace lines already written, so if this turn
+            # streamed anything live, that plain text on screen already IS
+            # the response — don't re-render the full answer a second time
+            # as Markdown (see `_should_rerender_as_markdown`'s docstring:
+            # the duplicate-scroll cost outweighs the formatting gain). Just
+            # add trailing spacing to match the non-streamed path below.
+            if self._stream_started:
+                out.write(Text())
                 return
 
-            if any(c in text for c in ("#", "**", "- ", "| ", "```")):
+            if _should_rerender_as_markdown(self._stream_started, text):
                 try:
                     out.write(Text())
                     out.write(Markdown(text))
@@ -631,8 +821,10 @@ class EnvoyApp(App):
             else:
                 out.write(Text(f"\n{text}\n"))
 
-            # Toast notification
-            self.notify(f"✓ {hint} done", timeout=3)
+            # Toast notification — skip for usage errors / warnings so a
+            # rejected command doesn't get a false "done" toast.
+            if not text.startswith("Usage:") and not text.startswith("⚠"):
+                self.notify(f"✓ {hint} done", timeout=3)
             # Refresh status bar to show updated TTFT/tokens
             self.query_one("#status-bar", StatusBar).refresh()
 
@@ -658,13 +850,73 @@ class EnvoyApp(App):
         def _do_mwinit():
             with self.suspend():
                 subprocess.run(["mwinit", "-o"])
-            # Reconnect MCP sessions with fresh creds
-            from agents.base import _persistent
-            _persistent.clear()
+            # Close (not just forget) persistent MCP sessions so their
+            # subprocesses don't leak, then reconnect with fresh creds.
+            from agents.base import _cleanup_persistent
+            _cleanup_persistent()
             self.action_refresh_mcp()
             self.notify("✓ Midway refreshed", timeout=3)
 
         self.call_later(_do_mwinit)
+
+    def _run_settings(self) -> None:
+        """Run the interactive CLI settings editor under `self.suspend()`.
+
+        Same pattern as `/mwinit` (`_run_mwinit`): `init_cmd.run_settings()`
+        is a synchronous, `input()`-driven console flow, so it needs the
+        TUI's alternate screen suspended rather than a background worker.
+        Settings can change soul/envoy/process files that feed the agent's
+        system prompt, so reload the cached agent afterwards.
+        """
+        out = self.query_one("#output", RichLog)
+        out.write(Text("  Opening settings…", style="#8b949e"))
+
+        def _do_settings():
+            import init_cmd
+            with self.suspend():
+                init_cmd.run_settings()
+            from agent import get_agent, reload_agent
+            reload_agent()
+            self._agent = get_agent()
+            self.notify("✓ Settings updated", timeout=3)
+            self.query_one("#input", TextArea).focus()
+
+        self.call_later(_do_settings)
+
+    def _run_backup(self) -> None:
+        out = self.query_one("#output", RichLog)
+        out.write(Text("  Backing up config, memory, and state…", style="#8b949e"))
+        self._do_backup()
+
+    @work(thread=True, exclusive=True, group="backup")
+    def _do_backup(self) -> None:
+        import contextlib
+        import io
+
+        from backup import run_backup
+
+        path = None
+        err = None
+        try:
+            # run_backup() prints progress via a rich Console tied to
+            # sys.stdout; redirect so it can't scribble on the TUI's
+            # alternate screen buffer.
+            with contextlib.redirect_stdout(io.StringIO()):
+                path = run_backup()
+        except Exception as e:
+            err = f"{type(e).__name__}: {e}"
+
+        def _report():
+            out = self.query_one("#output", RichLog)
+            if err:
+                out.write(Text(f"  ⚠️  Backup failed: {err}", style="#f85149"))
+            elif path:
+                out.write(Text(f"  ✓ Backup saved → {path.name}", style="#3fb950"))
+                self.notify("✓ Backup complete", timeout=3)
+            else:
+                out.write(Text("  Nothing to back up — no config files found.", style="#d29922"))
+
+        self.app.call_from_thread(_report)
 
     # ── Helpers ──
 
@@ -741,7 +993,19 @@ class EnvoyApp(App):
         self.query_one(MCPBar).check()
 
     def action_focus_input(self) -> None:
+        """Escape: cancel the in-flight command if one is running, else just focus input."""
+        if self._busy:
+            self.workers.cancel_group(self, "cmd")
+            self.query_one("#spinner", Spinner).stop()
+            self._busy = False
+            self.query_one("#output", RichLog).write(Text("  ✗ cancelled", style="#f85149"))
         self.query_one("#input", TextArea).focus()
+
+    def action_insert_newline(self) -> None:
+        """Alt+Enter: insert a literal newline into the input without submitting."""
+        ta = self.query_one("#input", TextArea)
+        ta.suppress_next_submit = True
+        ta.insert("\n")
 
     def action_copy_output(self) -> None:
         """Copy selected text (or last output) to clipboard."""

@@ -31,12 +31,20 @@ _context_lock = threading.RLock()
 _CONTEXT_TTL = 1800       # 30 minutes — wipe everything beyond this
 _ITEM_STALE_AFTER = 900   # 15 minutes — individual refs go stale this fast
 
+# Monotonic per-prefix counters for ref-ID generation. These only ever
+# increment (reset only on a full clear_context()) — deriving the next ref
+# from len(existing-keys-with-prefix) instead would reuse a ref number once
+# an earlier item with that number was deleted (e.g. selective expiry on a
+# later gather), silently colliding with — and overwriting — a still-live
+# ref of the same name and corrupting drill_down.
+_ref_counters: dict = {}
+
 
 def _next_ref(prefix: str) -> str:
-    """Generate next reference ID like E1, E2, S1, S2, C1..."""
+    """Generate next reference ID like E1, E2, S1, S2, C1... Never reuses a number."""
     with _context_lock:
-        existing = [k for k in _context["items"] if k.startswith(prefix)]
-        return f"{prefix}{len(existing) + 1}"
+        _ref_counters[prefix] = _ref_counters.get(prefix, 0) + 1
+        return f"{prefix}{_ref_counters[prefix]}"
 
 
 def _store_item(prefix: str, summary: str, **data) -> str:
@@ -60,12 +68,13 @@ def _format_age(ts: float) -> str:
 
 
 def clear_context():
-    """Clear all indexed items and reset timestamp."""
+    """Clear all indexed items, reset the ref counters, and reset timestamp."""
     with _context_lock:
         _context["items"].clear()
         _context["last_email_bodies"].clear()
         _context["last_report"] = ""
         _context["ts"] = 0
+        _ref_counters.clear()
 
 
 def _check_ttl():
@@ -113,7 +122,7 @@ def gather_data(sources: str = "email,slack,calendar,todos", days: int = 1, alia
             # _ITEM_STALE_AFTER so refs from the previous turn don't masquerade
             # as fresh.
             prefix_map = {"email": "E", "slack": "S", "calendar": "C",
-                          "todos": "T", "tickets": "K", "team": "P", "bosses": "P",
+                          "todos": "T", "tickets": "K", "team": "P", "bosses": "B",
                           "vault": "V"}
             refetch_prefixes = {prefix_map[s] for s in source_list if s in prefix_map}
             cutoff = _time.monotonic() - _ITEM_STALE_AFTER
@@ -134,6 +143,10 @@ def gather_data(sources: str = "email,slack,calendar,todos", days: int = 1, alia
                 header = "SLACK (format: [ref] [channel/DM (sender)] (time) sender: message)"
             elif key == "vault":
                 header = "VAULT (personal knowledge base — wiki pages and recent log entries)"
+            elif key == "team":
+                header = "TEAM (direct reports)"
+            elif key == "bosses":
+                header = "BOSSES (management chain)"
             sections.append(f"## {header}\n{value}")
 
     # Cross-reference: find entities that appear in multiple sources
@@ -186,20 +199,27 @@ def _cross_reference(results: dict) -> str:
 
 
 async def _fetch_vault() -> str:
-    """Read wiki/index.md and wiki/log.md from the configured Knowledge Folder."""
+    """Read wiki/index.md and wiki/log.md from the configured Knowledge Folder (in parallel)."""
     from agents.export import _configured_folders
     folder = _configured_folders().get("knowledge", "")
     if not folder:
         return ""
     from agents import sharepoint_agent as sp
-    parts = []
-    for page in ("wiki/index.md", "wiki/log.md"):
+
+    async def _read_page(page):
         try:
             text = await sp.read_file(f"/personal/{os.getenv('USER', '')}_amazon_com/Documents/{folder}/{page}", inline=True)
             if text and not text.startswith("Error") and not text.startswith("Could not"):
-                parts.append(f"### {page}\n{text[:3000]}")
+                return f"### {page}\n{text[:3000]}"
         except Exception:
             pass
+        return None
+
+    pages = ("wiki/index.md", "wiki/log.md")
+    # asyncio.gather preserves input ordering, so index.md always precedes
+    # log.md in the output regardless of which read finishes first.
+    fetched = await asyncio.gather(*[_read_page(p) for p in pages])
+    parts = [p for p in fetched if p]
     return "\n\n".join(parts) if parts else ""
 
 
@@ -220,9 +240,9 @@ async def _gather_async(sources: list, days: int, alias: str) -> dict:
     if "tickets" in sources:
         tasks["tickets"] = fetch.fetch_tickets(alias)
     if "team" in sources:
-        tasks["people"] = fetch.fetch_people(alias, mode="team")
+        tasks["team"] = fetch.fetch_people(alias, mode="team")
     if "bosses" in sources:
-        tasks["people"] = fetch.fetch_people(alias, mode="bosses")
+        tasks["bosses"] = fetch.fetch_people(alias, mode="bosses")
     if "vault" in sources:
         tasks["vault"] = _fetch_vault()
 
@@ -262,9 +282,16 @@ async def _gather_async(sources: list, days: int, alias: str) -> dict:
                         lines.append(f"[{ref}] {e['from']}: {e['subject']} ({e['date']})")
                     results[name] = "\n".join(lines)
                 else:
-                    # People
-                    results[name] = "\n".join(
-                        f"- {p.get('name', p.get('alias', '?'))} ({p.get('alias', '')})" for p in result)
+                    # People (team direct-reports or management-chain bosses —
+                    # distinct ref prefixes so the two lists never collide)
+                    prefix = "B" if name == "bosses" else "P"
+                    lines = []
+                    for p in result:
+                        label = f"{p.get('name', p.get('alias', '?'))} ({p.get('alias', '')})"
+                        ref = _store_item(prefix, label, type="person",
+                                          alias=p.get('alias', ''), name=p.get('name', ''))
+                        lines.append(f"[{ref}] {label}")
+                    results[name] = "\n".join(lines)
             else:
                 results[name] = str(result)
         else:

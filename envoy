@@ -48,6 +48,11 @@ fi
 # Check for new published releases (at most once every 4 hours)
 UPDATE_STAMP="$SCRIPT_DIR/.update_last_check"
 CURRENT_VERSION="$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || echo '0.0.0')"
+# Stamp file the TUI reads at startup to surface the update notice — contains
+# just the newer version string when an update is available, and is removed
+# when the user is up to date. Do not print from the background job below;
+# nothing reads stdout/stderr from a disowned subshell.
+UPDATE_AVAILABLE_STAMP="$HOME/.envoy/update-available"
 if [ -d "$SCRIPT_DIR/.git" ]; then
     run_check=true
     if [ -f "$UPDATE_STAMP" ]; then
@@ -63,17 +68,21 @@ if [ -d "$SCRIPT_DIR/.git" ]; then
         (
             git -C "$SCRIPT_DIR" fetch --tags --quiet 2>/dev/null
             LATEST_TAG=$(git -C "$SCRIPT_DIR" tag -l 'v*' --sort=-version:refname 2>/dev/null | head -1)
+            update_found=false
             if [ -n "$LATEST_TAG" ]; then
                 LATEST_VER="${LATEST_TAG#v}"
                 if [ "$LATEST_VER" != "$CURRENT_VERSION" ]; then
                     # Compare versions numerically
                     printf '%s\n%s\n' "$CURRENT_VERSION" "$LATEST_VER" | sort -t. -k1,1n -k2,2n -k3,3n | tail -1 | grep -qx "$LATEST_VER"
                     if [ $? -eq 0 ] && [ "$LATEST_VER" != "$CURRENT_VERSION" ]; then
-                        echo ""
-                        echo "  ⬆  Envoy $LATEST_TAG available (you have v$CURRENT_VERSION). Run 'envoy update' to upgrade."
-                        echo ""
+                        mkdir -p "$HOME/.envoy" 2>/dev/null
+                        printf '%s' "$LATEST_VER" > "$UPDATE_AVAILABLE_STAMP" 2>/dev/null
+                        update_found=true
                     fi
                 fi
+            fi
+            if [ "$update_found" = false ]; then
+                rm -f "$UPDATE_AVAILABLE_STAMP" 2>/dev/null
             fi
         ) </dev/null >/dev/null 2>&1 &
         disown 2>/dev/null || true

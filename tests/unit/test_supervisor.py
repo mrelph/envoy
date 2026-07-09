@@ -3,8 +3,12 @@
 Covers ref-ID generation, the in-memory context store, TTL behavior,
 cross-reference detection, drill_down, and show_context. Async fetchers
 (`gather`, `_gather_async`, `_fetch_vault`) are intentionally skipped
-because they require live MCP sessions.
+because they require live MCP sessions, except where the People branch of
+`_gather_async` is exercised directly with a monkeypatched `fetch.fetch_people`
+below (no MCP session needed there).
 """
+
+import asyncio
 
 import pytest
 
@@ -56,6 +60,53 @@ class TestRefIdGeneration:
         assert ctx["items"][ref]["summary"] == "subj"
         assert ctx["items"][ref]["type"] == "email"
         assert ctx["items"][ref]["sender"] == "alice"
+
+
+class TestMonotonicRefCounter:
+    """The ref counter must never reuse a number, even after an earlier item
+    with that number is deleted (e.g. selective expiry on a later `gather`).
+    The old length-based scheme (`len(existing) + 1`) would reissue "E3" for
+    a fourth item once "E2" of an "E1..E3" set was deleted, silently
+    overwriting the still-live "E3" and corrupting drill_down."""
+
+    def test_counter_survives_deletion_of_a_middle_ref(self):
+        e1 = supervisor._store_item("E", "one")
+        e2 = supervisor._store_item("E", "two")
+        e3 = supervisor._store_item("E", "three")
+        assert (e1, e2, e3) == ("E1", "E2", "E3")
+
+        # Simulate the selective-expiry deletion gather_data performs.
+        del supervisor._context["items"]["E2"]
+
+        e4 = supervisor._store_item("E", "four")
+        assert e4 == "E4"
+        # The live E3 item is untouched — no collision.
+        assert supervisor._context["items"]["E3"]["summary"] == "three"
+        assert supervisor._context["items"]["E4"]["summary"] == "four"
+
+    def test_counter_survives_deletion_of_the_last_ref(self):
+        # This is the exact scenario from the review: E1-E3 exist, E2 is
+        # deleted by selective expiry, and the *next* email arrives — with
+        # the old scheme this would become a second "E3".
+        supervisor._store_item("E", "one")
+        supervisor._store_item("E", "two")
+        e3 = supervisor._store_item("E", "three")
+        del supervisor._context["items"]["E2"]
+
+        e_next = supervisor._store_item("E", "newest")
+        assert e_next != e3
+        assert e_next == "E4"
+
+    def test_reset_only_happens_on_full_clear(self):
+        supervisor._store_item("E", "one")
+        supervisor._store_item("E", "two")
+        # Deleting items directly (without clear_context) must not reset
+        # the counter.
+        supervisor._context["items"].clear()
+        assert supervisor._store_item("E", "three") == "E3"
+
+        supervisor.clear_context()
+        assert supervisor._store_item("E", "fresh") == "E1"
 
 
 # --- Context store / retrieval ----------------------------------------------
@@ -217,3 +268,45 @@ class TestShowContext:
     def test_missing_ref_returns_friendly_error(self):
         out = supervisor.show_context("NOPE99")
         assert "not found" in out.lower()
+
+
+# --- gather: "team" and "bosses" no longer clobber each other --------------
+
+class TestGatherTeamBossesNoClobber:
+    """Both `tasks["people"]` used to be written by "team" and "bosses",
+    so `sources="team,bosses"` silently dropped one. They now use distinct
+    task keys ("team"/"bosses") and distinct ref prefixes ("P"/"B")."""
+
+    def test_gather_async_keeps_both_sources_with_distinct_refs(self, monkeypatch):
+        from agents import fetch as fetch_mod
+
+        async def _fake_fetch_people(alias, mode="team"):
+            if mode == "team":
+                return [{"alias": "alice", "name": "Alice A"}]
+            return [{"alias": "bob", "name": "Bob B"}]
+
+        monkeypatch.setattr(fetch_mod, "fetch_people", _fake_fetch_people)
+
+        results = asyncio.run(supervisor._gather_async(["team", "bosses"], 1, "jdoe"))
+
+        assert "team" in results and "bosses" in results
+        assert "Alice A" in results["team"]
+        assert "Bob B" in results["bosses"]
+        # Distinct ref prefixes: team -> P, bosses -> B.
+        assert "[P1]" in results["team"]
+        assert "[B1]" in results["bosses"]
+        assert supervisor._context["items"]["P1"]["alias"] == "alice"
+        assert supervisor._context["items"]["B1"]["alias"] == "bob"
+
+    def test_gather_data_renders_distinct_headers_for_both(self, monkeypatch):
+        async def _fake_gather_async(sources, days, alias):
+            return {"team": "[P1] Alice A (alice)", "bosses": "[B1] Bob B (bob)"}
+
+        monkeypatch.setattr(supervisor, "_gather_async", _fake_gather_async)
+
+        out = supervisor.gather_data(sources="team,bosses", days=1, alias="jdoe")
+
+        assert "## TEAM (direct reports)" in out
+        assert "## BOSSES (management chain)" in out
+        assert "Alice A" in out
+        assert "Bob B" in out

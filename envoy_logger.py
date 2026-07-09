@@ -5,6 +5,7 @@ import glob
 import json
 import logging
 import os
+import re
 import sys
 import time
 import uuid
@@ -82,12 +83,15 @@ class EnvoyLogger:
 
     def __init__(
         self,
-        log_dir: str = "~/.envoy/logs/",
+        log_dir: str = None,
         file_level: str = "INFO",
         console_level: str = "WARNING",
         retention_days: int = 14,
         max_output_length: int = 500,
     ):
+        if log_dir is None:
+            from agents.paths import logs_dir
+            log_dir = str(logs_dir())
         self.log_dir = os.path.expanduser(log_dir)
         self.max_output_length = max_output_length
         self.retention_days = retention_days
@@ -152,6 +156,7 @@ class EnvoyLogger:
         """Set up TimedRotatingFileHandler, falling back to console-only on failure."""
         try:
             os.makedirs(self.log_dir, exist_ok=True)
+            _chmod_best_effort(self.log_dir, 0o700)
             today = datetime.now().strftime("%Y-%m-%d")
             log_path = os.path.join(self.log_dir, f"envoy-{today}.log")
             handler = TimedRotatingFileHandler(
@@ -168,6 +173,16 @@ class EnvoyLogger:
                 self.log_dir,
                 f"envoy-{datetime.now().strftime('%Y-%m-%d')}.log",
             )
+            _chmod_best_effort(log_path, 0o600)
+            # Log files should never be group/world-readable, including after
+            # midnight rotation — wrap doRollover to re-apply the mode.
+            _original_rollover = handler.doRollover
+
+            def _rollover_then_chmod():
+                _original_rollover()
+                _chmod_best_effort(handler.baseFilename, 0o600)
+
+            handler.doRollover = _rollover_then_chmod
             self._logger.addHandler(handler)
             self._file_handler = handler
         except (OSError, PermissionError):
@@ -277,6 +292,16 @@ class EnvoyLogger:
         """Register a callback to be invoked on every log entry."""
         self._callbacks.append(callback)
 
+    def set_level(self, level: str):
+        """Raise/lower the file handler's minimum level at runtime (e.g. --verbose)."""
+        lvl = level.upper() if level and level.upper() in _VALID_LEVELS else "DEBUG"
+        self._file_level = lvl
+        if self._file_handler is not None:
+            try:
+                self._file_handler.setLevel(getattr(logging, lvl))
+            except Exception:
+                pass
+
     def cleanup_old_logs(self):
         """Delete log files older than the retention period."""
         try:
@@ -318,15 +343,68 @@ def _truncate(text: str, max_length: int = 500) -> str:
     return text[:max_length] + "..."
 
 
+def _chmod_best_effort(path: str, mode: int):
+    """Best-effort os.chmod — logging/permissions must never crash the app."""
+    try:
+        os.chmod(path, mode)
+    except OSError:
+        pass
+
+
+# --- Secret redaction -----------------------------------------------------
+#
+# Tool arguments/outputs routinely contain OAuth tokens, API keys, and other
+# secrets (e.g. an MCP tool that takes a bearer token as an argument). Redact
+# known-sensitive keys before they ever hit disk, at any nesting depth.
+
+_REDACTED = "***REDACTED***"
+_SENSITIVE_KEY_PATTERN = r"token|secret|password|credential|api[_-]?key|authorization"
+_SENSITIVE_KEY_RE = re.compile(_SENSITIVE_KEY_PATTERN, re.IGNORECASE)
+
+# Best-effort redaction of "key=value" / "\"key\": \"value\"" patterns inside
+# an arbitrary repr() string (the fallback path for non-JSON-serializable
+# values, where we can't walk a real dict/list structure).
+_KV_REDACT_RE = re.compile(
+    r"(?i)([\"']?(?:" + _SENSITIVE_KEY_PATTERN + r")[\"']?\s*[:=]\s*)"
+    r"(\"(?:[^\"\\]|\\.)*\"|'(?:[^'\\]|\\.)*'|[^\s,}\]]+)"
+)
+
+
+def _redact_value(value):
+    """Recursively redact values whose dict key matches a known-sensitive name."""
+    if isinstance(value, dict):
+        redacted = {}
+        for k, v in value.items():
+            if isinstance(k, str) and _SENSITIVE_KEY_RE.search(k):
+                redacted[k] = _REDACTED
+            else:
+                redacted[k] = _redact_value(v)
+        return redacted
+    if isinstance(value, list):
+        return [_redact_value(v) for v in value]
+    if isinstance(value, tuple):
+        return tuple(_redact_value(v) for v in value)
+    return value
+
+
+def _redact_repr(text: str) -> str:
+    """Regex-redact obvious key=value / "key": "value" secrets in a repr() string."""
+    try:
+        return _KV_REDACT_RE.sub(lambda m: f"{m.group(1)}{_REDACTED}", text)
+    except Exception:
+        return text
+
+
 def _sanitize_args(args: dict) -> dict:
-    """Safely serialize tool arguments to JSON-compatible types."""
+    """Safely serialize tool arguments to JSON-compatible types, redacting secrets."""
+    redacted = _redact_value(args)
     sanitized = {}
-    for key, value in args.items():
+    for key, value in redacted.items():
         try:
             json.dumps(value)
             sanitized[key] = value
         except (TypeError, ValueError):
-            sanitized[key] = repr(value)
+            sanitized[key] = _redact_repr(repr(value))
     return sanitized
 
 

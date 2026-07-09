@@ -33,7 +33,7 @@ VERSION = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'VERSION
 
 @click.group(invoke_without_command=True)
 @click.version_option(version=VERSION)
-@click.option('--verbose', '-v', is_flag=True, default=False, help='Enable chain-of-thought verbose output')
+@click.option('--verbose', '-v', is_flag=True, default=False, help='Enable DEBUG-level logging to ~/.envoy/logs/')
 @click.pass_context
 def cli(ctx, verbose):
     """Envoy — Your AI Chief of Staff.
@@ -55,6 +55,10 @@ def cli(ctx, verbose):
     # Store on context for subcommands if needed
     ctx.ensure_object(dict)
     ctx.obj['verbose'] = is_verbose
+
+    if is_verbose:
+        get_logger().set_level("DEBUG")
+        console.print("[dim]verbose logging enabled → ~/.envoy/logs/[/dim]")
 
     if ctx.invoked_subcommand is None:
         try:
@@ -127,7 +131,8 @@ def logs(ctx, level, event_type, tail):
     from datetime import datetime as _dt
 
     today = _dt.now().strftime("%Y-%m-%d")
-    log_dir = os.path.expanduser("~/.envoy/logs/")
+    from agents.paths import logs_dir
+    log_dir = str(logs_dir())
     log_path = os.path.join(log_dir, f"envoy-{today}.log")
 
     if not os.path.isfile(log_path):
@@ -269,48 +274,13 @@ def _main_menu():
 
 
 # --- Command prompt loader ---
-
-def _load_commands() -> dict:
-    """Parse commands.md into {name: template} dict."""
-    import re
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates', 'commands.md')
-    user_path = os.path.expanduser('~/.envoy/commands.md')
-    # User overrides take precedence
-    if os.path.exists(user_path):
-        path = user_path
-    with open(path) as f:
-        text = f.read()
-    commands = {}
-    for block in re.split(r'\n## ', text):
-        lines = block.strip().splitlines()
-        if not lines:
-            continue
-        name = lines[0].strip().lower()
-        body = '\n'.join(lines[1:]).strip()
-        if body:
-            commands[name] = body
-    return commands
-
-
-def _build_prompt(template: str, **kwargs) -> str:
-    """Build an agent prompt from a command template, expanding {if flag} conditionals."""
-    import re
-    # Expand {if key} ... lines: keep line only if kwarg is truthy
-    def _expand_if(m):
-        key = m.group(1)
-        rest = m.group(2).strip()
-        val = kwargs.get(key)
-        if val:
-            # Substitute {key} in the rest of the line
-            return rest.replace(f'{{{key}}}', str(val))
-        return ''
-    result = re.sub(r'\{if\s+(\w+)\}\s*(.*)', _expand_if, template)
-    # Substitute remaining {key} placeholders
-    for k, v in kwargs.items():
-        result = result.replace(f'{{{k}}}', str(v) if v else '')
-    # Clean up blank lines
-    result = '\n'.join(line for line in result.splitlines() if line.strip())
-    return result
+#
+# _load_commands()/_build_prompt() live in dispatch.py so the TUI/REPL slash
+# commands (dispatch()) and these CLI subcommands build prompts from the same
+# templates/commands.md source (with the same ~/.envoy/commands.md override
+# support) instead of drifting apart. dispatch.py has no dependency on cli.py,
+# so this import direction is cycle-safe.
+from dispatch import _load_commands, _build_prompt
 
 
 def _run_agent_command(prompt: str, output: str = None, no_display: bool = False):
@@ -323,7 +293,7 @@ def _run_agent_command(prompt: str, output: str = None, no_display: bool = False
         agent = create_agent()
         result = agent(prompt)
 
-    response = result.message if hasattr(result, 'message') else str(result)
+    response = str(result)
 
     if output:
         with open(output, 'w') as f:
@@ -507,6 +477,7 @@ def watch(interval, once):
 def doctor():
     """Health check — MCP connections, AWS credentials, config, models, memory, skills."""
     from dispatch import _run_doctor
+    from rich.markdown import Markdown
     console.print(Markdown(_run_doctor()))
 
 

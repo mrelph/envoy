@@ -10,15 +10,19 @@ Storage:
     ~/.envoy/memory/summary.json    — rolling compressed summary
 """
 
+import atexit
 import json
 import os
 import re
+import threading
+import time
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 
 from agents.base import invoke_ai
+from agents.paths import config_dir
 
-MEMORY_DIR = os.path.expanduser("~/.envoy/memory")
+MEMORY_DIR = str(config_dir() / "memory")
 ENTRIES_FILE = os.path.join(MEMORY_DIR, "entries.jsonl")
 ENTITIES_FILE = os.path.join(MEMORY_DIR, "entities.json")
 SUMMARY_FILE = os.path.join(MEMORY_DIR, "summary.json")
@@ -37,8 +41,28 @@ RECALL_DEFAULT = 20      # entries returned by default
 TIER_KEEP_DAYS = {"routine": 3, "notable": 14, "permanent": 9999}
 COMPRESS_AFTER_DAYS = 7  # compress notable entries older than this
 
+# Conservative floor for the byte size of a minimal JSON entry line (id + ts +
+# type + importance + text + entities, all near-empty). Real entries run
+# larger (up to MAX_ENTRY_LEN=500 chars of text alone), so a file smaller than
+# MAX_ENTRIES * MIN_ENTRY_BYTES cannot possibly hold more than MAX_ENTRIES
+# lines — used by _prune_if_needed to skip a full readlines() on every write.
+MIN_ENTRY_BYTES = 100
+
+# Entity index (entities.json) debounce — remember() calls _index_entry() on
+# every worker delegation; without debouncing that rewrites the whole file
+# each time. Flush at most every INDEX_FLUSH_INTERVAL seconds or every
+# INDEX_FLUSH_EVERY_N updates, whichever comes first, plus an atexit flush so
+# the last few updates aren't lost on shutdown.
+INDEX_FLUSH_INTERVAL = 30  # seconds
+INDEX_FLUSH_EVERY_N = 20   # updates
+
+# compress() failure backoff — if the AI-compression parse fails, don't
+# re-attempt for this long. Without it, a near-full entries file retries
+# compression (and pays for the AI call) on every single write.
+COMPRESS_FAILURE_BACKOFF = 600  # 10 minutes
+
 # External vault paths (Obsidian, directories) — searched on recall fallback
-VAULT_CONFIG_FILE = os.path.join(os.path.expanduser("~/.envoy"), "config.json")
+VAULT_CONFIG_FILE = str(config_dir() / "config.json")
 
 
 def _ensure_dir():
@@ -255,8 +279,20 @@ def _recall_by_query(query: str, limit: int) -> str:
 
 
 # --- Entity index ---
+#
+# Kept in memory (loaded once from entities.json, updated incrementally) and
+# flushed to disk with debouncing instead of rewriting the whole file on
+# every remember() call. `_index_lock` guards the in-memory cache since
+# workers can call remember() from multiple threads.
 
-def _load_index() -> Dict[str, List[str]]:
+_index_lock = threading.Lock()
+_index_cache: Optional[Dict[str, List[str]]] = None
+_index_dirty = False
+_index_updates_since_flush = 0
+_index_last_flush = 0.0
+
+
+def _load_index_from_disk() -> Dict[str, List[str]]:
     if os.path.exists(ENTITIES_FILE):
         try:
             return json.loads(open(ENTITIES_FILE).read())
@@ -265,21 +301,85 @@ def _load_index() -> Dict[str, List[str]]:
     return {}
 
 
+def _flush_index_to_disk(index: dict):
+    try:
+        _ensure_dir()
+        with open(ENTITIES_FILE, "w") as f:
+            json.dump(index, f)
+    except Exception:
+        pass
+
+
+def _load_index() -> Dict[str, List[str]]:
+    """Return the entity index, loading from disk once and caching in memory.
+
+    Readers (known_entities(), etc.) always see the up-to-date in-memory
+    copy, including updates made by _index_entry() that haven't been
+    flushed to disk yet.
+    """
+    global _index_cache
+    with _index_lock:
+        if _index_cache is None:
+            _index_cache = _load_index_from_disk()
+        return {k: list(v) for k, v in _index_cache.items()}
+
+
 def _save_index(index: dict):
-    with open(ENTITIES_FILE, "w") as f:
-        json.dump(index, f)
+    """Full replace of the index — used by compress()/rebuild_entity_index(),
+    which already rebuild the whole thing. Flushes immediately (these are
+    infrequent, not the remember() hot path)."""
+    global _index_cache, _index_dirty, _index_updates_since_flush, _index_last_flush
+    with _index_lock:
+        _index_cache = index
+        _index_dirty = False
+        _index_updates_since_flush = 0
+        _index_last_flush = time.monotonic()
+    _flush_index_to_disk(index)
 
 
 def _index_entry(entry_id: str, entities: List[str]):
-    index = _load_index()
-    for entity in entities:
-        if entity not in index:
-            index[entity] = []
-        index[entity].append(entry_id)
-        # Cap per entity
-        if len(index[entity]) > 100:
-            index[entity] = index[entity][-100:]
-    _save_index(index)
+    """Incrementally update the in-memory entity index; flush is debounced.
+
+    remember() calls this on every worker delegation — rewriting the full
+    entities.json each time was needless I/O on the hot path. Flushes at
+    most every INDEX_FLUSH_INTERVAL seconds or INDEX_FLUSH_EVERY_N updates.
+    """
+    global _index_cache, _index_dirty, _index_updates_since_flush, _index_last_flush
+    snapshot = None
+    with _index_lock:
+        if _index_cache is None:
+            _index_cache = _load_index_from_disk()
+        for entity in entities:
+            bucket = _index_cache.setdefault(entity, [])
+            bucket.append(entry_id)
+            # Cap per entity
+            if len(bucket) > 100:
+                _index_cache[entity] = bucket[-100:]
+        _index_dirty = True
+        _index_updates_since_flush += 1
+        should_flush = (
+            _index_updates_since_flush >= INDEX_FLUSH_EVERY_N
+            or (time.monotonic() - _index_last_flush) >= INDEX_FLUSH_INTERVAL
+        )
+        if should_flush:
+            snapshot = {k: list(v) for k, v in _index_cache.items()}
+            _index_dirty = False
+            _index_updates_since_flush = 0
+            _index_last_flush = time.monotonic()
+    if snapshot is not None:
+        _flush_index_to_disk(snapshot)
+
+
+def _flush_index_if_dirty():
+    """atexit hook so debounced updates aren't lost when the process exits."""
+    with _index_lock:
+        if not _index_dirty or _index_cache is None:
+            return
+        snapshot = {k: list(v) for k, v in _index_cache.items()}
+    _flush_index_to_disk(snapshot)
+
+
+atexit.register(_flush_index_if_dirty)
 
 
 def known_entities() -> List[str]:
@@ -319,8 +419,21 @@ def _load_entries(days: int = 14) -> list:
 
 # --- Compression ---
 
+# Module-level timestamp of the last failed AI-compression parse. Read/write
+# via time.monotonic() so a failed compress() doesn't get retried (and pay
+# for another AI call) on every single remember() while a near-full file
+# keeps calling _prune_if_needed() -> compress().
+_last_compress_failure = 0.0
+
+
 def compress(force: bool = False) -> str:
     """Compress old entries into per-entity rolling summaries."""
+    global _last_compress_failure
+    if not force and _last_compress_failure and (
+        time.monotonic() - _last_compress_failure < COMPRESS_FAILURE_BACKOFF
+    ):
+        return "Compression skipped — recent AI-compression failure, will retry later."
+
     _ensure_dir()
     cutoff = datetime.now() - timedelta(days=COMPRESS_AFTER_DAYS)
     old_entries = []
@@ -391,7 +504,10 @@ def compress(force: bool = False) -> str:
         pass  # keep existing summaries on failure
 
     if not compression_ok:
+        _last_compress_failure = time.monotonic()
         return f"Compression failed — kept all {len(old_entries) + len(recent)} entries intact."
+
+    _last_compress_failure = 0.0
 
     # Cap total entities in summary
     if len(existing) > 100:
@@ -449,13 +565,26 @@ def _save_summary(summaries: Dict[str, str]):
 # --- Pruning ---
 
 def _prune_if_needed():
-    """Prune if entries file is too large (by count or file size)."""
+    """Prune if entries file is too large (by count or file size).
+
+    remember() calls this after every write, so keep it cheap: a stat
+    (os.path.getsize) is essentially free, but readlines() on a file that
+    can be up to MAX_FILE_SIZE (2MB) is not. Only fall through to counting
+    lines when the file is big enough that it's actually possible
+    MAX_ENTRIES has been exceeded (size >= MAX_ENTRIES * MIN_ENTRY_BYTES);
+    the MAX_FILE_SIZE check never needs a line count at all.
+    """
     if not os.path.exists(ENTRIES_FILE):
         return
     try:
         size = os.path.getsize(ENTRIES_FILE)
+        if size > MAX_FILE_SIZE:
+            compress()
+            return
+        if size < MAX_ENTRIES * MIN_ENTRY_BYTES:
+            return
         lines = open(ENTRIES_FILE).readlines()
-        if len(lines) > MAX_ENTRIES or size > MAX_FILE_SIZE:
+        if len(lines) > MAX_ENTRIES:
             compress()
     except Exception:
         pass

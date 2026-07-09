@@ -31,7 +31,7 @@ COMMANDS = {
     # Catch-up
     "/catchup":   ("PTO catch-up report",                  "I was out of office for {days} days, give me a full catch-up"),
     "/slack-catchup": ("Focused Slack catch-up",           "Give me a focused Slack catch-up for the last {days} days — unread channels, mentions, and DMs"),
-    "/yesterbox":     ("Yesterbox — yesterday's DMs",       "Run yesterbox for yesterday's messages"),
+    "/yesterbox":     ("Yesterbox — yesterday's DMs",       "Run yesterbox for the last {days} days of messages"),
     # Analysis
     "/cal-audit":      ("Calendar audit",                  "Audit my calendar for the next {days} days — meeting load, focus time, and what to decline"),
     "/response-times": ("Email response time analysis",    "Analyze my email response time patterns for the last {days} days"),
@@ -69,6 +69,7 @@ COMMANDS = {
     "/skills":    ("List configured skills",               None),
     "/backup":    ("Back up config, memory, and state",    None),
     "/doctor":    ("Health check — MCP, AWS, config, memory", None),
+    "/learn":     ("Review/confirm/reject learned rules",  None),
     "/exit":      ("Exit Envoy",                           None),
 }
 
@@ -80,7 +81,7 @@ ARG_COMMANDS = {"/prep-1on1", "/reply", "/ea", "/book", "/search", "/sharepoint"
 DEFAULT_DAYS = {
     "/digest": 7, "/customers": 14, "/cleanup": 14, "/catchup": 5,
     "/slack-catchup": 3, "/cal-audit": 5, "/response-times": 7,
-    "/followup": 7, "/commitments": 7,
+    "/followup": 7, "/commitments": 7, "/yesterbox": 1,
 }
 
 # Command groups for help display
@@ -94,8 +95,77 @@ COMMAND_GROUPS = [
     ("Reviews", ["/eod", "/weekly", "/cron"]),
     ("Heartbeat", ["/routine", "/routines", "/heartbeat", "/suggest-routines"]),
     ("Skills", ["/build-skill", "/suggest-skills", "/skills"]),
-    ("System", ["/doctor", "/status", "/mwinit", "/models", "/mcp", "/settings", "/backup", "/help", "/exit"]),
+    ("System", ["/doctor", "/status", "/mwinit", "/models", "/learn", "/mcp", "/settings", "/backup", "/help", "/exit"]),
 ]
+
+
+# --- Shared command-prompt template loader ---
+#
+# templates/commands.md is the documented, user-overridable (~/.envoy/commands.md)
+# home for the longer-form prompts behind `envoy <cmd>` CLI subcommands. cli.py and
+# dispatch() both build prompts from it via these two helpers so TUI/REPL slash
+# commands and CLI subcommands never drift apart. Commands with no matching section
+# below fall back to the short hardcoded template strings in COMMANDS above.
+
+def _load_commands() -> dict:
+    """Parse commands.md into {name: template} dict.
+
+    User overrides at ~/.envoy/commands.md take precedence over the bundled
+    templates/commands.md if present.
+    """
+    import re
+    from agents.paths import commands_file
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates', 'commands.md')
+    user_path = str(commands_file())
+    if os.path.exists(user_path):
+        path = user_path
+    with open(path) as f:
+        text = f.read()
+    commands = {}
+    for block in re.split(r'\n## ', text):
+        lines = block.strip().splitlines()
+        if not lines:
+            continue
+        name = lines[0].strip().lower()
+        body = '\n'.join(lines[1:]).strip()
+        if body:
+            commands[name] = body
+    return commands
+
+
+def _build_prompt(template: str, **kwargs) -> str:
+    """Build an agent prompt from a command template, expanding {if flag} conditionals."""
+    import re
+    def _expand_if(m):
+        key = m.group(1)
+        rest = m.group(2).strip()
+        val = kwargs.get(key)
+        if val:
+            return rest.replace(f'{{{key}}}', str(val))
+        return ''
+    result = re.sub(r'\{if\s+(\w+)\}\s*(.*)', _expand_if, template)
+    for k, v in kwargs.items():
+        result = result.replace(f'{{{k}}}', str(v) if v else '')
+    result = '\n'.join(line for line in result.splitlines() if line.strip())
+    return result
+
+
+def _template_kwargs(cmd: str, days: int, arg: str) -> dict:
+    """Extra kwargs for template-sourced prompts, beyond {days}/{arg}.
+
+    Mirrors what cli.py's subcommands pass for the same commands.md sections
+    (alias, limit, person, meeting, ...). Slash commands have no CLI-flag
+    equivalents for optional extras (--vip, --team, --email, ...), so those
+    simply stay unset — their {if ...} lines in the template drop out.
+    """
+    kwargs = {"days": days, "alias": os.environ.get("USER", "")}
+    if cmd == "/cleanup":
+        kwargs["limit"] = 100
+    elif cmd == "/prep-1on1":
+        kwargs["person"] = arg
+    elif cmd == "/prep-meeting":
+        kwargs["meeting"] = arg
+    return kwargs
 
 
 def dispatch(raw: str, agent):
@@ -105,6 +175,12 @@ def dispatch(raw: str, agent):
     If handled is False, response_text is None and the caller should call agent(prompt).
     Returns (prompt_or_result, handled_internally).
     """
+    try:
+        from agents.confirm import set_user_turn
+        set_user_turn(raw)
+    except Exception:
+        pass
+
     stripped = raw.strip()
     if not stripped:
         return None, True
@@ -162,6 +238,9 @@ def dispatch(raw: str, agent):
     if cmd == "/models":
         return (_handle_models(arg), True)
 
+    if cmd == "/learn":
+        return (_handle_learn(arg), True)
+
     # --- Commands needing an arg ---
     if cmd in ARG_COMMANDS and not arg:
         labels = {
@@ -174,12 +253,43 @@ def dispatch(raw: str, agent):
     # --- Slash command with template ---
     entry = COMMANDS.get(cmd)
     if entry and entry[1]:
-        template = entry[1]
-        days = int(arg) if arg.isdigit() else DEFAULT_DAYS.get(cmd, 7)
+        # Days-taking commands (those listed in DEFAULT_DAYS) silently dropped
+        # non-numeric args (e.g. "/digest last week") and fell back to the
+        # default with no indication anything was ignored. If the command's
+        # template actually has a place for free-text ({arg}), pass it through
+        # there instead of discarding it.
+        day_notice = ""
+        supports_arg = "{arg}" in entry[1]
+        if arg and not arg.isdigit() and cmd in DEFAULT_DAYS and not supports_arg:
+            days = DEFAULT_DAYS.get(cmd, 7)
+            day_notice = (
+                f"\n\n_(note: '{arg}' isn't a number — used default {days} days; "
+                f"try `{cmd} {days}`.)_"
+            )
+        else:
+            days = int(arg) if arg.isdigit() else DEFAULT_DAYS.get(cmd, 7)
+
         if not arg and cmd == "/prep-meeting":
             arg = "my next meeting"
-        prompt = template.format(days=days, arg=arg)
-        return (agent(prompt), True)
+
+        # Prefer the shared templates/commands.md source (same one cli.py's
+        # subcommands use, with ~/.envoy/commands.md override support) when a
+        # matching section exists, so TUI/REPL and `envoy <cmd>` never drift.
+        # Fall back to the hardcoded one-liner above for commands with no
+        # template section (e.g. /briefing, /reply, /search).
+        prompt = None
+        try:
+            template_body = _load_commands().get(cmd[1:])
+            if template_body:
+                prompt = _build_prompt(template_body, **_template_kwargs(cmd, days, arg))
+        except Exception:
+            prompt = None
+        if not prompt:
+            prompt = entry[1].format(days=days, arg=arg)
+        result = agent(prompt)
+        if day_notice and isinstance(result, str):
+            result = f"{result}{day_notice}"
+        return (result, True)
 
     # --- System commands return None — caller handles ---
     if cmd in ("/help", "/status", "/settings", "/backup", "/exit", "/mwinit"):
@@ -238,6 +348,17 @@ def dispatch_with_learning(raw: str, agent):
     if handled and result and isinstance(result, str) and len(result) > 20:
         threading.Thread(target=_learn_async, args=(raw, result), daemon=True).start()
 
+        # Surface any learned rules awaiting confirmation. Skip this for /learn
+        # itself — its own output already shows the full pending list.
+        if not raw.strip().lower().startswith("/learn"):
+            try:
+                from agents.learning import pending_summary
+                summary = pending_summary()
+                if summary:
+                    result = f"{result}\n\n{summary}"
+            except Exception:
+                pass
+
     return result, handled
 
 
@@ -281,14 +402,18 @@ def _run_doctor() -> str:
         identity = sts.get_caller_identity()
         _ok(f"Authenticated as {identity.get('Arn', 'unknown')[:80]}")
     except Exception as e:
-        _err(f"AWS credentials invalid — run `aws login` or check .env ({e})")
+        _err(
+            "AWS credentials invalid — refresh your AWS credentials (e.g. `mwinit` on "
+            f"Amazon-internal setups, or your organization's AWS SSO login) or check .env ({e})"
+        )
 
     # --- Models ---
     lines.append("\n## AI Models")
     try:
         from agents.base import _load_models, DEFAULT_MODELS
+        from agents.paths import models_file as _models_file
         models = _load_models()
-        models_file = Path.home() / ".envoy" / "models.json"
+        models_file = _models_file()
         customized = models_file.exists()
         for tier in DEFAULT_MODELS:
             mid = models.get(tier, DEFAULT_MODELS[tier])
@@ -305,7 +430,8 @@ def _run_doctor() -> str:
 
     # --- Config Files ---
     lines.append("\n## Configuration")
-    config_dir = Path.home() / ".envoy"
+    from agents.paths import config_dir as _config_dir
+    config_dir = _config_dir()
     for name, required_fields in [
         ("soul.md", ["Agent name"]),
         ("envoy.md", ["Alias"]),
@@ -405,6 +531,45 @@ def _run_doctor() -> str:
     return "\n".join(lines)
 
 
+def _handle_learn(arg: str) -> str:
+    """Manage the learning pending-rules queue.
+
+    /learn or /learn list       — show numbered rules awaiting confirmation
+    /learn confirm <n>          — write rule <n> into process.md
+    /learn reject <n>           — discard rule <n>
+    """
+    try:
+        from agents import learning
+    except Exception as e:
+        return f"⚠️ Learning module unavailable: {e}"
+
+    parts = arg.split() if arg else []
+    sub = parts[0].lower() if parts else "list"
+
+    if sub == "list":
+        items = learning.list_pending()
+        if not items:
+            return "No pending learned rules."
+        lines = ["**Pending learned rules**\n"]
+        for i, item in enumerate(items, 1):
+            section = item.get("section", "General")
+            rule = item.get("rule", "")
+            source = item.get("source", "")
+            suffix = f"  _(via {source})_" if source else ""
+            lines.append(f"  `{i}` [{section}] {rule}{suffix}")
+        lines.append("\nUse `/learn confirm <n>` or `/learn reject <n>`.")
+        return "\n".join(lines)
+
+    if sub in ("confirm", "reject"):
+        if len(parts) < 2 or not parts[1].isdigit():
+            return f"Usage: /learn {sub} <n>  (see `/learn list` for numbers)"
+        index = int(parts[1]) - 1  # user-facing numbering is 1-based
+        fn = learning.confirm_pending if sub == "confirm" else learning.reject_pending
+        return fn(index)
+
+    return "Usage: `/learn` (list) · `/learn confirm <n>` · `/learn reject <n>`"
+
+
 def _handle_models(arg: str) -> str:
     """Show current model assignments, change via /models <tier> <model>, or /models refresh."""
     import json
@@ -484,5 +649,6 @@ def _handle_models(arg: str) -> str:
     lines.append("**Examples:** `/models 3 5`  ·  `/models light us.amazon.nova-micro-v1:0`")
     lines.append("**Refresh from Bedrock:** `/models refresh`")
     lines.append("")
-    lines.append("*Tip: type just `<tier#> <model#>` (e.g. `3 5`) or `cancel` at the next prompt.*")
+    lines.append("*Tip: run `/models <tier#|name> <model#|id>` again anytime to change a tier — "
+                  "there's no separate pending-input mode, so plain text you type next goes to the agent as chat.*")
     return "\n".join(lines)
