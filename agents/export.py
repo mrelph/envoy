@@ -4,16 +4,18 @@ import os
 import re
 from datetime import datetime
 
+from agents.paths import exports_dir, envoy_file
+
 
 def _output_path(filename: str) -> str:
-    out_dir = os.path.expanduser("~/.envoy/exports")
+    out_dir = str(exports_dir())
     os.makedirs(out_dir, exist_ok=True)
     return os.path.join(out_dir, filename)
 
 
 def _configured_folders() -> dict:
     """Read Knowledge Folder and Exports Folder from envoy.md."""
-    envoy_md = os.path.expanduser("~/.envoy/envoy.md")
+    envoy_md = str(envoy_file())
     folders = {"knowledge": "", "exports": ""}
     try:
         with open(envoy_md) as f:

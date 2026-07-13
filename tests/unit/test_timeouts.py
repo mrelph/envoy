@@ -25,14 +25,21 @@ class TestModuleLoads:
     """Ensure no NameError on import — catches forward-reference issues."""
 
     def test_tools_imports_cleanly(self):
-        """The vault_write NameError that blocked startup must not recur."""
-        # Force reimport
-        for mod in list(sys.modules.keys()):
-            if mod.startswith("tools") or mod.startswith("agents."):
-                sys.modules.pop(mod, None)
-        import tools
-        assert hasattr(tools, 'ALL_TOOLS')
-        assert len(tools.ALL_TOOLS) > 0
+        """The vault_write NameError that blocked startup must not recur.
+
+        Run the import in a fresh subprocess so this cleanliness check can't
+        mutate the parent's sys.modules — reimporting agents.* in-process
+        rebinds module objects that other test files (and conftest stubs)
+        depend on, causing cross-file pollution.
+        """
+        import subprocess
+        proc = subprocess.run(
+            [sys.executable, "-c", "import tools; assert tools.ALL_TOOLS"],
+            cwd=str(Path(__file__).resolve().parent.parent.parent),
+            capture_output=True,
+            text=True,
+        )
+        assert proc.returncode == 0, f"tools failed to import:\n{proc.stderr}"
 
     def test_vault_write_defined_before_use(self):
         """vault_write and vault_read must be importable from tools."""
@@ -226,14 +233,19 @@ class TestWorkerFailFastPrompt:
         # process_tools should have been called to add the delegate tool
         assert agent.tool_registry.process_tools.called
 
-    def test_coding_worker_gets_process_tools_too(self):
-        """Coding worker: verify _import_create doesn't crash on it."""
-        from agents.workers import _import_create
-        # Just verify it doesn't raise — the coding exclusion logic checks
-        # worker_name != "coding" but with MagicMock agent, hasattr always
-        # returns True so the branch still fires. That's a test-env artifact.
-        agent = _import_create("coding_worker", "coding")
-        assert agent is not None
+    def test_coding_worker_runs_as_subprocess_not_via_import_create(self):
+        """Coding runs as a direct subprocess (run_coding_agent), so it is
+        intentionally NOT one of get_worker's Strands-backed workers and the
+        coding_worker module no longer exposes create()."""
+        from agents.workers import get_worker
+        from agents.workers import coding_worker as cw
+
+        # get_worker rejects "coding" — it's not a delegation-capable worker.
+        with pytest.raises(ValueError):
+            get_worker("coding")
+        # The module drives the CLI directly instead of building an agent.
+        assert hasattr(cw, "run_coding_agent")
+        assert not hasattr(cw, "create")
 
 
 class TestWorkerLocking:

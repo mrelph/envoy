@@ -194,16 +194,22 @@ Emails:
 
 
 async def delete_emails(conversation_ids: List[str]) -> Dict[str, int]:
+    import asyncio
     results = {'deleted': 0, 'failed': 0}
+    sem = asyncio.Semaphore(8)
     async with outlook() as session:
-        for cid in conversation_ids:
-            try:
-                await session.call_tool("email_move", arguments={
-                    "conversationId": cid, "targetFolder": "deleteditems"
-                })
-                results['deleted'] += 1
-            except Exception:
-                results['failed'] += 1
+        async def _delete_one(cid):
+            async with sem:
+                try:
+                    await session.call_tool("email_move", arguments={
+                        "conversationId": cid, "targetFolder": "deleteditems"
+                    })
+                    return True
+                except Exception:
+                    return False
+        outcomes = await asyncio.gather(*[_delete_one(cid) for cid in conversation_ids])
+    results['deleted'] = sum(1 for ok in outcomes if ok)
+    results['failed'] = sum(1 for ok in outcomes if not ok)
     return results
 
 
@@ -317,24 +323,36 @@ async def email_digest(digest: str, manager_alias: str, days: int, include_summa
 
 
 async def scan_customer_emails(alias: str, days: int = 14, team_aliases: List[str] = None) -> str:
+    import asyncio
     all_aliases = [alias] + (team_aliases or [])
-    all_emails = []
     start_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
     end_date = datetime.now().strftime('%Y-%m-%d')
 
+    sem = asyncio.Semaphore(8)
+
     async with outlook() as session:
-        for person in all_aliases:
-            get_logger().log_info(f"Scanning external emails for {person}...")
-            print(f"Scanning external emails for {person}...")
-            result = await session.call_tool("email_search", arguments={
-                "query": f"to:{person}@amazon.com",
-                "startDate": start_date, "endDate": end_date, "limit": 50
-            })
-            emails = parse_email_search_result(result)
-            for e in emails:
-                if 'amazon.com' not in e['from'].lower():
-                    e['recipient'] = person
-                    all_emails.append(e)
+        async def _scan_one(person):
+            async with sem:
+                get_logger().log_info(f"Scanning external emails for {person}...")
+                print(f"Scanning external emails for {person}...")
+                try:
+                    result = await session.call_tool("email_search", arguments={
+                        "query": f"to:{person}@amazon.com",
+                        "startDate": start_date, "endDate": end_date, "limit": 50
+                    })
+                    emails = parse_email_search_result(result)
+                except Exception:
+                    return []
+                found = []
+                for e in emails:
+                    if 'amazon.com' not in e['from'].lower():
+                        e['recipient'] = person
+                        found.append(e)
+                return found
+
+        per_person = await asyncio.gather(*[_scan_one(person) for person in all_aliases])
+
+    all_emails = [e for emails in per_person for e in emails]
 
     if not all_emails:
         return "No external customer emails found."
@@ -373,6 +391,7 @@ Emails:
 
 
 async def check_replies() -> str:
+    import asyncio
     from agents.base import load_sent
     entries = load_sent()
     if not entries:
@@ -382,19 +401,24 @@ async def check_replies() -> str:
     email_entries = [e for e in entries if e["medium"] in ("email", "email_draft")]
     if email_entries:
         try:
+            sem = asyncio.Semaphore(8)
             async with outlook() as session:
-                for entry in email_entries[-20:]:
-                    try:
-                        search_result = await session.call_tool("email_search", arguments={
-                            "query": entry["tag"], "limit": 5
-                        })
-                        found = parse_email_search_result(search_result)
-                        if len(found) > 1:
-                            results.append(f"📧 **Reply found** to email for {entry['recipient']} ({entry['tag']}): {entry['summary'][:80]}")
-                        else:
-                            results.append(f"⏳ **No reply yet** from {entry['recipient']} — sent {entry['sent_at'][:10]}: {entry['summary'][:80]}")
-                    except Exception:
-                        pass
+                async def _check_one(entry):
+                    async with sem:
+                        try:
+                            search_result = await session.call_tool("email_search", arguments={
+                                "query": entry["tag"], "limit": 5
+                            })
+                            found = parse_email_search_result(search_result)
+                            if len(found) > 1:
+                                return f"📧 **Reply found** to email for {entry['recipient']} ({entry['tag']}): {entry['summary'][:80]}"
+                            return f"⏳ **No reply yet** from {entry['recipient']} — sent {entry['sent_at'][:10]}: {entry['summary'][:80]}"
+                        except Exception:
+                            return None
+
+                targets = email_entries[-20:]
+                outcomes = await asyncio.gather(*[_check_one(e) for e in targets])
+                results = [r for r in outcomes if r]
         except Exception:
             pass
 
@@ -427,16 +451,22 @@ def _markdown_to_html(md_text: str) -> str:
 
 async def move_to_folder(conversation_ids: List[str], target_folder: str) -> Dict[str, int]:
     """Move emails to a folder. Folders: archive, inbox, deleteditems, sentitems, or a folder ID."""
+    import asyncio
     results = {'moved': 0, 'failed': 0}
+    sem = asyncio.Semaphore(8)
     async with outlook() as session:
-        for cid in conversation_ids:
-            try:
-                await session.call_tool("email_move", arguments={
-                    "conversationId": cid, "targetFolder": target_folder
-                })
-                results['moved'] += 1
-            except Exception:
-                results['failed'] += 1
+        async def _move_one(cid):
+            async with sem:
+                try:
+                    await session.call_tool("email_move", arguments={
+                        "conversationId": cid, "targetFolder": target_folder
+                    })
+                    return True
+                except Exception:
+                    return False
+        outcomes = await asyncio.gather(*[_move_one(cid) for cid in conversation_ids])
+    results['moved'] = sum(1 for ok in outcomes if ok)
+    results['failed'] = sum(1 for ok in outcomes if not ok)
     return results
 
 

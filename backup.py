@@ -4,15 +4,15 @@ import tarfile
 from datetime import datetime
 from pathlib import Path
 
-CONFIG_DIR = Path.home() / ".envoy"
-BACKUP_DIR = CONFIG_DIR / "backups"
+from agents.paths import CONFIG_DIR, BACKUPS_DIR as BACKUP_DIR
 
 # Files and dirs to back up (relative to ~/.envoy)
+# NOTE: ".env" is intentionally excluded — it holds AWS/API credentials and
+# should never be duplicated into a backup archive (PROJECT-REVIEW H3).
 TARGETS = [
     "soul.md",
     "envoy.md",
     "process.md",
-    ".env",
     "models.json",
     "sent.json",
     "memory",
@@ -40,6 +40,11 @@ def run_backup():
     if count == 0:
         console.print("[yellow]Nothing to back up — no config files found.[/yellow]")
         return None
+
+    try:
+        os.chmod(archive_path, 0o600)
+    except OSError:
+        pass
 
     size_kb = archive_path.stat().st_size / 1024
     console.print(f"[green]✓[/green] Backed up {count} items → [bold]{archive_path.name}[/bold] ({size_kb:.0f} KB)")
@@ -74,6 +79,25 @@ def list_backups():
         console.print(f"  {b.name}  [dim]({size_kb:.0f} KB)[/dim]")
 
 
+def _safe_members(tar, base):
+    """Return archive members that resolve inside `base`, skipping (and
+    warning about) any whose path would escape it (traversal, absolute
+    paths, symlink shenanigans, etc.)."""
+    from rich.console import Console
+    console = Console()
+
+    safe = []
+    for member in tar.getmembers():
+        resolved = (base / member.name).resolve()
+        try:
+            resolved.relative_to(base)
+        except ValueError:
+            console.print(f"[yellow]⚠ Skipping unsafe archive member: {member.name}[/yellow]")
+            continue
+        safe.append(member)
+    return safe
+
+
 def restore_backup(name=None):
     """Restore from a backup archive."""
     from rich.console import Console
@@ -96,7 +120,22 @@ def restore_backup(name=None):
         console.print(f"[red]Backup not found: {archive.name}[/red]")
         return
 
-    with tarfile.open(archive, "r:gz") as tar:
-        tar.extractall(path=CONFIG_DIR)
+    base = CONFIG_DIR.resolve()
+    try:
+        with tarfile.open(archive, "r:gz") as tar:
+            tar.extractall(path=CONFIG_DIR, filter="data")
+    except TypeError:
+        # Python < 3.12 (pre-PEP 706 backport): no `filter` kwarg — reopen
+        # fresh (streaming tars can't be re-extracted mid-stream) and reject
+        # any member whose resolved path escapes CONFIG_DIR by hand.
+        with tarfile.open(archive, "r:gz") as tar:
+            tar.extractall(path=CONFIG_DIR, members=_safe_members(tar, base))
+    except tarfile.FilterError as e:
+        # `filter="data"` itself rejected an unsafe member (path traversal,
+        # absolute path, symlink escape, etc.) — reopen fresh and salvage the
+        # safe members instead of aborting the whole restore.
+        console.print(f"[yellow]⚠ Archive contained an unsafe member ({e}); extracting only safe members.[/yellow]")
+        with tarfile.open(archive, "r:gz") as tar:
+            tar.extractall(path=CONFIG_DIR, members=_safe_members(tar, base))
 
     console.print(f"[green]✓[/green] Restored from [bold]{archive.name}[/bold]")

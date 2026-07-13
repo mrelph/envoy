@@ -13,8 +13,12 @@ from datetime import datetime, timedelta
 from typing import List, Dict
 
 from agents.base import invoke_ai, run
+from agents.paths import config_dir
 
 from agents.base import current_user as _USER  # call-time alias resolution
+
+# seconds — fail fast, don't wait for full MCP retry chain
+_WORKER_TIMEOUT = 60
 
 
 def _worker_gather(**tasks) -> dict:
@@ -25,17 +29,22 @@ def _worker_gather(**tasks) -> dict:
     """
     from agents.workers import get_worker
 
-    _WORKER_TIMEOUT = 60  # seconds — fail fast, don't wait for full MCP retry chain
-
     async def _run_one(name, worker_name, request):
         try:
+            # The Strands worker call is synchronous and internally calls
+            # agents.base.run() (e.g. from agents/email.py wrappers), which
+            # schedules onto this same shared event loop. Running it inline
+            # here would deadlock the loop against itself; asyncio.to_thread
+            # moves the blocking call off-loop so it can actually run.
+            # wait_for bounds it so a stuck worker fails fast rather than
+            # blocking the whole gather on the full MCP retry chain.
             result = await asyncio.wait_for(
-                asyncio.get_event_loop().run_in_executor(
-                    None, lambda: get_worker(worker_name)(request)
-                ),
+                asyncio.to_thread(get_worker(worker_name), request),
                 timeout=_WORKER_TIMEOUT,
             )
-            return name, str(result.message) if hasattr(result, 'message') else str(result)
+            # str(result) uses Strands' AgentResult.__str__ (the response
+            # text) — str(result.message) is a raw dict repr.
+            return name, str(result)
         except asyncio.TimeoutError:
             return name, f"⚠️ {worker_name} timed out after {_WORKER_TIMEOUT}s"
         except Exception as e:
@@ -414,7 +423,7 @@ Data:
 
 # --- Response learning ---
 
-RESPONSE_PATTERNS_FILE = os.path.expanduser("~/.envoy/response_patterns.jsonl")
+RESPONSE_PATTERNS_FILE = str(config_dir() / "response_patterns.jsonl")
 MAX_PATTERNS = 200
 
 

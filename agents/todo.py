@@ -8,6 +8,7 @@ from agents.base import outlook, parse_todo_response
 
 async def fetch_todos() -> str:
     """Fetch open to-do items as a formatted string."""
+    import asyncio
     try:
         async with outlook() as session:
             lists_result = await session.call_tool("todo_lists", arguments={"operation": "list"})
@@ -15,13 +16,24 @@ async def fetch_todos() -> str:
             all_lists = lists_data.get("value", [])
             if not all_lists:
                 return ""
+
+            sem = asyncio.Semaphore(8)
+
+            async def _fetch_list(lst):
+                async with sem:
+                    try:
+                        tasks_result = await session.call_tool("todo_tasks", arguments={
+                            "operation": "list", "listId": lst["id"]
+                        })
+                        tasks_data = parse_todo_response(tasks_result)
+                        return tasks_data.get("value", [])
+                    except Exception:
+                        return []
+
+            all_tasks = await asyncio.gather(*[_fetch_list(lst) for lst in all_lists])
+
             lines = []
-            for lst in all_lists:
-                tasks_result = await session.call_tool("todo_tasks", arguments={
-                    "operation": "list", "listId": lst["id"]
-                })
-                tasks_data = parse_todo_response(tasks_result)
-                tasks = tasks_data.get("value", [])
+            for lst, tasks in zip(all_lists, all_tasks):
                 open_tasks = [t for t in tasks if t.get("status") != "completed"]
                 if open_tasks:
                     lines.append(f"## {lst['displayName']} ({len(open_tasks)} open)")
@@ -36,6 +48,7 @@ async def fetch_todos() -> str:
 
 async def fetch_todos_full() -> str:
     """Fetch open to-do items with full details including body/notes."""
+    import asyncio
     try:
         async with outlook() as session:
             lists_result = await session.call_tool("todo_lists", arguments={"operation": "list"})
@@ -43,13 +56,24 @@ async def fetch_todos_full() -> str:
             all_lists = lists_data.get("value", [])
             if not all_lists:
                 return ""
+
+            sem = asyncio.Semaphore(8)
+
+            async def _fetch_list(lst):
+                async with sem:
+                    try:
+                        tasks_result = await session.call_tool("todo_tasks", arguments={
+                            "operation": "list", "listId": lst["id"]
+                        })
+                        tasks_data = parse_todo_response(tasks_result)
+                        return tasks_data.get("value", [])
+                    except Exception:
+                        return []
+
+            all_tasks = await asyncio.gather(*[_fetch_list(lst) for lst in all_lists])
+
             lines = []
-            for lst in all_lists:
-                tasks_result = await session.call_tool("todo_tasks", arguments={
-                    "operation": "list", "listId": lst["id"]
-                })
-                tasks_data = parse_todo_response(tasks_result)
-                tasks = tasks_data.get("value", [])
+            for lst, tasks in zip(all_lists, all_tasks):
                 open_tasks = [t for t in tasks if t.get("status") != "completed"]
                 if open_tasks:
                     lines.append(f"## {lst['displayName']} ({len(open_tasks)} open)")

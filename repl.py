@@ -34,7 +34,7 @@ def run_interactive():
         stripped = raw.strip()
         if not stripped:
             continue
-        if stripped.lower() in ("quit", "exit", "q", "/exit", "/quit"):
+        if stripped.lower() in ("quit", "exit", "/exit", "/quit"):
             print("Goodbye!")
             break
 
@@ -71,9 +71,12 @@ def run_interactive():
 
         # Refresh in case /models (or another path) called reload_agent().
         agent = get_agent()
-        result, handled = dispatch(stripped, agent)
+        try:
+            result, handled = dispatch(stripped, agent)
+        except Exception as e:
+            print(f"\n⚠ {type(e).__name__}: {e}\n")
+            continue
         if handled and result:
             print(f"\n{result}\n")
         elif not handled:
-            # System command not handled by dispatch
-            pass
+            print(f"\n⚠ {stripped.split()[0]} is not available in this interface\n")

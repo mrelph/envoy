@@ -177,11 +177,18 @@ class TestGracefulDegradation:
         """If one source times out, other sources still return data."""
         import agents.workflows as wf
 
-        # Mock get_worker to succeed for one and timeout for another
+        # Mock get_worker to succeed for one and timeout for another.
+        # _worker_gather stringifies the result via str() (Strands'
+        # AgentResult.__str__ returns the response text), so the success
+        # mock returns an object whose str() is the expected text.
+        class _Result:
+            def __str__(self):
+                return "Found 3 sent emails"
+
         def mock_get_worker(name):
             if name == "email":
                 def email_call(request):
-                    return MagicMock(message="Found 3 sent emails")
+                    return _Result()
                 return email_call
             elif name == "comms":
                 def slow_call(request):
@@ -189,9 +196,9 @@ class TestGracefulDegradation:
                 return slow_call
             raise ValueError(f"Unknown: {name}")
 
-        with patch("agents.workers.get_worker", mock_get_worker):
-            # Temporarily reduce timeout for test speed
-            original_src = 'timeout=_WORKER_TIMEOUT'
+        # Shrink the gather timeout so the slow worker trips it quickly.
+        with patch("agents.workers.get_worker", mock_get_worker), \
+                patch.object(wf, "_WORKER_TIMEOUT", 1):
             result = wf._worker_gather(
                 sent=("email", "scan sent"),
                 slack=("comms", "scan slack"),

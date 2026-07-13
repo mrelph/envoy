@@ -64,13 +64,16 @@ def create(session_mgr=None):
             recurrence_end_date: End date for recurrence YYYY-MM-DD
         """
         from tools import _outlook_tool
-        args = _build_event_args("create", subject, start, end,
-                                 attendees, optional_attendees, resources, location, body,
-                                 show_as, is_all_day, is_online_meeting, sensitivity,
-                                 importance, categories, response_requested,
-                                 allow_new_time_proposals, reminder_minutes,
-                                 recurrence_pattern, recurrence_interval,
-                                 recurrence_days, recurrence_end_date)
+        try:
+            args = _build_event_args("create", subject, start, end,
+                                     attendees, optional_attendees, resources, location, body,
+                                     show_as, is_all_day, is_online_meeting, sensitivity,
+                                     importance, categories, response_requested,
+                                     allow_new_time_proposals, reminder_minutes,
+                                     recurrence_pattern, recurrence_interval,
+                                     recurrence_days, recurrence_end_date)
+        except ValueError as e:
+            return str(e)
         return _outlook_tool("calendar_meeting", args)
 
     @tool
@@ -113,7 +116,10 @@ def create(session_mgr=None):
         if subject: args["subject"] = subject
         if start: args["start"] = start
         if end: args["end"] = end
-        _add_attendee_args(args, attendees, optional_attendees, resources)
+        try:
+            _add_attendee_args(args, attendees, optional_attendees, resources)
+        except ValueError as e:
+            return str(e)
         if location: args["location"] = location
         if body: args["body"] = body
         _add_metadata_args(args, show_as, is_all_day, is_online_meeting,
@@ -207,12 +213,24 @@ def create(session_mgr=None):
     # --- Helpers ---
 
     def _add_attendee_args(args, attendees, optional_attendees, resources):
-        if attendees:
-            args["attendees"] = [f"{a.strip()}@amazon.com" if "@" not in a.strip() else a.strip()
-                                 for a in attendees.split(",") if a.strip()]
-        if optional_attendees:
-            args["optionalAttendees"] = [f"{a.strip()}@amazon.com" if "@" not in a.strip() else a.strip()
-                                          for a in optional_attendees.split(",") if a.strip()]
+        """Validate and attach attendee/resource args.
+
+        Never fabricates email addresses. Any bare token (no "@") in
+        attendees/optional_attendees is a validation error — the caller must
+        supply full email addresses (look them up via lookup_person first).
+        """
+        required = [a.strip() for a in attendees.split(",") if a.strip()] if attendees else []
+        optional = [a.strip() for a in optional_attendees.split(",") if a.strip()] if optional_attendees else []
+        invalid = [a for a in required + optional if "@" not in a]
+        if invalid:
+            raise ValueError(
+                f"⚠️ Invalid attendee(s): {', '.join(invalid)} — provide full email "
+                "addresses (use lookup_person to verify aliases first)"
+            )
+        if required:
+            args["attendees"] = required
+        if optional:
+            args["optionalAttendees"] = optional
         if resources:
             args["resources"] = [r.strip() for r in resources.split(",") if r.strip()]
 
@@ -270,7 +288,9 @@ def create(session_mgr=None):
         return read_context(key)
 
     return Agent(
-        model=_model("light"),
+        # medium tier: complex tool schemas (22-param create_event, strict ISO
+        # datetimes) plus calendar-write risk outweigh light-tier cost savings.
+        model=_model("medium"),
         system_prompt=(
             "You are a calendar specialist. You manage schedules, create/update/delete events, "
             "find available times, book rooms, block focus time, and set event metadata "
@@ -282,7 +302,10 @@ def create(session_mgr=None):
             "CRITICAL: NEVER guess or construct email addresses from a person's name. "
             "Only use attendee emails that appear in existing calendar events you have read, "
             "or that the user explicitly provides. If you need someone's email for an invite "
-            "and don't have it, say so — the supervisor will look it up via Phonetool."
+            "and don't have it, say so — the supervisor will look it up via Phonetool. "
+            "Attendees and optional_attendees MUST be full email addresses (containing '@') — "
+            "bare names or aliases (e.g. 'sarah') will be rejected by the tool with an error; "
+            "resolve them to real addresses first (use lookup_person) rather than passing them through."
         ),
         tools=[view_calendar, create_event, update_event, delete_event,
                search_events, find_time, find_room, shared_calendars, block_time, shared_context],

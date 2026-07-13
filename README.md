@@ -26,14 +26,18 @@ envoy init       # configure identity + agent personality
 envoy            # launch TUI
 ```
 
-See [INSTALL.md](INSTALL.md) for detailed setup instructions.
+See [INSTALL.md](INSTALL.md) for detailed setup instructions. Re-running `envoy init` later is safe — it backs up your existing `soul.md`/`envoy.md` and prefills answers from them instead of silently wiping your config.
+
+All user config/state lives under `~/.envoy/` by default — set the `ENVOY_CONFIG` environment variable to relocate it (e.g. `ENVOY_CONFIG=~/work-envoy envoy`).
+
+Envoy checks for new releases at launch; when one's available the TUI shows `⬆ Envoy vX available` and `envoy update` upgrades in place.
 
 ## TUI Interface
 
-Running `envoy` launches a full-screen Textual TUI with animated progress, MCP status, and toast notifications:
+Running `envoy` launches a full-screen Textual TUI with animated progress, MCP status, and toast notifications. Illustrative sample output (exact layout evolves faster than this doc):
 
 ```
-┌─ ✈ Envoy v3.1.0 ──────────────────────────────────────┐
+┌─ ✈ Envoy v3.3.0 ──────────────────────────────────────┐
 │ ● Outlook  ● Phonetool  ● Slack  ● TeamSnap           │
 │                                                         │
 │  ███████╗███╗   ██╗██╗   ██╗ ██████╗ ██╗   ██╗        │
@@ -72,6 +76,7 @@ Falls back to a plain text REPL if Textual is unavailable. Type `/help` for comm
 | — | `/weekly` | Weekly review |
 | — | `/todo` | Show pending action items |
 | — | `/tickets` | Scan open tickets |
+| — | `/slack` | Scan Slack channels for critical info and actions |
 
 ### Agent Skills (extensible)
 
@@ -110,8 +115,9 @@ Add your own: drop a folder with a `SKILL.md` into `~/.envoy/skills/` or `~/.age
 | `/build-skill` | Generate a new skill from a description |
 | `/suggest-skills` | AI-suggested skills mined from your usage history |
 | `/doctor` | Health check — MCP, AWS, config, memory |
-| `/backup` | Back up config, memory, and state |
+| `/backup` | Back up config, memory, and state (`.env` is excluded so credentials never land in an archive) |
 | `/settings` | Edit personality and config |
+| `/learn` | Review auto-detected corrections/preferences awaiting confirmation; `/learn confirm <n>` / `/learn reject <n>` applies or discards one |
 | Export | Generate Word (.docx) and PowerPoint (.pptx) from any report |
 
 ### Heartbeat & Routines
@@ -252,10 +258,11 @@ The supervisor agent routes requests to specialized workers, each with focused t
 |---|---|---|---|
 | Email | Medium | inbox, read, search, send (with CC/BCC), reply (threaded), forward, manage (move/flag/categorize), cleanup, digest, contacts, attachments | Email operations |
 | Comms | Medium | Slack scan (with user resolution + thread context), send messages (DMs, channels, threaded replies), search, mark read, reactions, drafts, file downloads, Slack Lists, EA delegation | Slack messaging |
-| Calendar | Light | view, create (recurring, optional attendees, room resources), find times, book rooms, shared calendars | Calendar management |
+| Calendar | Medium | view, create (recurring, optional attendees, room resources), find times, book rooms, shared calendars — rejects bare attendee names, requires full email addresses | Calendar management |
 | Productivity | Medium | to-dos (list, add with due dates/importance, complete, update, delete), tickets, memory, cron, briefings | Task management |
 | Research | Medium | Phonetool, Kingpin, Wiki, Taskei, Broadcast, web search (Brave), InstructAI (revenue/pipeline/partners), QuickSight Q (dashboards/topics) | Internal & external lookups |
 | SharePoint | Medium | search, files, read, write, lists, analyze | SharePoint/OneDrive |
+| Coding | Medium | Delegate to Claude Code or Kiro as an autonomous subprocess — read-only plan mode by default (`allow_edits` must be explicitly granted), and `working_directory` is restricted to allow-listed directories | Coding/dev task delegation |
 
 ### Supervisor Tools
 
@@ -325,17 +332,21 @@ Skills follow the [Agent Skills](https://agentskills.io) open standard:
 
 Envoy quietly improves itself between turns (`agents/learning.py`):
 - **Reflection** — every meaningful interaction is logged to memory (no AI call, just an append)
-- **Correction detection** — when you say "no", "actually", "don't do that", Envoy detects it and saves the correction to `process.md` so the same mistake isn't repeated
-- **Weekly self-analysis** — heartbeat triggers an AI pass over recent interactions to spot patterns and auto-tune `process.md`
+- **Correction detection** — when you say "no", "actually", "don't do that", Envoy detects it and queues the correction for review rather than writing it straight to `process.md`
+- **Weekly self-analysis** — heartbeat triggers an AI pass over recent interactions to spot patterns and queue tuning suggestions for `process.md`
 - **Skill suggestions** — repeated multi-step patterns surface as candidates for new skills via `/suggest-skills`
+- **Review queue** — nothing lands in `process.md` unattended: run `/learn` to see what's pending, `/learn confirm <n>` to apply it, `/learn reject <n>` to discard it
 
 ### Security
 
+- Sending/forwarding/deleting email and sending Slack messages show a preview and require an explicit confirmation reply ("yes"/"confirm") on the next turn before they execute — a code-level gate (`agents/confirm.py`), not just a prompt instruction, so injected email/Slack content can't self-confirm
+- Coding delegation defaults to read-only plan mode and only runs inside allow-listed directories; edits require explicitly passing `allow_edits`
 - Cron commands are whitelisted to known envoy subcommands; shell metacharacters rejected
 - Self-modification tools (soul/envoy/process) require user confirmation before writing
 - Memory files enforce 2MB size limits with automatic pruning
 - Email deletion moves to Deleted Items (recoverable)
 - MCP server stderr suppressed to prevent information leakage
+- `.env` is excluded from `/backup` archives; only config/memory/state are archived
 
 ## Project Structure
 
@@ -354,11 +365,16 @@ envoy/
 ├── init_cmd.py              # `envoy init` + `/mcp` interactive setup
 ├── envoy_logger.py          # Structured JSON logging
 ├── templates/
-│   ├── commands.md          # Core command prompts
+│   ├── commands.md          # Core command prompts — shared by slash commands and CLI subcommands (override via ~/.envoy/commands.md)
 │   ├── skills/              # Bundled Agent Skills (11 skills)
 │   └── soul.md / envoy.md / process.md
 ├── agents/
 │   ├── base.py              # MCP connections (persistent), Bedrock client, run() helper
+│   ├── base_modules/        # Focused sub-modules extracted from base.py (parsers.py, etc.)
+│   ├── paths.py             # Centralized ~/.envoy path resolution (honors ENVOY_CONFIG)
+│   ├── budget.py            # Per-request latency/AI-cost tracking
+│   ├── confirm.py           # Code-level confirmation gate for destructive actions (send/forward/delete)
+│   ├── fetch.py             # Shared data-fetch functions (single source for gather() + workers)
 │   ├── workers/             # Domain-specific Strands worker agents
 │   │   ├── __init__.py      # Worker factory + shared infra
 │   │   ├── email_worker.py  # Email operations worker
@@ -366,10 +382,12 @@ envoy/
 │   │   ├── calendar_worker.py   # Calendar management worker
 │   │   ├── productivity_worker.py  # To-dos, tickets, memory, cron
 │   │   ├── research_worker.py     # Phonetool, Kingpin, Wiki, web search, InstructAI, QuickSight
-│   │   └── sharepoint_worker.py   # SharePoint/OneDrive worker
+│   │   ├── sharepoint_worker.py   # SharePoint/OneDrive worker
+│   │   ├── coding_worker.py       # Coding delegation worker (Claude Code / Kiro, read-only by default)
+│   │   └── result.py              # Structured WorkerResult envelope
 │   ├── skills.py            # Agent Skills loader (agentskills.io)
 │   ├── skill_builder.py     # /build-skill + /suggest-skills generators
-│   ├── learning.py          # Active learning loop (reflect, correction, self-analysis)
+│   ├── learning.py          # Active learning loop (reflect, correction, self-analysis, pending-rules queue)
 │   ├── workflows.py         # Compound commands (digest, catchup, etc.)
 │   ├── heartbeat.py         # Autonomous heartbeat + routines
 │   ├── watcher.py           # Long-running background watcher (envoy watch)
@@ -381,6 +399,7 @@ envoy/
 │   ├── sharepoint_agent.py  # SharePoint/OneDrive domain agent
 │   ├── tickets.py           # Tickets domain agent
 │   ├── memory2.py           # Entity-aware persistent memory
+│   ├── observer.py          # Backward-compat shim — redirects to memory2.remember()
 │   ├── internal.py          # Internal websites (Kingpin, Wiki, Taskei)
 │   ├── export.py            # Word/PowerPoint export
 │   └── teamsnap_agent.py    # TeamSnap integration

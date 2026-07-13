@@ -9,11 +9,10 @@ A skill opts into subagent mode by declaring `tools:` in its frontmatter.
 
 import os
 import re
-import yaml
 from pathlib import Path
 from typing import Dict, Optional
 
-CONFIG_DIR = Path.home() / ".envoy"
+from agents.paths import CONFIG_DIR
 
 # Scan paths in priority order (project > user-client > user-shared)
 SKILL_PATHS = [
@@ -26,7 +25,7 @@ SKILL_PATHS = [
 
 def _parse_skill_md(path: Path) -> Optional[dict]:
     """Parse a SKILL.md file into skill record.
-    
+
     Frontmatter fields:
         name: (required) skill identifier
         description: (required) what the skill does
@@ -36,6 +35,8 @@ def _parse_skill_md(path: Path) -> Optional[dict]:
         model: (subagent mode) model tier — light, medium, heavy (default: medium)
         memory_namespace: (subagent mode) isolated memory scope name (default: skill name)
     """
+    import yaml
+
     try:
         text = path.read_text()
     except Exception:

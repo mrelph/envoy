@@ -10,6 +10,7 @@ from typing import List, Dict
 
 from dotenv import load_dotenv
 from envoy_logger import get_logger
+from agents.paths import ENV_FILE, MODELS_FILE, SENT_FILE as SENT_LOG, soul_file, envoy_file, mcp_file, env_file
 
 # Lazy-loaded heavy modules (mcp ~2s, boto3 ~0.7s)
 ClientSession = None
@@ -25,7 +26,7 @@ def _ensure_mcp():
         StdioServerParameters = _SP
         stdio_client = _sc
 
-load_dotenv(os.path.expanduser("~/.envoy/.env"))
+load_dotenv(str(ENV_FILE))
 load_dotenv()  # fallback to project-dir .env
 
 # Suppress MCP server stderr noise (Node warnings, internal errors)
@@ -78,18 +79,94 @@ _MCP_PARAM_DEFS = {
 # Format matches standard mcpServers convention:
 #   { "MyServer": { "command": "my-mcp", "args": ["--flag"], "env": {"KEY": "val"} } }
 # Entries override built-ins by name; new names are added.
-_user_mcp_path = os.path.join(os.path.expanduser("~"), ".envoy", "mcp.json")
-if os.path.exists(_user_mcp_path):
+#
+# SECURITY: unlike _MCP_PARAM_DEFS above, these entries are user-writable data
+# (anything that can write ~/.envoy/mcp.json — e.g. via /mcp add or a
+# compromised process — gets its `command` spawned on next launch). MCP
+# servers are always spawned argv-style (no shell), so a legitimate config
+# never needs a bare shell interpreter or shell metacharacters. Reject those
+# so mcp.json can't become a code-execution channel; only user-loaded entries
+# are validated — the built-in _MCP_PARAM_DEFS above are trusted as-is.
+_SHELL_BASENAMES = {"sh", "bash", "zsh", "dash", "ksh", "fish"}
+_SHELL_METACHARS = (";", "|", "&", "$(", "`")
+
+
+def _unsafe_mcp_command_reason(definition: dict):
+    """Return a human-readable rejection reason, or None if the entry looks safe."""
+    command = str(definition.get("command", ""))
+    args = definition.get("args", []) or []
+    basename = os.path.basename(command)
+    if basename in _SHELL_BASENAMES:
+        return f"command {command!r} is a shell interpreter"
+    for part in [command] + [str(a) for a in args]:
+        for meta in _SHELL_METACHARS:
+            if meta in part:
+                return f"shell metacharacter {meta!r} found in command/args"
+    return None
+
+
+def _load_user_mcp_overrides(path: str):
+    """Load and validate ~/.envoy/mcp.json overrides.
+
+    Returns (accepted, rejected):
+      - accepted: {name: definition} for entries that pass validation
+        (with `env` merged over os.environ, matching the pre-existing
+        override behavior)
+      - rejected: [(name, reason), ...] for entries skipped because their
+        command looks unsafe (see _unsafe_mcp_command_reason)
+
+    Also tightens the file's permissions to 0600 if it's group/world
+    readable or writable (best-effort — a chmod failure is swallowed).
+    Never raises: a missing, unreadable, or malformed mcp.json degrades to
+    "no user overrides" rather than blocking startup.
+    """
+    accepted = {}
+    rejected = []
+    if not os.path.exists(path):
+        return accepted, rejected
+
     try:
-        import json as _json
-        with open(_user_mcp_path) as _f:
-            for _name, _def in _json.load(_f).items():
-                if "env" in _def:
-                    _def["env"] = {**os.environ, **_def["env"]}
-                _MCP_PARAM_DEFS[_name] = _def
-    except Exception as _e:
+        mode = os.stat(path).st_mode
+        if mode & 0o077:  # group or world readable/writable
+            try:
+                get_logger().log("WARNING", "mcp_json_permissions",
+                                  f"{path} is group/world-readable — tightening to 0600",
+                                  path=path)
+            except Exception:
+                pass
+            try:
+                os.chmod(path, 0o600)
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+    try:
+        with open(path) as f:
+            defs = json.load(f)
+        for name, definition in defs.items():
+            reason = _unsafe_mcp_command_reason(definition)
+            if reason:
+                rejected.append((name, reason))
+                try:
+                    get_logger().log("WARNING", "mcp_command_rejected",
+                                      f"Skipping MCP server '{name}' from {path}: {reason}",
+                                      server_name=name, reason=reason)
+                except Exception:
+                    pass
+                continue
+            if "env" in definition:
+                definition = {**definition, "env": {**os.environ, **definition["env"]}}
+            accepted[name] = definition
+    except Exception as e:
         import sys
-        print(f"⚠ Failed to load {_user_mcp_path}: {_e}", file=sys.stderr)
+        print(f"⚠ Failed to load {path}: {e}", file=sys.stderr)
+    return accepted, rejected
+
+
+_user_mcp_path = str(mcp_file())
+_user_mcp_accepted, _mcp_rejected = _load_user_mcp_overrides(_user_mcp_path)
+_MCP_PARAM_DEFS.update(_user_mcp_accepted)
 
 _mcp_params_cache = {}
 
@@ -122,16 +199,29 @@ MCP_CALL_TIMEOUT = 30  # seconds per MCP tool call
 import re as _re
 
 _UNTRUSTED_PREFIX_RE = _re.compile(r'^<untrusted_content[^>]*>\n?')
-_UNTRUSTED_SUFFIX_RE = _re.compile(r'\n?</untrusted_content[^>]*>.*', _re.DOTALL)
+# Matches only the closing tag itself (plus an optional preceding newline) —
+# NOT `.*` after it. The previous version used DOTALL with a trailing `.*`,
+# which silently deleted every byte of real content that happened to follow
+# the closing tag (e.g. the rest of an email thread after a quoted reply).
+_UNTRUSTED_SUFFIX_RE = _re.compile(r'\n?</untrusted_content[^>]*>')
 _SAFETY_DIRECTIVE_RE = _re.compile(r'^\[CONTENT SAFETY DIRECTIVE\].*?^---\n', _re.DOTALL | _re.MULTILINE)
 
 
 def strip_mcp_wrapper(text: str) -> str:
     """Strip MCP safety wrappers from responses.
-    
+
     Handles:
     - <untrusted_content_xxx>...</untrusted_content_xxx> (Outlook MCP)
     - [CONTENT SAFETY DIRECTIVE]...--- (Slack MCP)
+
+    SECURITY NOTE: this function is no longer called automatically from
+    `_TimeoutSession._call_one`. The Outlook/Slack MCP servers add these
+    wrappers deliberately as a prompt-injection defense — they mark
+    third-party content as untrusted data so the model doesn't treat it as
+    instructions. Stripping them before the content reaches the model
+    defeated that defense. Kept here only for any code/tests that still
+    want the stripped text explicitly (e.g. for display), not as a
+    security boundary.
     """
     text = _UNTRUSTED_PREFIX_RE.sub('', text)
     text = _UNTRUSTED_SUFFIX_RE.sub('', text)
@@ -203,7 +293,6 @@ class _TimeoutSession:
         self._name = name
         self._timeout = timeout
         self.dead = False
-        self.auth_failed = False  # set True when an auth failure is detected
 
     _AUTH_FAIL_PATTERNS = (
         "unauthorized", "401", "403", "authentication failed",
@@ -212,32 +301,19 @@ class _TimeoutSession:
         "not authenticated", "credentials expired",
     )
 
-    @staticmethod
-    def _looks_like_json(text: str) -> bool:
-        """Heuristic: is this text a JSON object/array a consumer might parse?"""
-        stripped = text.lstrip()
-        return stripped.startswith("{") or stripped.startswith("[")
-
     async def _call_one(self, tool_name, arguments=None, **kwargs):
-        """Single MCP call with timeout and health tracking."""
+        """Single MCP call with timeout and health tracking.
+
+        Deliberately does NOT strip <untrusted_content>/[CONTENT SAFETY
+        DIRECTIVE] wrappers (see strip_mcp_wrapper's docstring) — those are
+        the Outlook/Slack MCP servers' own prompt-injection defense, and
+        removing them let third-party content masquerade as instructions.
+        """
         try:
             result = await asyncio.wait_for(
                 self._session.call_tool(tool_name, arguments, **kwargs),
                 timeout=self._timeout,
             )
-            # Strip <untrusted_content> wrappers from all text content
-            if result and result.content:
-                for item in result.content:
-                    if hasattr(item, 'text') and isinstance(item.text, str):
-                        item.text = strip_mcp_wrapper(item.text)
-                        # Detect auth failures in response text. Flag it for
-                        # programmatic callers, but only append human guidance
-                        # when the payload isn't JSON — appending to JSON would
-                        # break downstream parsers (e.g. feed.py json.loads).
-                        if item.text and any(p in item.text.lower() for p in self._AUTH_FAIL_PATTERNS):
-                            self.auth_failed = True
-                            if not self._looks_like_json(item.text):
-                                item.text += "\n\n⚠️ Authentication failure detected. Please refresh your credentials and retry."
             return result
         except asyncio.TimeoutError:
             raise TimeoutError(f"{self._name}/{tool_name} timed out after {self._timeout}s")
@@ -254,7 +330,14 @@ class _TimeoutSession:
             raise
 
     async def _expand_batch(self, old_name, new_name, arguments, **kwargs):
-        """Expand a batch call into sequential single calls, returning a combined result.
+        """Expand a batch call into per-item calls, returning a combined result.
+
+        Per-item calls run concurrently (bounded by a semaphore of 8) instead
+        of sequentially — a 50-item Slack batch used to take ~10-25s making
+        one call at a time. asyncio.gather preserves result ordering (it
+        returns results in the same order as the input list regardless of
+        completion order), so downstream code that zips results back up
+        against the original ids/channels is unaffected.
 
         Per-item exceptions are caught and a placeholder result is substituted so a
         partial Slack outage doesn't fail the whole scan. Swallowed errors are
@@ -265,35 +348,56 @@ class _TimeoutSession:
         from types import SimpleNamespace
 
         swallowed = []  # (item_id, exception)
+        sem = asyncio.Semaphore(8)
 
         results = []
         if old_name == "batch_get_channel_info":
-            for cid in (arguments or {}).get("channelIds", []):
-                try:
-                    r = await self._call_one(new_name, {"channel": cid}, **kwargs)
-                    text = r.content[0].text if r.content else "{}"
-                    results.append({"channelId": cid, "result": _json.loads(text) if isinstance(text, str) else text})
-                except Exception as e:
-                    swallowed.append((cid, e))
-                    results.append({"channelId": cid, "result": {"name": cid}})
+            async def _fetch_channel(cid):
+                async with sem:
+                    try:
+                        r = await self._call_one(new_name, {"channel": cid}, **kwargs)
+                        text = r.content[0].text if r.content else "{}"
+                        return {"channelId": cid, "result": _json.loads(text) if isinstance(text, str) else text}, None
+                    except Exception as e:
+                        return {"channelId": cid, "result": {"name": cid}}, (cid, e)
+
+            channel_ids = (arguments or {}).get("channelIds", [])
+            outcomes = await asyncio.gather(*[_fetch_channel(cid) for cid in channel_ids])
+            for item, err in outcomes:
+                results.append(item)
+                if err:
+                    swallowed.append(err)
         elif old_name == "batch_get_user_info":
-            for uid in (arguments or {}).get("users", []):
-                try:
-                    r = await self._call_one(new_name, {"query": uid}, **kwargs)
-                    text = r.content[0].text if r.content else "{}"
-                    data = _json.loads(text) if isinstance(text, str) else text
-                    results.append({"userId": uid, "result": data if isinstance(data, dict) else {"name": uid}})
-                except Exception as e:
-                    swallowed.append((uid, e))
-                    results.append({"userId": uid, "result": {"name": uid}})
+            async def _fetch_user(uid):
+                async with sem:
+                    try:
+                        r = await self._call_one(new_name, {"query": uid}, **kwargs)
+                        text = r.content[0].text if r.content else "{}"
+                        data = _json.loads(text) if isinstance(text, str) else text
+                        return {"userId": uid, "result": data if isinstance(data, dict) else {"name": uid}}, None
+                    except Exception as e:
+                        return {"userId": uid, "result": {"name": uid}}, (uid, e)
+
+            users = (arguments or {}).get("users", [])
+            outcomes = await asyncio.gather(*[_fetch_user(uid) for uid in users])
+            for item, err in outcomes:
+                results.append(item)
+                if err:
+                    swallowed.append(err)
         elif old_name == "batch_set_last_read":
-            for ch in (arguments or {}).get("channels", []):
+            async def _set_last_read(ch):
                 cid = ch.get("channelId", "")
                 ts = ch.get("ts") or ch.get("tsIso", "")
-                try:
-                    await self._call_one(new_name, {"channel": cid, "timestamp": ts}, **kwargs)
-                except Exception as e:
-                    swallowed.append((cid, e))
+                async with sem:
+                    try:
+                        await self._call_one(new_name, {"channel": cid, "timestamp": ts}, **kwargs)
+                        return None
+                    except Exception as e:
+                        return (cid, e)
+
+            channels_arg = (arguments or {}).get("channels", [])
+            outcomes = await asyncio.gather(*[_set_last_read(ch) for ch in channels_arg])
+            swallowed.extend(err for err in outcomes if err)
             results = [{"ok": True}]
         elif old_name == "list_channels":
             # Emulate old list_channels using list_my_channels + list_channels (DM types)
@@ -402,10 +506,23 @@ def _get_loop():
 
 def run(coro):
     """Run an async coroutine on the shared event loop.
-    
+
     Uses a persistent background loop so MCP subprocess connections
     survive across calls (~0.9s saved per reused connection).
     """
+    if threading.current_thread() is _loop_thread:
+        # Calling run() from the loop thread itself would schedule the
+        # coroutine onto the loop and then block that same loop waiting for
+        # it to finish — a guaranteed self-deadlock (surfaces as a 120s
+        # timeout). Fail fast instead.
+        try:
+            coro.close()
+        except Exception:
+            pass
+        raise RuntimeError(
+            "run() called from the event-loop thread — this would deadlock; "
+            "await the coroutine directly or use asyncio.to_thread"
+        )
     future = asyncio.run_coroutine_threadsafe(coro, _get_loop())
     return future.result(timeout=65)  # just above _WORKER_TIMEOUT (60s) to avoid racing
 
@@ -660,23 +777,34 @@ def check_mcp_connections() -> Dict[str, bool]:
                 out[r[0]] = r[1]
         return out
 
-    return run(_test_all())
+    result = run(_test_all())
+    # Surface servers skipped for unsafe commands (see mcp.json validation
+    # above) as a visible, always-failing entry rather than letting them
+    # vanish silently from the connection status.
+    for _name, _reason in _mcp_rejected:
+        result[f"{_name} — blocked (unsafe command)"] = False
+    return result
 
 
 # --- AI / Bedrock ---
 
-MODELS_FILE = os.path.expanduser("~/.envoy/models.json")
 DEFAULT_MODELS = {
-    "agent":  "us.anthropic.claude-opus-4-7-v1",
+    # "agent" is the supervisor tier — it fires on every prompt, including
+    # trivial routing, so it stays on Sonnet by default (~5x cheaper than
+    # Opus with no perceptible quality loss for routing/synthesis). "heavy"
+    # is the tier workers explicitly opt into for hard reasoning and stays
+    # on Opus. Users' ~/.envoy/models.json overrides this — only fresh
+    # installs are affected by this default.
+    "agent":  "us.anthropic.claude-sonnet-4-6-v1",
     "heavy":  "us.anthropic.claude-opus-4-7-v1",
     "medium": "us.anthropic.claude-sonnet-4-6-v1",
     "light":  "us.amazon.nova-micro-v1:0",
     "memory": "us.amazon.nova-micro-v1:0",
 }
 MODEL_CATALOG = [
-    ("us.anthropic.claude-opus-4-7-v1",              "Claude Opus 4.7",   "Best reasoning, highest cost"),
+    ("us.anthropic.claude-opus-4-7-v1",              "Claude Opus 4.7",   "Best reasoning, highest cost — used for 'heavy' tasks"),
     ("us.anthropic.claude-opus-4-6-v1",              "Claude Opus 4.6",   "Previous gen Opus, strong reasoning"),
-    ("us.anthropic.claude-sonnet-4-6-v1",            "Claude Sonnet 4.6", "Strong balance of speed & quality"),
+    ("us.anthropic.claude-sonnet-4-6-v1",            "Claude Sonnet 4.6", "Strong balance of speed & quality — default for 'agent' routing/synthesis"),
     ("us.anthropic.claude-sonnet-4-20250514-v1:0",   "Claude Sonnet 4",   "Previous gen Sonnet"),
     ("us.anthropic.claude-3-5-haiku-20241022-v1:0",  "Claude 3.5 Haiku",  "Fast & cheap, good for simple tasks"),
     ("us.amazon.nova-pro-v1:0",                      "Nova Pro",          "Best Nova quality, multimodal"),
@@ -789,7 +917,7 @@ def invoke_ai(prompt: str, max_tokens: int = 10000, tier: str = "heavy") -> str:
         global _bedrock_client
         _bedrock_client = None
         try:
-            load_dotenv(os.path.expanduser("~/.envoy/.env"), override=True)
+            load_dotenv(str(env_file()), override=True)
             load_dotenv(override=True)
         except Exception:
             pass
@@ -885,7 +1013,7 @@ def _invoke_ai_once(prompt: str, max_tokens: int, tier: str) -> str:
 # --- Agent identity ---
 
 def agent_name() -> str:
-    p = os.path.expanduser("~/.envoy/soul.md")
+    p = soul_file()
     if os.path.exists(p):
         with open(p) as f:
             for line in f:
@@ -909,7 +1037,7 @@ def current_user() -> str:
     global _user_cache
     if _user_cache is not None:
         return _user_cache
-    p = os.path.expanduser("~/.envoy/envoy.md")
+    p = envoy_file()
     if os.path.exists(p):
         try:
             with open(p) as f:
@@ -934,7 +1062,6 @@ def reload_user() -> None:
 
 # --- Sent message tracking ---
 
-SENT_LOG = os.path.expanduser("~/.envoy/sent.json")
 TAG_PREFIX = "⚡att:"
 
 
@@ -961,6 +1088,10 @@ def log_sent(tag: str, channel: str, recipient: str, medium: str, summary: str):
     os.makedirs(os.path.dirname(SENT_LOG), exist_ok=True)
     with open(SENT_LOG, "w") as f:
         json.dump(entries, f, indent=2)
+    try:
+        os.chmod(SENT_LOG, 0o600)
+    except OSError:
+        pass
 
 
 def load_sent() -> list:
@@ -971,6 +1102,30 @@ def load_sent() -> list:
         except (json.JSONDecodeError, FileNotFoundError):
             pass
     return []
+
+
+# --- Parse-failure logging helper ---
+#
+# Both parsers below return an empty ([]/{}) result on any shape they don't
+# recognize, so callers can treat "couldn't parse" the same as "no data" and
+# never crash. But that also means an MCP schema change silently reads as
+# "no emails found" / "no todos" forever, with no signal anywhere. Log a
+# WARNING (with a truncated payload preview) whenever the expected shape
+# isn't found — logging failures must never affect the parser's return value.
+
+def _log_parse_failure(kind: str, payload, error: Exception = None) -> None:
+    try:
+        from envoy_logger import get_logger as _get_logger
+        preview = repr(payload)
+        if len(preview) > 200:
+            preview = preview[:200] + "..."
+        message = f"{kind}: MCP payload did not match the expected shape"
+        if error is not None:
+            message += f" ({error})"
+        _get_logger().log("WARNING", "mcp_parse_failure", message,
+                           parser=kind, payload_preview=preview)
+    except Exception:
+        pass
 
 
 # --- Email parsing helper ---
@@ -994,8 +1149,10 @@ def parse_email_search_result(result, extra_fields=None) -> List[Dict]:
                     'snippet': email.get('preview', ''),
                 }
                 emails.append(entry)
+        else:
+            _log_parse_failure('parse_email_search_result', content)
     except Exception as e:
-        get_logger().log_error(f"Error parsing email data: {e}")
+        _log_parse_failure('parse_email_search_result', content, error=e)
     return emails
 
 
@@ -1011,5 +1168,6 @@ def parse_todo_response(result) -> dict:
         if isinstance(data.get('content'), dict):
             return data['content']
         return data
-    except (json.JSONDecodeError, KeyError, IndexError):
+    except (json.JSONDecodeError, KeyError, IndexError) as e:
+        _log_parse_failure('parse_todo_response', raw, error=e)
         return {}
