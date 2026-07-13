@@ -37,6 +37,7 @@ COMMANDS = {
     "/response-times": ("Email response time analysis",    "Analyze my email response time patterns for the last {days} days"),
     "/followup":       ("Unanswered sent emails",          "Scan my sent emails for unanswered threads from the last {days} days"),
     "/commitments":    ("Promises & commitments tracker",  "Scan my sent messages for commitments and promises from the last {days} days"),
+    "/team-health":    ("Team health dashboard",            None),
     # Prep (needs {arg})
     "/prep-1on1":    ("1:1 prep brief",                    "Generate a 1:1 prep brief for my meeting with {arg}"),
     "/prep-meeting": ("Meeting prep brief",                "Generate a prep brief for my meeting: {arg}"),
@@ -45,6 +46,7 @@ COMMANDS = {
     "/ea":        ("Send something to your EA",            "Send this to my EA: {arg}"),
     "/book":      ("Book a meeting room",                  "Find me a room in {arg}"),
     "/findtime":  ("Find available meeting times",         "Find me available meeting times this week"),
+    "/schedule":  ("Smart scheduling — find times, book rooms", None),
     "/search":    ("Search Slack history",                 "Search Slack for: {arg}"),
     "/sharepoint": ("Search or browse SharePoint/OneDrive", "On SharePoint/OneDrive: {arg}"),
     # Reviews
@@ -86,13 +88,13 @@ COMMANDS = {
 
 # Commands that need an {arg} and should prompt if missing.
 # Note: /prep-meeting is intentionally NOT here — it defaults to "my next meeting".
-ARG_COMMANDS = {"/prep-1on1", "/reply", "/ea", "/book", "/search", "/sharepoint", "/vault", "/synthesize", "/dossier", "/pre-game", "/exec-sponsor", "/save-email"}
+ARG_COMMANDS = {"/prep-1on1", "/reply", "/ea", "/book", "/schedule", "/search", "/sharepoint", "/vault", "/synthesize", "/dossier", "/pre-game", "/exec-sponsor", "/save-email"}
 
 # Default days per command
 DEFAULT_DAYS = {
     "/digest": 7, "/customers": 14, "/cleanup": 14, "/catchup": 5,
     "/slack-catchup": 3, "/cal-audit": 5, "/response-times": 7,
-    "/followup": 7, "/commitments": 7, "/yesterbox": 1,
+    "/followup": 7, "/commitments": 7, "/yesterbox": 1, "/team-health": 7,
 }
 
 # Command groups for help display
@@ -100,9 +102,9 @@ COMMAND_GROUPS = [
     ("Briefings", ["/briefing", "/calendar", "/week", "/todo"]),
     ("Digests & Scans", ["/digest", "/boss", "/customers", "/cleanup", "/slack", "/tickets"]),
     ("Catch-up", ["/catchup", "/slack-catchup", "/yesterbox"]),
-    ("Analysis", ["/cal-audit", "/response-times", "/followup", "/commitments"]),
+    ("Analysis", ["/cal-audit", "/response-times", "/followup", "/commitments", "/team-health"]),
     ("Prep", ["/prep-1on1", "/prep-meeting"]),
-    ("Actions", ["/reply", "/ea", "/book", "/findtime", "/search", "/sharepoint"]),
+    ("Actions", ["/reply", "/ea", "/book", "/findtime", "/schedule", "/search", "/sharepoint"]),
     ("Reviews", ["/eod", "/weekly", "/cron"]),
     ("Heartbeat", ["/routine", "/routines", "/heartbeat", "/suggest-routines"]),
     ("Skills", ["/build-skill", "/suggest-skills", "/skills"]),
@@ -257,12 +259,26 @@ def dispatch(raw: str, agent):
         labels = {
             "/prep-1on1": "alias", "/prep-meeting": "meeting subject",
             "/reply": "which email + your reply", "/ea": "message for EA",
-            "/book": "building + time", "/search": "query", "/sharepoint": "query",
+            "/book": "building + time",
+            "/schedule": "request, e.g. 30m with jsmith next week, find room at SEA54",
+            "/search": "query", "/sharepoint": "query",
             "/vault": "topic to search", "/synthesize": "topic to connect",
             "/dossier": "partner name", "/pre-game": "meeting or company name",
             "/exec-sponsor": "account or partner name", "/save-email": "email subject or sender",
         }
         return (f"Usage: {cmd} <{labels.get(cmd, 'argument')}>", True)
+
+    # --- Smart scheduling (multi-step: proposes times, user confirms next turn) ---
+    if cmd == "/schedule":
+        from agents.scheduling import schedule
+        return (schedule(arg), True)
+
+    # --- Team health dashboard ---
+    if cmd == "/team-health":
+        from agents.workflows import team_health
+        days = int(arg) if arg and arg.isdigit() else DEFAULT_DAYS.get("/team-health", 7)
+        alias = arg if arg and not arg.isdigit() else ""
+        return (team_health(alias, days=days), True)
 
     # --- Slash command with template ---
     entry = COMMANDS.get(cmd)

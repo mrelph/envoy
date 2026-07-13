@@ -45,7 +45,7 @@ Request flow: `envoy` (bash wrapper) → `cli.py` (Click) → `tui.py` (Textual 
 
 ## Gotchas
 
-- The `envoy` wrapper runs `mwinit` (Amazon Midway auth) and a git-tag update check on launch; many MCP servers (builder-mcp, aws-outlook-mcp, etc.) are Amazon-internal and unavailable off-network — tests don't need any of this
+- The `envoy` wrapper runs a git-tag update check on launch; many MCP servers (builder-mcp, aws-outlook-mcp, etc.) are Amazon-internal and unavailable off-network — tests don't need any of this
 - Project structure is documented in both README.md and CONTRIBUTING.md; keep both in sync when moving files
 - `soul.md` / `envoy.md` in the repo root are gitignored personal config copies; real files live in `~/.envoy/`
-- Version is read from the `VERSION` file (currently 3.2.0); release tags are `v*`
+- Version is read from the `VERSION` file (currently 3.4.0); release tags are `v*`

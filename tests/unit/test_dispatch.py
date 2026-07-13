@@ -89,10 +89,12 @@ class TestCommandsTableIntegrity:
             assert days > 0, f"{cmd}: default days must be positive"
 
     def test_default_days_commands_use_days_placeholder(self):
-        """Every command with a default-days entry should actually use {days} in its template."""
+        """Every command with a default-days entry should actually use {days} in its
+        template — unless it has a None template (custom handler parses days itself)."""
         for cmd in DEFAULT_DAYS:
             _, tpl = COMMANDS[cmd]
-            assert tpl is not None, f"{cmd}: has DEFAULT_DAYS but no template"
+            if tpl is None:
+                continue  # custom-handled (e.g. /team-health, /schedule)
             assert "{days}" in tpl, f"{cmd}: has DEFAULT_DAYS but template lacks {{days}}"
 
     def test_arg_commands_use_arg_placeholder(self):
