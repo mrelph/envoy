@@ -256,10 +256,15 @@ class TestMarkdownDetectionHeuristic:
 class TestShouldRerenderAsMarkdown:
     """Factored decision from `_show()` — no duplicate rendering once streamed."""
 
-    def test_never_rerenders_once_anything_streamed(self):
-        # Even text with strong markdown signals is skipped once streaming
-        # already put the plain-text record on screen.
-        assert _should_rerender_as_markdown(True, "# Heading\nbody") is False
+    def test_rerenders_streamed_text_with_headings_or_tables(self):
+        # Tables and headings are unreadable as raw text — re-render even
+        # after streaming (the TUI clears and re-renders formatted).
+        assert _should_rerender_as_markdown(True, "# Heading\nbody") is True
+        assert _should_rerender_as_markdown(True, "| A | B |\n|---|---|\n| 1 | 2 |") is True
+
+    def test_skips_rerender_for_simple_streamed_markdown(self):
+        # Bold and bullets are readable enough as raw streamed text.
+        assert _should_rerender_as_markdown(True, "**bold** and more **bold**") is False
 
     def test_rerenders_non_streamed_markdown_text(self):
         assert _should_rerender_as_markdown(False, "# Heading\nbody") is True

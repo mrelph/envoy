@@ -118,16 +118,21 @@ def _should_rerender_as_markdown(stream_started: bool, text: str) -> bool:
 
     RichLog is append-only — it can't replace lines already written. If the
     response streamed live, the plain text already on screen IS the
-    permanent record; re-writing the whole answer a second time as Markdown
-    would mean the user scrolls past the same answer twice, and the
-    formatting gain doesn't cover that cost. So once anything has streamed
-    for this turn, never re-render — Markdown formatting is reserved for
-    the non-streamed path (responses that arrived with no stream chunks at
-    all, e.g. a purely synchronous command).
+    permanent record for simple responses.
+
+    However, tables and headings are unreadable as plain streamed text, so
+    for responses with those heavy-markdown signals we clear the RichLog and
+    re-render — the formatting gain justifies the brief visual flash.
     """
-    if stream_started:
+    if not _looks_like_markdown(text):
         return False
-    return _looks_like_markdown(text)
+    if not stream_started:
+        return True
+    # Streamed responses: re-render only for tables and headings (unreadable raw).
+    # Plain bold/bullet responses are readable enough as streamed text.
+    if _MD_TABLE_ROW_RE.search(text) or _MD_HEADING_RE.search(text):
+        return True
+    return False
 
 
 # ── Widgets ──────────────────────────────────────────────
@@ -587,7 +592,11 @@ class ChatInput(TextArea):
 class EnvoyApp(App):
     """Envoy TUI."""
 
-    CSS_PATH = "tui.css"
+    # CSS is generated from the active theme — see tui_themes.build_css()
+    from tui_themes import build_css as _build_css
+    DEFAULT_CSS = _build_css()
+    del _build_css
+
     TITLE = "Envoy"
     ALLOW_SELECT = True
 
@@ -625,6 +634,9 @@ class EnvoyApp(App):
         # mid-drain can't be lost or duplicated.
         self._stream_lock = threading.Lock()
         self._last_text_ts: float = 0.0  # monotonic time of the last flushed text chunk
+        # (len(out.lines), out._start_line) captured at the first flush of a
+        # turn — lets `_show()` truncate just this turn's streamed lines.
+        self._stream_anchor: tuple[int, int] = (0, 0)
 
     def compose(self) -> ComposeResult:
         yield MCPBar(id="mcp-bar")
@@ -804,10 +816,43 @@ class EnvoyApp(App):
         # is over. Stop() is a no-op if it's already stopped.
         self.query_one("#spinner", Spinner).stop()
         if not self._stream_started:
+            # Remember where this turn's streamed output begins so `_show()`
+            # can truncate and re-render it as Markdown if warranted. Record
+            # `_start_line` too: if `max_lines` trimming drops early lines
+            # mid-turn, the anchor index shifts down by the trimmed count.
+            self._stream_anchor = (len(out.lines), out._start_line)
             out.write(Text())
             self._stream_started = True
-        out.write(Text(pending, style="#e6edf3"))
+        # `overflow="fold"` guarantees wrapping even for unbreakable tokens
+        # (long URLs, paths) that word-wrap alone would let overflow.
+        from tui_themes import get_theme
+        text_color = get_theme().get("text", "#e6edf3")
+        out.write(Text(pending, style=text_color, overflow="fold", no_wrap=False))
         self._last_text_ts = time.monotonic()
+
+    def _truncate_stream_output(self, out: RichLog) -> bool:
+        """UI thread: drop this turn's streamed lines from the RichLog.
+
+        RichLog has no public API to remove a range of lines, so this trims
+        `out.lines` back to the anchor captured at the turn's first flush
+        (`_flush_stream`), leaving all earlier history intact. `_start_line`
+        drift accounts for lines `max_lines` trimmed off the top since the
+        anchor was taken. Returns False if the log state no longer matches
+        (e.g. it was cleared mid-turn), in which case the caller should
+        leave the log alone.
+        """
+        anchor_len, anchor_start = self._stream_anchor
+        trimmed = out._start_line - anchor_start
+        if trimmed < 0:
+            return False
+        keep = max(0, anchor_len - trimmed)
+        if keep > len(out.lines):
+            return False
+        del out.lines[keep:]
+        from textual.geometry import Size
+        out.virtual_size = Size(out.virtual_size.width, len(out.lines))
+        out.refresh()
+        return True
 
     def _on_tool_event(self, tool_name: str) -> None:
         """UI thread: a worker/tool started running mid-turn.
@@ -905,23 +950,24 @@ class EnvoyApp(App):
 
             text = str(result)
 
-            # RichLog can't replace lines already written, so if this turn
-            # streamed anything live, that plain text on screen already IS
-            # the response — don't re-render the full answer a second time
-            # as Markdown (see `_should_rerender_as_markdown`'s docstring:
-            # the duplicate-scroll cost outweighs the formatting gain). Just
-            # add trailing spacing to match the non-streamed path below.
-            if self._stream_started:
-                out.write(Text())
-                return
-
             if _should_rerender_as_markdown(self._stream_started, text):
+                # For streamed responses with heavy markdown (tables/headings),
+                # remove just this turn's raw streamed lines (keeping prior
+                # history) and re-render formatted. The brief flash is worth
+                # readable tables.
+                if self._stream_started:
+                    self._truncate_stream_output(out)
                 try:
                     out.write(Text())
                     out.write(Markdown(text))
                     out.write(Text())
                 except Exception:
                     out.write(Text(f"\n{text}\n"))
+            elif self._stream_started:
+                # Streamed text without heavy markdown — already readable on
+                # screen, just add spacing.
+                out.write(Text())
+                return
             else:
                 out.write(Text(f"\n{text}\n"))
 

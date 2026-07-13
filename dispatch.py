@@ -77,6 +77,7 @@ COMMANDS = {
     "/status":    ("Refresh MCP server status",            None),
 
     "/models":    ("Show/edit AI model assignments",       None),
+    "/theme":     ("Change TUI colour theme",              None),
     "/settings":  ("Edit personality and config",          None),
     "/mcp":       ("Manage MCP servers (add/remove/list)", None),
     "/skills":    ("List configured skills",               None),
@@ -108,7 +109,7 @@ COMMAND_GROUPS = [
     ("Reviews", ["/eod", "/weekly", "/cron"]),
     ("Heartbeat", ["/routine", "/routines", "/heartbeat", "/suggest-routines"]),
     ("Skills", ["/build-skill", "/suggest-skills", "/skills"]),
-    ("System", ["/doctor", "/status", "/models", "/learn", "/mcp", "/settings", "/backup", "/help", "/exit"]),
+    ("System", ["/doctor", "/status", "/models", "/theme", "/learn", "/mcp", "/settings", "/backup", "/help", "/exit"]),
 ]
 
 
@@ -250,6 +251,9 @@ def dispatch(raw: str, agent):
 
     if cmd == "/models":
         return (_handle_models(arg), True)
+
+    if cmd == "/theme":
+        return (_handle_theme(arg), True)
 
     if cmd == "/learn":
         return (_handle_learn(arg), True)
@@ -615,6 +619,31 @@ def _handle_learn(arg: str) -> str:
         return fn(index)
 
     return "Usage: `/learn` (list) · `/learn confirm <n>` · `/learn reject <n>`"
+
+
+def _handle_theme(arg: str) -> str:
+    """Show or change TUI colour theme."""
+    from tui_themes import list_themes, get_theme_name, set_theme
+
+    current = get_theme_name()
+
+    if not arg:
+        lines = ["## TUI Themes\n"]
+        for name in list_themes():
+            marker = " ◀ current" if name == current else ""
+            lines.append(f"  • **{name}**{marker}")
+        lines.append(f"\nSet with: `/theme <name>` — restart the TUI to apply.")
+        return "\n".join(lines)
+
+    name = arg.strip().lower()
+    if name not in list_themes():
+        return f"⚠️ Unknown theme '{name}'. Available: {', '.join(list_themes())}"
+
+    if name == current:
+        return f"Already using '{name}'."
+
+    set_theme(name)
+    return f"✓ Theme set to **{name}**. Restart the TUI to apply the new colours."
 
 
 def _handle_models(arg: str) -> str:
