@@ -47,6 +47,12 @@ Audit my calendar for the next `{days}` days. Calculate meeting load percentage,
 
 Defaults: days=5
 
+## team-health
+
+Build a team health dashboard for `{alias}`'s direct reports over the last `{days}` days. For each person, roll up email sent/received volume, open tickets (flag sev-2+ and stale ones with no update in 7+ days), and Slack recency (silent 3+ days = flag). Present a per-person markdown table, then "Needs Attention" and "Looking Good" sections.
+
+Defaults: alias=$USER, days=7
+
 ## response-times
 
 Analyze my email response patterns over the last `{days}` days. Show my average response time, who I'm slow to reply to, who's slow to reply to me, and volume patterns.

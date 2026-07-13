@@ -121,8 +121,9 @@ def _should_rerender_as_markdown(stream_started: bool, text: str) -> bool:
     permanent record for simple responses.
 
     However, tables and headings are unreadable as plain streamed text, so
-    for responses with those heavy-markdown signals we clear the RichLog and
-    re-render — the formatting gain justifies the brief visual flash.
+    for responses with those heavy-markdown signals `_show()` removes this
+    turn's streamed lines (`_truncate_stream_output`) and re-renders them
+    formatted — the formatting gain justifies the brief visual flash.
     """
     if not _looks_like_markdown(text):
         return False
