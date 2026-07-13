@@ -595,6 +595,125 @@ class ModelPickerScreen(ModalScreen[str | None]):
         self.dismiss(None)
 
 
+# ── Theme Picker Modal ──────────────────────────────────
+
+
+class ThemePickerScreen(ModalScreen[str | None]):
+    """Interactive theme picker with live colour previews."""
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+    ]
+
+    DEFAULT_CSS = """
+    ThemePickerScreen {
+        align: center middle;
+    }
+    #theme-picker-box {
+        width: 72;
+        max-height: 32;
+        border: round #3a424c;
+        padding: 1 2;
+    }
+    #theme-picker-box Static {
+        width: 100%;
+        content-align: center middle;
+        text-style: bold;
+        margin-bottom: 1;
+    }
+    #theme-list {
+        height: auto;
+        max-height: 22;
+        border: solid #3a424c;
+    }
+    #theme-preview {
+        height: 7;
+        padding: 0 2;
+        margin-top: 1;
+        border: round #3a424c;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        from tui_themes import get_theme
+        th = get_theme()
+        with Vertical(id="theme-picker-box"):
+            yield Static("🎨  Theme Picker")
+            yield OptionList(id="theme-list")
+            yield Static(id="theme-preview")
+
+    def on_mount(self) -> None:
+        self._populate_list()
+        # Highlight the current theme
+        from tui_themes import get_theme_name, THEMES
+        current = get_theme_name()
+        names = list(THEMES.keys())
+        if current in names:
+            ol = self.query_one("#theme-list", OptionList)
+            try:
+                ol.highlighted = names.index(current)
+            except Exception:
+                pass
+        self._show_preview(current)
+
+    def _populate_list(self) -> None:
+        from tui_themes import THEMES, get_theme_name
+        from dispatch import _THEME_DESCRIPTIONS
+        current = get_theme_name()
+        ol = self.query_one("#theme-list", OptionList)
+        ol.clear_options()
+        for name in THEMES:
+            marker = " ●" if name == current else "  "
+            desc = _THEME_DESCRIPTIONS.get(name, "")
+            ol.add_option(Option(f"{marker} {name:<12} {desc}", id=name))
+        ol.add_option(Separator())
+        ol.add_option(Option("  ↩ Cancel", id="__cancel__"))
+
+    def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
+        if event.option.id and event.option.id != "__cancel__":
+            self._show_preview(event.option.id)
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        if event.option.id == "__cancel__":
+            self.dismiss(None)
+            return
+        from tui_themes import set_theme
+        set_theme(event.option.id)
+        self.dismiss(event.option.id)
+
+    def _show_preview(self, name: str) -> None:
+        from tui_themes import THEMES
+        theme = THEMES.get(name)
+        if not theme:
+            return
+        preview = self.query_one("#theme-preview", Static)
+        t = Text()
+        t.append(f"  {name}\n", style=f"bold {theme['accent']}")
+        t.append(f"  ── Preview ──────────────────────────────\n", style=theme['border'])
+        t.append(f"  › ", style=f"bold {theme['accent']}")
+        t.append("summarise my inbox\n", style=f"{theme['text']} bold")
+        t.append(f"  You have 12 unread emails. ", style=theme['text'])
+        t.append("3 need replies.\n", style=theme['text'])
+        t.append(f"  ↑4K ↓2K", style=theme['text_dim'])
+        t.append(f"  ·  ", style=theme['border'])
+        t.append(f"⚡ fable 5", style=theme['model'])
+        t.append(f"  ·  ", style=theme['border'])
+        t.append(f"📧 Email", style=theme['accent_dim'])
+        t.append(f"  ·  ", style=theme['border'])
+        t.append("✓ done", style=theme['success'])
+        t.append(f"  ·  ", style=theme['border'])
+        t.append("⚠ slow", style=theme['warning'])
+        t.append(f"  ·  ", style=theme['border'])
+        t.append("✗ error", style=theme['error'])
+        preview.update(t)
+        # Tint the preview background
+        preview.styles.background = theme['bg']
+        preview.styles.border = ("round", theme['border'])
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 # ── Chat input widget ────────────────────────────────────
 
 
@@ -856,6 +975,11 @@ class EnvoyApp(App):
             self._open_model_picker()
             return
 
+        # Bare `/theme` opens interactive picker; `/theme <name>` goes through dispatch
+        if cmd == "/theme" and not raw.split()[1:]:
+            self._open_theme_picker()
+            return
+
         # Start animated spinner
         hint = _get_hint(raw)
         self.query_one("#spinner", Spinner).start(hint)
@@ -1097,6 +1221,21 @@ class EnvoyApp(App):
             self.query_one("#input", TextArea).focus()
 
         self.push_screen(ModelPickerScreen(), callback=_on_dismiss)
+
+    def _open_theme_picker(self) -> None:
+        """Push the interactive theme picker modal."""
+        def _on_dismiss(result: str | None) -> None:
+            from tui_themes import get_theme
+            th = get_theme()
+            out = self.query_one("#output", RichLog)
+            if result:
+                out.write(Text(f"  Theme set to {result}. Restart the TUI to apply.", style=th['success']))
+                self.notify(f"Theme → {result} (restart to apply)", timeout=4)
+            else:
+                out.write(Text("  Theme picker closed.", style=th['text_dim']))
+            self.query_one("#input", TextArea).focus()
+
+        self.push_screen(ThemePickerScreen(), callback=_on_dismiss)
 
     def _run_settings(self) -> None:
         """Run the interactive CLI settings editor under `self.suspend()`.
