@@ -621,6 +621,13 @@ def _handle_learn(arg: str) -> str:
     return "Usage: `/learn` (list) · `/learn confirm <n>` · `/learn reject <n>`"
 
 
+_THEME_DESCRIPTIONS = {
+    "slate": "cool neutral grey, works in any lighting",
+    "midnight": "deep blue-black for evening sessions",
+    "paper": "warm off-white for bright environments",
+}
+
+
 def _handle_theme(arg: str) -> str:
     """Show or change TUI colour theme."""
     from tui_themes import list_themes, get_theme_name, set_theme
@@ -631,7 +638,8 @@ def _handle_theme(arg: str) -> str:
         lines = ["## TUI Themes\n"]
         for name in list_themes():
             marker = " ◀ current" if name == current else ""
-            lines.append(f"  • **{name}**{marker}")
+            desc = _THEME_DESCRIPTIONS.get(name, "")
+            lines.append(f"  • **{name}** — {desc}{marker}")
         lines.append(f"\nSet with: `/theme <name>` — restart the TUI to apply.")
         return "\n".join(lines)
 
@@ -643,7 +651,7 @@ def _handle_theme(arg: str) -> str:
         return f"Already using '{name}'."
 
     set_theme(name)
-    return f"✓ Theme set to **{name}**. Restart the TUI to apply the new colours."
+    return f"Theme set to **{name}**. Restart the TUI to apply."
 
 
 def _handle_models(arg: str) -> str:

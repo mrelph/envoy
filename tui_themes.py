@@ -1,74 +1,79 @@
 """TUI theme system — colour palettes for the Envoy terminal interface.
 
-Themes define a consistent set of semantic colour tokens. The TUI loads one
-theme at startup and applies it to widget styles and the generated CSS.
+Three purpose-built themes for long productivity sessions. Each palette is
+designed for readability, clear spatial hierarchy, and minimal eye fatigue.
+
+Tokens:
+    bg          — main content background (largest surface)
+    bg_surface  — elevated surfaces: input area, MCP bar, modals
+    border      — structural dividers (low-contrast, never shouty)
+    text        — primary text (high contrast against bg)
+    text_dim    — secondary text, metadata, timestamps
+    text_faint  — tertiary: hints, placeholders, inactive states
+    accent      — prompt symbol, active indicators, links
+    accent_dim  — softer variant of accent for secondary highlights
+    success     — connected, fast, healthy
+    warning     — slow, needs attention
+    error       — disconnected, failed
+    model       — model name highlight in status bar
 """
 
 import json
 from pathlib import Path
 
 THEMES = {
-    "dark": {  # GitHub dark — the original default
-        "bg": "#0d1117",
-        "bg_secondary": "#161b22",
-        "border": "#21262d",
-        "text": "#e6edf3",
-        "text_dim": "#7d8590",
-        "accent": "#58a6ff",
-        "success": "#3fb950",
-        "warning": "#d29922",
-        "error": "#f85149",
-        "bar_bg": "#010409",
+    "midnight": {
+        # Deep blue-black — easy on the eyes for evening/night sessions.
+        # Inspired by a clear night sky, not a code editor.
+        "bg": "#101820",
+        "bg_surface": "#1a2332",
+        "border": "#2a3a4a",
+        "text": "#d4dce8",
+        "text_dim": "#7a8a9a",
+        "text_faint": "#4a5a6a",
+        "accent": "#6cb4e8",
+        "accent_dim": "#3d7aa0",
+        "success": "#5cb886",
+        "warning": "#d4a054",
+        "error": "#d46464",
+        "model": "#b8a0d8",
     },
-    "light": {  # clean light theme
-        "bg": "#ffffff",
-        "bg_secondary": "#f6f8fa",
-        "border": "#d0d7de",
-        "text": "#1f2328",
-        "text_dim": "#656d76",
-        "accent": "#0969da",
-        "success": "#1a7f37",
-        "warning": "#9a6700",
-        "error": "#cf222e",
-        "bar_bg": "#f6f8fa",
+    "paper": {
+        # Warm off-white — daylight/bright environment theme.
+        # Not clinical white; has warmth without being beige-slop.
+        "bg": "#f8f6f2",
+        "bg_surface": "#edeae4",
+        "border": "#d4cfc6",
+        "text": "#2c2c2c",
+        "text_dim": "#6b6560",
+        "text_faint": "#9b9590",
+        "accent": "#2868a0",
+        "accent_dim": "#5a8ab8",
+        "success": "#2a7a4a",
+        "warning": "#8a6420",
+        "error": "#b83a3a",
+        "model": "#6a4a8a",
     },
-    "nord": {  # Arctic colour scheme
-        "bg": "#2e3440",
-        "bg_secondary": "#3b4252",
-        "border": "#4c566a",
-        "text": "#eceff4",
-        "text_dim": "#d8dee9",
-        "accent": "#88c0d0",
-        "success": "#a3be8c",
-        "warning": "#ebcb8b",
-        "error": "#bf616a",
-        "bar_bg": "#2e3440",
-    },
-    "dracula": {  # Dracula colour scheme
-        "bg": "#282a36",
-        "bg_secondary": "#44475a",
-        "border": "#6272a4",
-        "text": "#f8f8f2",
-        "text_dim": "#6272a4",
-        "accent": "#bd93f9",
-        "success": "#50fa7b",
-        "warning": "#f1fa8c",
-        "error": "#ff5555",
-        "bar_bg": "#21222c",
-    },
-    "solarized": {  # Solarized dark
-        "bg": "#002b36",
-        "bg_secondary": "#073642",
-        "border": "#586e75",
-        "text": "#839496",
-        "text_dim": "#657b83",
-        "accent": "#268bd2",
-        "success": "#859900",
-        "warning": "#b58900",
-        "error": "#dc322f",
-        "bar_bg": "#002b36",
+    "slate": {
+        # Cool neutral grey — the default. Works in any lighting.
+        # Sits between dark and light; professional without being boring.
+        "bg": "#1e2228",
+        "bg_surface": "#282e36",
+        "border": "#3a424c",
+        "text": "#c8cdd4",
+        "text_dim": "#6e7a88",
+        "text_faint": "#464e58",
+        "accent": "#5aa0d0",
+        "accent_dim": "#3a6a8c",
+        "success": "#58a878",
+        "warning": "#c89848",
+        "error": "#c85858",
+        "model": "#a088c8",
     },
 }
+
+# The default theme
+DEFAULT_THEME = "slate"
 
 
 def get_theme(name: str = None) -> dict:
@@ -79,12 +84,12 @@ def get_theme(name: str = None) -> dict:
         if config_file.exists():
             try:
                 cfg = json.loads(config_file.read_text())
-                name = cfg.get("theme", "dark")
+                name = cfg.get("theme", DEFAULT_THEME)
             except Exception:
-                name = "dark"
+                name = DEFAULT_THEME
         else:
-            name = "dark"
-    return THEMES.get(name, THEMES["dark"])
+            name = DEFAULT_THEME
+    return THEMES.get(name, THEMES[DEFAULT_THEME])
 
 
 def get_theme_name() -> str:
@@ -94,12 +99,12 @@ def get_theme_name() -> str:
     if config_file.exists():
         try:
             cfg = json.loads(config_file.read_text())
-            name = cfg.get("theme", "dark")
+            name = cfg.get("theme", DEFAULT_THEME)
             if name in THEMES:
                 return name
         except Exception:
             pass
-    return "dark"
+    return DEFAULT_THEME
 
 
 def set_theme(name: str) -> bool:
@@ -130,7 +135,7 @@ def build_css(theme: dict = None) -> str:
     if theme is None:
         theme = get_theme()
     t = theme
-    return f"""/* Envoy TUI — generated from theme */
+    return f"""/* Envoy TUI — generated from active theme */
 
 Screen {{
     background: {t['bg']};
@@ -139,7 +144,7 @@ Screen {{
 #mcp-bar {{
     height: auto;
     dock: top;
-    background: {t['bg_secondary']};
+    background: {t['bg_surface']};
     padding: 0 2;
     border-bottom: solid {t['border']};
 }}
@@ -154,7 +159,7 @@ Screen {{
 
 #output {{
     height: 1fr;
-    padding: 1 4;
+    padding: 1 3;
     overflow-x: hidden;
     background: {t['bg']};
     scrollbar-size: 0 0;
@@ -176,7 +181,7 @@ Screen {{
     max-height: 8;
     padding: 0 2;
     margin: 0 2;
-    background: {t['bg_secondary']};
+    background: {t['bg_surface']};
     border: round {t['border']};
 }}
 
@@ -203,7 +208,7 @@ Screen {{
 #status-bar {{
     dock: bottom;
     height: auto;
-    background: {t['bar_bg']};
+    background: {t['bg_surface']};
     color: {t['text_dim']};
     padding: 0 2;
     border-top: solid {t['border']};

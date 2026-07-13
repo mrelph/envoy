@@ -22,15 +22,29 @@ from agents.paths import CONFIG_DIR, SOUL_FILE
 
 VERSION = (Path(__file__).parent / "VERSION").read_text().strip()
 
-LOGO = r"""[bold #58a6ff]
-  ╭──────────────────────────────────────╮
-  │                                      │
-  │    E N V O Y                         │
-  │                                      │
-  │    [dim #8b949e]Your AI Chief of Staff[/dim #8b949e]            │
-  │    [dim #484f58]v{version}[/dim #484f58]                            │
-  │                                      │
-  ╰──────────────────────────────────────╯[/bold #58a6ff]"""
+def _logo():
+    from tui_themes import get_theme
+    t = get_theme()
+    return (
+        f"[bold {t['accent']}]"
+        "  ╭──────────"
+        "────────────"
+        "────────────"
+        "────╮\n"
+        "  │                                      │\n"
+        "  │    E N V O Y                         │\n"
+        "  │                                      │\n"
+        f"  │    [dim {t['text_dim']}]Your AI Chief of Staff"
+        f"[/dim {t['text_dim']}]            │\n"
+        f"  │    [dim {t['text_faint']}]v{VERSION}"
+        f"[/dim {t['text_faint']}]                            │\n"
+        "  │                                      │\n"
+        "  ╰──────────"
+        "────────────"
+        "────────────"
+        "────╯"
+        f"[/bold {t['accent']}]"
+    )
 
 SPINNER_HINTS = {
     "email": "📧 Email", "inbox": "📧 Email", "digest": "📧 Email",
@@ -153,12 +167,14 @@ class MCPBar(Static):
     @work(thread=True, exclusive=True)
     def check(self) -> None:
         from ui import _check_mcp_servers
+        from tui_themes import get_theme
+        th = get_theme()
         status = _check_mcp_servers()
-        t = Text(" Envoy  ", style="bold #58a6ff")
-        t.append("│ ", style="#30363d")
+        t = Text(" Envoy  ", style=f"bold {th['accent']}")
+        t.append("│ ", style=th['border'])
         for name, ok in status.items():
-            t.append("● " if ok else "○ ", style="#3fb950" if ok else "#f85149")
-            t.append(name, style="#e6edf3" if ok else "#484f58")
+            t.append("● " if ok else "○ ", style=th['success'] if ok else th['error'])
+            t.append(name, style=th['text'] if ok else th['text_faint'])
             t.append("  ")
         self._content = t
 
@@ -183,9 +199,10 @@ class FeedPanel(Static):
     def render(self) -> Text:
         if not self._items:
             return Text("")
+        from tui_themes import get_theme
         t = Text()
         for item in self._items[-self._max_visible:]:
-            t.append(f"  {item.display}\n", style="#8b949e")
+            t.append(f"  {item.display}\n", style=get_theme()['text_dim'])
         return t
 
     def push(self, item) -> None:
@@ -252,29 +269,27 @@ class Spinner(Static):
         if not self._hint:
             return Text("")
         import time as _time
+        from tui_themes import get_theme
+        th = get_theme()
         char = BRAILLE_FRAMES[self._frame % len(BRAILLE_FRAMES)]
         elapsed = _time.time() - self._start_time if self._start_time else 0
 
-        t = Text(f"  {char} ", style="bold #58a6ff")
-        t.append(self._hint, style="#e6edf3 bold")
+        t = Text(f"  {char} ", style=f"bold {th['accent']}")
+        t.append(self._hint, style=f"{th['text']} bold")
 
-        # Elapsed time
         if elapsed >= 60:
-            t.append(f"  {int(elapsed)}s", style="#d29922")
+            t.append(f"  {int(elapsed)}s", style=th['warning'])
         elif elapsed >= 5:
-            t.append(f"  {int(elapsed)}s", style="#8b949e")
+            t.append(f"  {int(elapsed)}s", style=th['text_dim'])
 
-        # Step count + trail
         if self._steps > 0:
-            t.append(f"  ·  step {self._steps}", style="#484f58")
-            # Show last 2 tools as breadcrumb trail
+            t.append(f"  ·  step {self._steps}", style=th['text_faint'])
             if self._tool_history:
                 trail = " → ".join(self._tool_history[-2:])
-                t.append(f"  [{trail}]", style="#484f58 italic")
+                t.append(f"  [{trail}]", style=f"{th['text_faint']} italic")
         else:
-            # No steps yet — show flavor text while waiting for first tool call
             flavor = _FLAVOR[self._flavor_idx % len(_FLAVOR)]
-            t.append(f"  ·  {flavor}…", style="#484f58")
+            t.append(f"  ·  {flavor}…", style=th['text_faint'])
 
         return t
 
@@ -354,33 +369,35 @@ class StatusBar(Static):
         except Exception:
             pass
 
+        from tui_themes import get_theme
+        th = get_theme()
         sep = "  ·  "
         t = Text()
-        t.append(f" {alias}", style="bold #58a6ff")
-        t.append(sep, style="#30363d")
-        t.append(now, style="#8b949e")
+        t.append(f" {alias}", style=f"bold {th['accent']}")
+        t.append(sep, style=th['border'])
+        t.append(now, style=th['text_dim'])
         if model:
-            t.append(sep, style="#30363d")
-            t.append(f"⚡ {model}", style="#d2a8ff")
+            t.append(sep, style=th['border'])
+            t.append(f"⚡ {model}", style=th['model'])
         if ttft_ms is not None:
-            t.append(sep, style="#30363d")
+            t.append(sep, style=th['border'])
             if ttft_ms >= 1000:
-                t.append(f"{ttft_ms / 1000:.1f}s", style="#d29922")
+                t.append(f"{ttft_ms / 1000:.1f}s", style=th['warning'])
             else:
-                t.append(f"{ttft_ms}ms", style="#3fb950")
+                t.append(f"{ttft_ms}ms", style=th['success'])
         if session_tokens > 0:
-            t.append(sep, style="#30363d")
+            t.append(sep, style=th['border'])
             if session_tokens >= 1_000_000:
-                t.append(f"{session_tokens / 1_000_000:.1f}M tok", style="#484f58")
+                t.append(f"{session_tokens / 1_000_000:.1f}M tok", style=th['text_faint'])
             elif session_tokens >= 1_000:
-                t.append(f"{session_tokens / 1_000:.0f}K tok", style="#484f58")
+                t.append(f"{session_tokens / 1_000:.0f}K tok", style=th['text_faint'])
             else:
-                t.append(f"{session_tokens} tok", style="#484f58")
-        t.append(sep, style="#30363d")
-        t.append("/help", style="#3fb950")
+                t.append(f"{session_tokens} tok", style=th['text_faint'])
+        t.append(sep, style=th['border'])
+        t.append("/help", style=th['success'])
         t.append("  ")
-        t.append("^C", style="#8b949e bold")
-        t.append(" quit", style="#484f58")
+        t.append("^C", style=f"{th['text_dim']} bold")
+        t.append(" quit", style=th['text_faint'])
         return t
 
     def on_mount(self) -> None:
@@ -642,7 +659,11 @@ class EnvoyApp(App):
     def compose(self) -> ComposeResult:
         yield MCPBar(id="mcp-bar")
         yield FeedPanel(id="feed")
-        yield RichLog(id="output", highlight=True, markup=True, wrap=True, max_lines=5000, auto_scroll=True)
+        # min_width=4: RichLog's default min_width is 78, and write() renders
+        # at max(content_width, min_width) — so on viewports narrower than 78
+        # columns, text rendered at 78 wide overflows horizontally instead of
+        # wrapping. A tiny min_width lets wrap=True fit the real widget width.
+        yield RichLog(id="output", highlight=True, markup=True, wrap=True, min_width=4, max_lines=5000, auto_scroll=True)
         yield Spinner(id="spinner")
         with Horizontal(id="input-area"):
             yield Label("›", id="prompt-label")
@@ -651,7 +672,7 @@ class EnvoyApp(App):
 
     def on_mount(self) -> None:
         out = self.query_one("#output", RichLog)
-        out.write(Text.from_markup(LOGO.format(version=VERSION)))
+        out.write(Text.from_markup(_logo()))
         self._show_update_notice(out)
         out.write(Text())
         self.query_one("#spinner", Spinner).display = False
