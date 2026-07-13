@@ -11,7 +11,7 @@ echo "  ────────────────────────
 echo ""
 
 # Check prerequisites
-for cmd in python3 mwinit; do
+for cmd in python3; do
     if ! command -v "$cmd" &>/dev/null; then
         echo "  ⚠  $cmd not found — some features may not work"
     fi

@@ -73,7 +73,7 @@ COMMANDS = {
     # System (handled by UI layer, not dispatch)
     "/help":      ("Show available commands",              None),
     "/status":    ("Refresh MCP server status",            None),
-    "/mwinit":    ("Re-authenticate Midway",               None),
+
     "/models":    ("Show/edit AI model assignments",       None),
     "/settings":  ("Edit personality and config",          None),
     "/mcp":       ("Manage MCP servers (add/remove/list)", None),
@@ -105,7 +105,7 @@ COMMAND_GROUPS = [
     ("Reviews", ["/eod", "/weekly", "/cron"]),
     ("Heartbeat", ["/routine", "/routines", "/heartbeat", "/suggest-routines"]),
     ("Skills", ["/build-skill", "/suggest-skills", "/skills"]),
-    ("System", ["/doctor", "/status", "/mwinit", "/models", "/mcp", "/settings", "/backup", "/help", "/exit"]),
+    ("System", ["/doctor", "/status", "/models", "/mcp", "/settings", "/backup", "/help", "/exit"]),
 ]
 
 
@@ -196,7 +196,7 @@ def dispatch(raw: str, agent):
         return (agent(prompt), True)
 
     # --- System commands return None — caller handles ---
-    if cmd in ("/help", "/status", "/settings", "/backup", "/exit", "/mwinit"):
+    if cmd in ("/help", "/status", "/settings", "/backup", "/exit"):
         return (cmd, False)  # signal to caller
 
     if cmd == "/mcp":

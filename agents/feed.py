@@ -98,6 +98,7 @@ def clear():
 
 async def _check_vip_emails() -> list:
     """Check for new emails from VIPs (High Priority People)."""
+    import json as _json
     items = []
     try:
         from agents.base import outlook
@@ -112,21 +113,58 @@ async def _check_vip_emails() -> list:
             if not vip_aliases:
                 return items
 
-            for line in text.splitlines():
-                lower = line.lower()
-                for alias in vip_aliases:
-                    if alias.lower() in lower:
-                        # Extract subject if possible
-                        subject = line.strip()[:80]
-                        items.append(FeedItem(
-                            icon="📧",
-                            text=f"New from {alias}: {subject}",
-                            category="email",
-                            priority=0,
-                            ref=alias,
-                            action_hint="read & reply",
-                        ))
-                        break
+            # Try parsing as JSON first (structured response from aws-outlook-mcp)
+            emails = []
+            try:
+                data = _json.loads(text)
+                # Handle {"success":true,"content":{"message":...,"emails":[...]}} shape
+                if isinstance(data, dict):
+                    content = data.get("content", data)
+                    if isinstance(content, dict):
+                        emails = content.get("emails", content.get("items", content.get("messages", [])))
+                    elif isinstance(content, list):
+                        emails = content
+                elif isinstance(data, list):
+                    emails = data
+            except (ValueError, TypeError):
+                pass
+
+            if emails:
+                for email in emails:
+                    if not isinstance(email, dict):
+                        continue
+                    sender = email.get("from", email.get("sender", email.get("senderName", "")))
+                    if isinstance(sender, dict):
+                        sender = sender.get("name", sender.get("emailAddress", {}).get("name", ""))
+                    sender_lower = str(sender).lower()
+                    for alias in vip_aliases:
+                        if alias.lower() in sender_lower:
+                            subject = email.get("subject", "")[:80] or "(no subject)"
+                            items.append(FeedItem(
+                                icon="📧",
+                                text=f"New from {alias}: {subject}",
+                                category="email",
+                                priority=0,
+                                ref=alias,
+                                action_hint="read & reply",
+                            ))
+                            break
+            else:
+                # Fallback: line-based scanning for non-JSON responses
+                for line in text.splitlines():
+                    lower = line.lower()
+                    for alias in vip_aliases:
+                        if alias.lower() in lower:
+                            subject = line.strip()[:80]
+                            items.append(FeedItem(
+                                icon="📧",
+                                text=f"New from {alias}: {subject}",
+                                category="email",
+                                priority=0,
+                                ref=alias,
+                                action_hint="read & reply",
+                            ))
+                            break
     except Exception:
         pass
     return items
@@ -134,6 +172,7 @@ async def _check_vip_emails() -> list:
 
 async def _check_calendar_upcoming() -> list:
     """Check for meetings in the next 2 hours that might need prep."""
+    import json as _json
     items = []
     try:
         from agents.base import outlook
@@ -143,13 +182,36 @@ async def _check_calendar_upcoming() -> list:
                 return items
             text = str(result.content[0].text)
 
+            # Parse events — response may be JSON array or JSON-per-line
+            events = []
+            try:
+                parsed = _json.loads(text)
+                events = parsed if isinstance(parsed, list) else [parsed]
+            except (ValueError, TypeError):
+                for line in text.splitlines():
+                    line = line.strip().rstrip(",")
+                    if line.startswith("{"):
+                        try:
+                            events.append(_json.loads(line))
+                        except (ValueError, TypeError):
+                            pass
+
             now = datetime.now()
-            # Simple heuristic: look for times in the next 2 hours
-            for line in text.splitlines():
-                if any(kw in line.lower() for kw in ("1:1", "review", "sync", "follow-up", "customer")):
+            for ev in events:
+                subject = ev.get("subject") or ev.get("title") or ev.get("name") or ""
+                if not subject:
+                    continue
+                if any(kw in subject.lower() for kw in ("1:1", "review", "sync", "follow-up", "customer")):
+                    start = ev.get("start", {})
+                    time_str = ""
+                    if isinstance(start, dict):
+                        time_str = start.get("time", start.get("dateTime", ""))[:5]
+                    elif isinstance(start, str):
+                        time_str = start[11:16] if len(start) > 15 else ""
+                    prefix = f"{time_str} " if time_str else ""
                     items.append(FeedItem(
                         icon="🧩",
-                        text=f"Upcoming: {line.strip()[:60]}",
+                        text=f"Upcoming: {prefix}{subject[:55]}",
                         category="calendar",
                         priority=1,
                         action_hint="prep?",

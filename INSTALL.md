@@ -13,7 +13,6 @@
   - `instructai-mcp` — InstructAI business queries (optional)
   - `amazon-quick-mcp` — QuickSight Q (optional)
   - Add custom servers via `/mcp add` or `~/.envoy/mcp.json`
-- **Midway auth** — `mwinit` (auto-refreshed on each run)
 
 ## Install
 
@@ -105,4 +104,3 @@ Your config in `~/.envoy/` (credentials, personality, memory) is preserved acros
 | `AWS credentials not configured` | Run `aws login` or create `~/.envoy/.env` |
 | `No direct reports found` | Verify alias and Phonetool access |
 | `Import errors` | Delete `venv/` and re-run `./install.sh` |
-| `Midway expired` | Run `mwinit` (auto-refreshed hourly) |

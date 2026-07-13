@@ -249,15 +249,6 @@ class TestSystemCommands:
         assert result == cmd, f"{cmd}: result should be cmd verbatim"
         assert agent.prompts == [], f"{cmd}: agent must not be called"
 
-    def test_mwinit_unhandled_for_ui(self):
-        """/mwinit returns (cmd, False) so the TUI/REPL can shell out to `mwinit -o`
-        rather than feeding the literal string to the LLM."""
-        agent = FakeAgent()
-        result, handled = dispatch.dispatch("/mwinit", agent)
-        assert handled is False
-        assert result == "/mwinit"
-        assert agent.prompts == []
-
     def test_models_no_arg_calls_internal_handler(self, monkeypatch):
         """/models is internally handled — patch _handle_models to avoid touching ~/.envoy."""
         monkeypatch.setattr(dispatch, "_handle_models", lambda arg: f"MODELS:{arg!r}")

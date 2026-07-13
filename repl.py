@@ -69,15 +69,6 @@ def run_interactive():
             run_backup()
             continue
 
-        if stripped.lower() == "/mwinit":
-            import subprocess
-            print("  Launching mwinit — check your browser…")
-            subprocess.run(["mwinit", "-o"])
-            from agents.base import _persistent
-            _persistent.clear()
-            print("  ✓ Midway refreshed")
-            continue
-
         # Refresh in case /models (or another path) called reload_agent().
         agent = get_agent()
         result, handled = dispatch(stripped, agent)
