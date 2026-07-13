@@ -64,8 +64,7 @@ envoy/
 │   ├── memory2.py           # Entity-aware persistent memory
 │   ├── observer.py          # Backward-compat shim — redirects to memory2.remember()
 │   ├── internal.py          # Internal websites (Kingpin, Wiki, Taskei)
-│   ├── export.py            # Word/PowerPoint export
-│   └── teamsnap_agent.py    # TeamSnap integration
+│   └── export.py            # Word/PowerPoint export
 ```
 
 ## Architecture
@@ -111,7 +110,6 @@ async with outlook() as session:
 | `kingpin-mcp` | `kingpin()` | Kingpin goals, projects, milestones |
 | `instructai-mcp` | `instructai()` | InstructAI business questions |
 | `amazon-quick-mcp` | `quicksight()` | QuickSight Q dashboards/topics |
-| `node ~/TeamSnapMCP/dist/wrapper.js` | `teamsnap()` | TeamSnap (kids' sports) |
 
 User overrides for any MCP server live in `~/.envoy/mcp.json` (standard `mcpServers` shape — entries override built-ins by name, new names are added). Manage interactively with `/mcp add|remove|list`.
 

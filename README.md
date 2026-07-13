@@ -38,7 +38,7 @@ Running `envoy` launches a full-screen Textual TUI with animated progress, MCP s
 
 ```
 ┌─ ✈ Envoy v3.3.0 ──────────────────────────────────────┐
-│ ● Outlook  ● Phonetool  ● Slack  ● TeamSnap           │
+│ ● Outlook  ● Phonetool  ● Slack  ● SharePoint         │
 │                                                         │
 │  ███████╗███╗   ██╗██╗   ██╗ ██████╗ ██╗   ██╗        │
 │  ██╔════╝████╗  ██║██║   ██║██╔═══██╗╚██╗ ██╔╝        │
@@ -94,7 +94,6 @@ Skills are loaded on demand via the [Agent Skills](https://agentskills.io) open 
 | `eod` | `/eod` | End-of-day summary |
 | `weekly` | `/weekly` | Weekly review |
 | `second-brain` | — | Long-term notes / personal knowledge |
-| `teamsnap` | — | Kids' sports schedules |
 
 Add your own: drop a folder with a `SKILL.md` into `~/.envoy/skills/` or `~/.agents/skills/`. Or build one from a description with `/build-skill <description>`, or run `/suggest-skills` to have Envoy mine your usage history for repeated patterns and propose skills.
 
@@ -293,7 +292,6 @@ When gathering data from multiple sources, Envoy automatically extracts entities
 | `kingpin-mcp` | Kingpin goals/projects/milestones |
 | `instructai-mcp` | InstructAI business questions (revenue, pipeline, partners, marketplace) |
 | `amazon-quick-mcp` | Amazon QuickSight Q (dashboards and topics) |
-| `TeamSnap` (local) | Kids' sports schedules |
 
 Add your own MCP servers via `/mcp add` or by editing `~/.envoy/mcp.json` (standard `mcpServers` shape — entries override built-ins by name).
 
@@ -401,8 +399,7 @@ envoy/
 │   ├── memory2.py           # Entity-aware persistent memory
 │   ├── observer.py          # Backward-compat shim — redirects to memory2.remember()
 │   ├── internal.py          # Internal websites (Kingpin, Wiki, Taskei)
-│   ├── export.py            # Word/PowerPoint export
-│   └── teamsnap_agent.py    # TeamSnap integration
+│   └── export.py            # Word/PowerPoint export
 ```
 
 ## Additional Docs

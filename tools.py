@@ -4,7 +4,7 @@ import re
 from strands import tool
 from envoy_logger import logged_tool, get_logger
 from agents.base import outlook, builder, invoke_ai, check_mcp_connections, _load_models, MODEL_CATALOG, MODELS_FILE, get_token_usage, format_token_usage, reset_token_usage, run
-from agents import email, slack_agent, calendar, todo, tickets, memory2 as memory, teamsnap_agent, people, internal, export
+from agents import email, slack_agent, calendar, todo, tickets, memory2 as memory, people, internal, export
 from agents.paths import CONFIG_JSON_FILE as _CONFIG_FILE, soul_file, envoy_file, process_file, env_file
 
 # --- Filesystem allow-list config ---
@@ -258,110 +258,6 @@ def add_vip(alias: str) -> str:
     title_part = f" — {info['title']}" if info["title"] else ""
     return f"Added {label}{title_part} to High Priority People."
 
-@tool
-def teamsnap_schedule(team_id: str = "", start_date: str = "", end_date: str = "") -> str:
-    """Get TeamSnap schedule/events. Lists teams if no team_id given.
-
-    Args:
-        team_id: TeamSnap team ID (empty = list all teams)
-        start_date: Filter from date (ISO 8601, optional)
-        end_date: Filter until date (ISO 8601, optional)
-    """
-    return run(teamsnap_agent.get_schedule(team_id, start_date, end_date))
-
-
-@tool
-def teamsnap_roster(team_id: str) -> str:
-    """Get the roster (players and coaches) for a TeamSnap team.
-
-    Args:
-        team_id: TeamSnap team ID
-    """
-    return run(teamsnap_agent.get_roster(team_id))
-
-
-@tool
-def teamsnap_availability(event_id: str) -> str:
-    """Get availability responses for a TeamSnap event.
-
-    Args:
-        event_id: TeamSnap event ID
-    """
-    return run(teamsnap_agent.get_availability(event_id))
-
-
-@tool
-def teamsnap_event_detail(event_id: str) -> str:
-    """Get full details for a TeamSnap event — location, uniform, arrival time, notes.
-
-    Args:
-        event_id: TeamSnap event ID
-    """
-    return run(teamsnap_agent.get_event_detail(event_id))
-
-
-@tool
-def teamsnap_location(event_id: str) -> str:
-    """Get location details for a TeamSnap event — address, map link, parking notes.
-
-    Args:
-        event_id: TeamSnap event ID
-    """
-    return run(teamsnap_agent.get_location(event_id))
-
-
-@tool
-def teamsnap_contacts(team_id: str = "", member_id: str = "") -> str:
-    """Get parent/guardian contact info (phone, email) for a TeamSnap team or member.
-
-    Args:
-        team_id: TeamSnap team ID (all contacts on team)
-        member_id: TeamSnap member ID (contacts for one player)
-    """
-    return run(teamsnap_agent.get_contacts(team_id, member_id))
-
-
-@tool
-def teamsnap_announcements(team_id: str) -> str:
-    """Get recent team announcements and broadcasts from TeamSnap.
-
-    Args:
-        team_id: TeamSnap team ID
-    """
-    return run(teamsnap_agent.get_announcements(team_id))
-
-
-@tool
-def teamsnap_rsvp(event_id: str, member_id: str, status: str) -> str:
-    """Set RSVP for a TeamSnap event. Status must be yes, no, or maybe.
-
-    Args:
-        event_id: TeamSnap event ID
-        member_id: TeamSnap member ID
-        status: RSVP status — yes, no, or maybe
-    """
-    return run(teamsnap_agent.set_availability(event_id, member_id, status))
-
-
-@tool
-def teamsnap_assignments(team_id: str = "", event_id: str = "") -> str:
-    """Get volunteer/snack/carpool assignments for a TeamSnap team or event.
-
-    Args:
-        team_id: TeamSnap team ID (all assignments)
-        event_id: TeamSnap event ID (assignments for one event)
-    """
-    return run(teamsnap_agent.get_assignments(team_id, event_id))
-
-
-@tool
-def teamsnap_standings(team_id: str) -> str:
-    """Get win/loss record and division standings for a TeamSnap team.
-
-    Args:
-        team_id: TeamSnap team ID
-    """
-    return run(teamsnap_agent.get_standings(team_id))
 
 
 @tool
@@ -645,16 +541,6 @@ def token_usage() -> str:
 # --- Skill-gated tools (available for activation, not in ALL_TOOLS by default) ---
 
 _SKILL_TOOLS = {
-    "teamsnap_schedule": teamsnap_schedule,
-    "teamsnap_roster": teamsnap_roster,
-    "teamsnap_availability": teamsnap_availability,
-    "teamsnap_event_detail": teamsnap_event_detail,
-    "teamsnap_location": teamsnap_location,
-    "teamsnap_contacts": teamsnap_contacts,
-    "teamsnap_announcements": teamsnap_announcements,
-    "teamsnap_rsvp": teamsnap_rsvp,
-    "teamsnap_assignments": teamsnap_assignments,
-    "teamsnap_standings": teamsnap_standings,
 }
 
 _active_agent = None  # set by agent.py after creation

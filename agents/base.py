@@ -48,17 +48,6 @@ class MCPConnectionError(Exception):
 
 # --- MCP server params (lazy — constructed on first use to avoid importing mcp at module load) ---
 
-_teamsnap_dir = os.path.join(os.path.expanduser("~"), "TeamSnapMCP")
-_teamsnap_env = {**os.environ}
-_teamsnap_dotenv = os.path.join(_teamsnap_dir, ".env")
-if os.path.exists(_teamsnap_dotenv):
-    with open(_teamsnap_dotenv) as f:
-        for line in f:
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k, v = line.split("=", 1)
-                _teamsnap_env[k.strip()] = v.strip()
-
 _node_quiet_env = {**os.environ, "NODE_NO_WARNINGS": "1"}
 _outlook_env = {**os.environ, "OUTLOOK_MCP_ENABLE_WRITES": "true"}
 
@@ -68,7 +57,6 @@ _MCP_PARAM_DEFS = {
     "Phonetool":  {"command": "builder-mcp", "args": []},
     "Slack":      {"command": "slack-mcp", "args": []},
     "Slack_fallback": {"command": "ai-community-slack-mcp", "args": []},
-    "TeamSnap":   {"command": "node", "args": [os.path.join(_teamsnap_dir, "dist", "wrapper.js")], "env": _teamsnap_env},
     "SharePoint": {"command": "amazon-sharepoint-mcp", "args": [], "env": _node_quiet_env},
     "Kingpin":    {"command": "kingpin-mcp", "args": []},
     "InstructAI": {"command": "instructai-mcp-proxy", "args": []},
@@ -180,7 +168,7 @@ def _get_params(name):
 def __getattr__(name):
     _aliases = {
         "OUTLOOK_PARAMS": "Outlook", "BUILDER_PARAMS": "Phonetool",
-        "SLACK_PARAMS": "Slack", "TEAMSNAP_PARAMS": "TeamSnap",
+        "SLACK_PARAMS": "Slack",
         "SHAREPOINT_PARAMS": "SharePoint", "KINGPIN_PARAMS": "Kingpin",
         "MCP_SERVERS": None,
     }
@@ -679,7 +667,6 @@ def _mcp_session(server_name):
 outlook = _mcp_session("Outlook")
 builder = _mcp_session("Phonetool")
 slack = _mcp_session("Slack")
-teamsnap = _mcp_session("TeamSnap")
 sharepoint = _mcp_session("SharePoint")
 kingpin = _mcp_session("Kingpin")
 instructai = _mcp_session("InstructAI")
@@ -695,13 +682,13 @@ async def mcp_batch(server_name: str, calls: list) -> list:
     Connections are persistent and reused automatically.
     
     Args:
-        server_name: "Outlook", "Phonetool", "Slack", "TeamSnap", or "SharePoint"
+        server_name: "Outlook", "Phonetool", "Slack", or "SharePoint"
         calls: List of (tool_name, arguments) tuples
     
     Returns:
         List of result strings, one per call.
     """
-    sessions = {"Outlook": outlook, "Phonetool": builder, "Slack": slack, "TeamSnap": teamsnap, "Kingpin": kingpin}
+    sessions = {"Outlook": outlook, "Phonetool": builder, "Slack": slack, "Kingpin": kingpin}
     session_fn = sessions.get(server_name)
     if not session_fn:
         return [f"Unknown server: {server_name}"] * len(calls)
@@ -725,7 +712,6 @@ _BUILTIN_SESSION_FNS = {
     "Outlook": outlook,
     "Phonetool": builder,
     "Slack": slack,
-    "TeamSnap": teamsnap,
     "SharePoint": sharepoint,
     "Kingpin": kingpin,
     "InstructAI": instructai,
