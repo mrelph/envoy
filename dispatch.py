@@ -33,11 +33,11 @@ COMMANDS = {
     "/slack-catchup": ("Focused Slack catch-up",           "Give me a focused Slack catch-up for the last {days} days — unread channels, mentions, and DMs"),
     "/yesterbox":     ("Yesterbox — yesterday's DMs",       "Run yesterbox for the last {days} days of messages"),
     # Analysis
+    "/team-health":    ("Team health dashboard",           None),
     "/cal-audit":      ("Calendar audit",                  "Audit my calendar for the next {days} days — meeting load, focus time, and what to decline"),
     "/response-times": ("Email response time analysis",    "Analyze my email response time patterns for the last {days} days"),
     "/followup":       ("Unanswered sent emails",          "Scan my sent emails for unanswered threads from the last {days} days"),
     "/commitments":    ("Promises & commitments tracker",  "Scan my sent messages for commitments and promises from the last {days} days"),
-    "/team-health":    ("Team health dashboard",            None),
     # Prep (needs {arg})
     "/prep-1on1":    ("1:1 prep brief",                    "Generate a 1:1 prep brief for my meeting with {arg}"),
     "/prep-meeting": ("Meeting prep brief",                "Generate a prep brief for my meeting: {arg}"),
