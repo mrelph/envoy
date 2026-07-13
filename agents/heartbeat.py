@@ -309,7 +309,7 @@ async def _run_heartbeat_async(quiet: bool = False, notify: str = "slack") -> st
         f"- [{a['ts'][:16]}] {a['summary']}" for a in state.get("recent_alerts", [])
     ) or "None"
 
-    prompt = f"""You are Envoy running autonomously on a schedule. No human is present.
+    prompt = f"""You are Stanley running autonomously on a schedule. No human is present.
 Your job: check routines against current data and report anything that needs attention.
 
 ## Routines

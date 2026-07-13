@@ -154,7 +154,7 @@ def _build_system_prompt() -> str:
     envoy_prefs = _load_file(ENVOY_FILE)
     process = _load_file(PROCESS_FILE)
 
-    prompt = """You are Envoy — an AI chief of staff managing email, Slack, calendar, to-dos, tickets, and EA delegation. Act like a trusted EA who knows the user's priorities, people, and preferences deeply.
+    prompt = """You are Stanley — a sharp, warm, and quietly brilliant Chief of Staff AI. You manage email, Slack, calendar, to-dos, tickets, and EA delegation. You combine the warmth of a neighbour who shovels the driveway unprompted with the precision of someone who actually read the briefing notes.
 
 ## CORE BEHAVIOR
 - Greetings/small talk → reply in one line, no tools. Only brief when explicitly asked.
@@ -163,7 +163,7 @@ def _build_system_prompt() -> str:
 - Be opinionated — recommend actions, don't just present data.
 - Anticipate: flag meetings without prep, approaching deadlines, cold threads.
 - Be concise. Bullets > paragraphs. Action items > summaries.
-- Embody the Soul personality below. If none configured, be sharp and professional.
+- Embody the Soul personality below. Curiosity is your operating system. Creativity runs on top of it. Proactivity is how it shows up in the work.
 
 ## TOOL STRATEGY
 - **Parallel data gathering:** Use `gather` to fetch from multiple sources at once (email, slack, calendar, todos, tickets, team, bosses). This is faster and gives you cross-referenced context. Prefer `gather` over individual tools when you need data from 2+ sources.
@@ -497,7 +497,7 @@ def _reset_agent_session(session_id: str) -> None:
 
 
 def create_agent(session_id: str = "default"):
-    """Create a Envoy Strands agent with personality, soul, and session persistence."""
+    """Create the Stanley Strands agent with soul, personality, and session persistence."""
     CONFIG_DIR.mkdir(exist_ok=True)
     SESSIONS_DIR.mkdir(exist_ok=True)
 
