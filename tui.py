@@ -580,7 +580,7 @@ class ModelPickerScreen(ModalScreen[str | None]):
 
 
 class ChatInput(TextArea):
-    """TextArea that flags paste-inserted text so Enter-submit logic can skip it.
+    """TextArea with paste-flag, Tab-completion for slash commands.
 
     Textual dispatches privately-named `_on_xxx` handlers by walking the MRO:
     overriding `_on_paste` does NOT replace TextArea's own `_on_paste` — both
@@ -594,9 +594,52 @@ class ChatInput(TextArea):
     instead of auto-submitting.
     """
 
+    BINDINGS = [
+        Binding("tab", "complete", "Complete", show=False),
+    ]
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.suppress_next_submit = False
+        self._complete_matches: list[str] = []
+        self._complete_idx: int = 0
+        self._complete_prefix: str = ""
+
+    def action_complete(self) -> None:
+        """Tab: cycle through matching slash commands."""
+        text = self.text.rstrip("\n")
+        if not text.startswith("/"):
+            return
+
+        # If we're already cycling and the text matches our last completion,
+        # advance to the next match.
+        if (self._complete_matches
+                and self._complete_prefix
+                and text in self._complete_matches):
+            self._complete_idx = (self._complete_idx + 1) % len(self._complete_matches)
+            self._set_completion(self._complete_matches[self._complete_idx])
+            return
+
+        # New prefix — find matches
+        prefix = text.lower()
+        self._complete_prefix = prefix
+        all_cmds = sorted(COMMANDS.keys())
+        matches = [c for c in all_cmds if c.startswith(prefix)]
+        if not matches:
+            return
+        if len(matches) == 1:
+            self._complete_matches = []
+            self._set_completion(matches[0] + " ")
+        else:
+            self._complete_matches = matches
+            self._complete_idx = 0
+            self._set_completion(matches[0])
+
+    def _set_completion(self, value: str) -> None:
+        """Replace the current text with the completed command."""
+        self.suppress_next_submit = True
+        self.clear()
+        self.insert(value)
 
     async def _on_paste(self, event: events.Paste) -> None:
         if self.read_only:
@@ -688,17 +731,19 @@ class EnvoyApp(App):
         Read defensively — this must never block or crash startup.
         """
         try:
+            from tui_themes import get_theme
             stamp = CONFIG_DIR / "update-available"
             latest = stamp.read_text().strip()
             if latest:
                 ver = latest.lstrip("vV")
-                out.write(Text(f"  ⬆ Envoy v{ver} available — run 'envoy update'", style="#d29922"))
+                out.write(Text(f"  ⬆ Envoy v{ver} available — run 'envoy update'", style=get_theme()['warning']))
         except Exception:
             pass
 
     @work(thread=True, exclusive=True, group="init")
     def _init_agent(self) -> None:
         from agent import get_agent
+        from tui_themes import get_theme
         self._agent = get_agent()
         name = "Envoy"
         try:
@@ -706,9 +751,10 @@ class EnvoyApp(App):
             name = agent_name()
         except Exception:
             pass
+        th = get_theme()
         self.app.call_from_thread(
             self.query_one("#output", RichLog).write,
-            Text(f"  ✓ {name} ready\n", style="#3fb950"),
+            Text(f"  ✓ {name} ready\n", style=th['success']),
         )
 
     def on_click(self, event) -> None:
@@ -752,20 +798,23 @@ class EnvoyApp(App):
         out = self.query_one("#output", RichLog)
 
         # Echo user input
+        from tui_themes import get_theme
+        th = get_theme()
         t = Text()
-        t.append(f"\n › ", style="bold #58a6ff")
-        t.append(raw, style="#e6edf3 bold")
+        t.append("\n› ", style=f"bold {th['accent']}")
+        t.append(raw, style=f"{th['text']} bold")
         out.write(t)
 
         # Reject new input while a previous request is still running
         if self._busy:
-            out.write(Text("  ⏳ Still working on your last request — wait for it to finish (or ctrl+c to quit).", style="#d29922"))
+            out.write(Text("  ⏳ Still working on your last request — wait for it to finish (or Esc to cancel).", style=th['warning']))
             return
 
         # System commands
         cmd = raw.split()[0].lower() if raw.startswith("/") else None
         if cmd == "/help":
-            self._show_help()
+            show_full = "all" in raw.lower().split()[1:]
+            self._show_help(full=show_full)
             return
         if cmd in ("/exit", "/quit") or raw.strip().lower() in ("quit", "exit"):
             self.exit()
@@ -845,8 +894,6 @@ class EnvoyApp(App):
             self._stream_anchor = (len(out.lines), out._start_line)
             out.write(Text())
             self._stream_started = True
-        # `overflow="fold"` guarantees wrapping even for unbreakable tokens
-        # (long URLs, paths) that word-wrap alone would let overflow.
         from tui_themes import get_theme
         text_color = get_theme().get("text", "#e6edf3")
         out.write(Text(pending, style=text_color, overflow="fold", no_wrap=False))
@@ -949,6 +996,8 @@ class EnvoyApp(App):
             pass
 
         def _show():
+            from tui_themes import get_theme
+            th = get_theme()
             self.query_one("#spinner", Spinner).stop()
             self._busy = False
 
@@ -956,16 +1005,13 @@ class EnvoyApp(App):
             if error is not None:
                 msg = str(error)
                 if "Concurrent invocations" in msg or "ConcurrencyException" in type(error).__name__:
-                    out.write(Text("  ⚠️  Agent was still busy. Try again in a moment.", style="#d29922"))
+                    out.write(Text("  ⚠️  Agent was still busy. Try again in a moment.", style=th['warning']))
                 else:
-                    out.write(Text(f"\n  ⚠️  {type(error).__name__}: {msg}\n", style="#f85149"))
+                    out.write(Text(f"\n  ⚠️  {type(error).__name__}: {msg}\n", style=th['error']))
                 return
             if not handled:
-                # dispatch() punted a system command back to us that this TUI
-                # doesn't (yet) implement — don't echo the raw command string
-                # as if it were a real response.
                 cmd_name = result if isinstance(result, str) else raw.split()[0]
-                out.write(Text(f"  ⚠ {cmd_name} is not available in the TUI", style="#d29922"))
+                out.write(Text(f"  ⚠ {cmd_name} is not available in the TUI", style=th['warning']))
                 return
             if not result:
                 return
@@ -997,6 +1043,9 @@ class EnvoyApp(App):
             # rejected command doesn't get a false "done" toast.
             if not text.startswith("Usage:") and not text.startswith("⚠"):
                 self.notify(f"✓ {hint} done", timeout=3)
+
+            # Turn separator — subtle line between exchanges
+            out.write(Text("  " + "─" * 44, style=th['border']))
             # Refresh status bar to show updated TTFT/tokens
             self.query_one("#status-bar", StatusBar).refresh()
 
@@ -1005,11 +1054,13 @@ class EnvoyApp(App):
     def _open_model_picker(self) -> None:
         """Push the interactive model picker modal."""
         def _on_dismiss(result: str | None) -> None:
+            from tui_themes import get_theme
+            th = get_theme()
             out = self.query_one("#output", RichLog)
             if result:
-                out.write(Text(f"  {result}", style="#3fb950"))
+                out.write(Text(f"  {result}", style=th['success']))
             else:
-                out.write(Text("  Model picker closed.", style="#8b949e"))
+                out.write(Text("  Model picker closed.", style=th['text_dim']))
             self.query_one("#input", TextArea).focus()
 
         self.push_screen(ModelPickerScreen(), callback=_on_dismiss)
@@ -1023,7 +1074,8 @@ class EnvoyApp(App):
         feed the agent's system prompt, so reload the cached agent afterwards.
         """
         out = self.query_one("#output", RichLog)
-        out.write(Text("  Opening settings…", style="#8b949e"))
+        from tui_themes import get_theme
+        out.write(Text("  Opening settings…", style=get_theme()['text_dim']))
 
         def _do_settings():
             import init_cmd
@@ -1039,7 +1091,8 @@ class EnvoyApp(App):
 
     def _run_backup(self) -> None:
         out = self.query_one("#output", RichLog)
-        out.write(Text("  Backing up config, memory, and state…", style="#8b949e"))
+        from tui_themes import get_theme
+        out.write(Text("  Backing up config, memory, and state…", style=get_theme()['text_dim']))
         self._do_backup()
 
     @work(thread=True, exclusive=True, group="backup")
@@ -1061,14 +1114,16 @@ class EnvoyApp(App):
             err = f"{type(e).__name__}: {e}"
 
         def _report():
+            from tui_themes import get_theme
+            th = get_theme()
             out = self.query_one("#output", RichLog)
             if err:
-                out.write(Text(f"  ⚠️  Backup failed: {err}", style="#f85149"))
+                out.write(Text(f"  ⚠️  Backup failed: {err}", style=th['error']))
             elif path:
-                out.write(Text(f"  ✓ Backup saved → {path.name}", style="#3fb950"))
+                out.write(Text(f"  ✓ Backup saved → {path.name}", style=th['success']))
                 self.notify("✓ Backup complete", timeout=3)
             else:
-                out.write(Text("  Nothing to back up — no config files found.", style="#d29922"))
+                out.write(Text("  Nothing to back up — no config files found.", style=th['warning']))
 
         self.app.call_from_thread(_report)
 
@@ -1129,17 +1184,44 @@ class EnvoyApp(App):
         else:
             self._set_input_text(self._history[self._history_pos])
 
-    def _show_help(self) -> None:
+    # Commands shown in the compact help view (most-used subset)
+    _HELP_ESSENTIALS = [
+        "/briefing", "/inbox", "/catchup", "/todo",
+        "/reply", "/schedule", "/team-health", "/help all",
+    ]
+
+    def _show_help(self, full: bool = False) -> None:
+        from tui_themes import get_theme
+        th = get_theme()
         out = self.query_one("#output", RichLog)
         out.write(Text())
+
+        if not full:
+            t = Text()
+            t.append("  Quick commands\n", style=f"bold {th['accent']}")
+            for cmd in self._HELP_ESSENTIALS:
+                entry = COMMANDS.get(cmd)
+                desc = entry[0] if entry else "Show all commands"
+                t.append(f"    {cmd:22s}", style=th['success'])
+                t.append(f"{desc}\n", style=th['text_dim'])
+            t.append(f"\n  ", style="")
+            t.append("Tip: ", style=f"bold {th['text_dim']}")
+            t.append("type ", style=th['text_dim'])
+            t.append("/help all", style=th['success'])
+            t.append(" for every command, or ", style=th['text_dim'])
+            t.append("/", style=th['success'])
+            t.append(" + Tab to autocomplete\n", style=th['text_dim'])
+            out.write(t)
+            return
+
         for group_name, cmds in COMMAND_GROUPS:
             t = Text()
-            t.append(f"  {group_name}\n", style="bold #58a6ff")
+            t.append(f"  {group_name}\n", style=f"bold {th['accent']}")
             for cmd in cmds:
                 entry = COMMANDS.get(cmd)
                 desc = entry[0] if entry else ""
-                t.append(f"    {cmd:22s}", style="#3fb950")
-                t.append(f"{desc}\n", style="#8b949e")
+                t.append(f"    {cmd:22s}", style=th['success'])
+                t.append(f"{desc}\n", style=th['text_dim'])
             out.write(t)
 
     def action_refresh_mcp(self) -> None:
@@ -1149,10 +1231,11 @@ class EnvoyApp(App):
     def action_focus_input(self) -> None:
         """Escape: cancel the in-flight command if one is running, else just focus input."""
         if self._busy:
+            from tui_themes import get_theme
             self.workers.cancel_group(self, "cmd")
             self.query_one("#spinner", Spinner).stop()
             self._busy = False
-            self.query_one("#output", RichLog).write(Text("  ✗ cancelled", style="#f85149"))
+            self.query_one("#output", RichLog).write(Text("  ✗ cancelled", style=get_theme()['error']))
         self.query_one("#input", TextArea).focus()
 
     def action_insert_newline(self) -> None:

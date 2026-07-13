@@ -233,6 +233,10 @@ Screen {{
     border: round {t['border']};
 }}
 
+#input-area:focus-within {{
+    border: round {t['accent_dim']};
+}}
+
 #prompt-label {{
     width: 3;
     padding: 0 0 0 1;
