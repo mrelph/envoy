@@ -104,7 +104,12 @@ async def _gather_person(person: dict, days: int, sem) -> dict:
 
 async def _gather(alias: str, days: int) -> dict:
     from agents.people import get_direct_reports
-    directs = await get_direct_reports(alias)
+    try:
+        directs = await asyncio.wait_for(get_direct_reports(alias), timeout=30)
+    except asyncio.TimeoutError:
+        return {"manager": alias, "people": [], "error": "Phonetool lookup timed out after 30s"}
+    except Exception as e:
+        return {"manager": alias, "people": [], "error": str(e)}
     if not directs:
         return {"manager": alias, "people": []}
     sem = asyncio.Semaphore(_CONCURRENCY)
@@ -170,6 +175,8 @@ def team_health(alias: str = None, days: int = 7) -> str:
         data = run(_gather(alias, days))
     except Exception as e:
         return f"Error gathering team health data: {e}"
+    if data.get("error"):
+        return f"⚠️ Team health failed: {data['error']}"
     if not data.get("people"):
         return (f"No direct reports found for {alias} — check the Phonetool MCP "
                 f"connection (/doctor) or pass a manager alias.")
