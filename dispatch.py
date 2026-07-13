@@ -622,9 +622,12 @@ def _handle_learn(arg: str) -> str:
 
 
 _THEME_DESCRIPTIONS = {
-    "slate": "cool neutral grey, works in any lighting",
     "midnight": "deep blue-black for evening sessions",
-    "paper": "warm off-white for bright environments",
+    "paper": "muted warm grey for bright environments",
+    "slate": "cool neutral grey, works in any lighting",
+    "forest": "dark green undertone, calm and grounded",
+    "ember": "warm amber-tinted, no blue light, late night",
+    "mono": "high-contrast monochrome, maximum readability",
 }
 
 

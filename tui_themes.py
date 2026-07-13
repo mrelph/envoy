@@ -1,6 +1,6 @@
 """TUI theme system — colour palettes for the Envoy terminal interface.
 
-Three purpose-built themes for long productivity sessions. Each palette is
+Purpose-built themes for long productivity sessions. Each palette is
 designed for readability, clear spatial hierarchy, and minimal eye fatigue.
 
 Tokens:
@@ -69,6 +69,54 @@ THEMES = {
         "warning": "#c89848",
         "error": "#c85858",
         "model": "#a088c8",
+    },
+    "forest": {
+        # Dark green undertone — grounded, calm, earthy.
+        # Good for long focus sessions when blue-tinted screens feel clinical.
+        "bg": "#141c18",
+        "bg_surface": "#1c2820",
+        "border": "#2e3e34",
+        "text": "#ccd8d0",
+        "text_dim": "#728878",
+        "text_faint": "#4a5c50",
+        "accent": "#6ab88c",
+        "accent_dim": "#3c7a58",
+        "success": "#6ab88c",
+        "warning": "#c8a848",
+        "error": "#c86858",
+        "model": "#8ab8c8",
+    },
+    "ember": {
+        # Warm dark — amber-tinted for late night without blue light.
+        # Feels like working by lamplight; reduces eye strain after hours.
+        "bg": "#1c1814",
+        "bg_surface": "#28221c",
+        "border": "#3e3428",
+        "text": "#d8cec4",
+        "text_dim": "#8a7e72",
+        "text_faint": "#5c5248",
+        "accent": "#d4944c",
+        "accent_dim": "#8c6434",
+        "success": "#6aaa68",
+        "warning": "#d4944c",
+        "error": "#c85c4c",
+        "model": "#c8a878",
+    },
+    "mono": {
+        # High-contrast monochrome — maximum readability, zero colour noise.
+        # For accessibility or when you want the content to do the talking.
+        "bg": "#121212",
+        "bg_surface": "#1e1e1e",
+        "border": "#3a3a3a",
+        "text": "#eeeeee",
+        "text_dim": "#999999",
+        "text_faint": "#5a5a5a",
+        "accent": "#ffffff",
+        "accent_dim": "#bbbbbb",
+        "success": "#88cc88",
+        "warning": "#cccc66",
+        "error": "#cc6666",
+        "model": "#bbbbbb",
     },
 }
 
