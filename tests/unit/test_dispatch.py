@@ -89,10 +89,12 @@ class TestCommandsTableIntegrity:
             assert days > 0, f"{cmd}: default days must be positive"
 
     def test_default_days_commands_use_days_placeholder(self):
-        """Every command with a default-days entry should actually use {days} in its template."""
+        """Every command with a default-days entry should actually use {days} in its
+        template — unless it has a None template (custom handler parses days itself)."""
         for cmd in DEFAULT_DAYS:
             _, tpl = COMMANDS[cmd]
-            assert tpl is not None, f"{cmd}: has DEFAULT_DAYS but no template"
+            if tpl is None:
+                continue  # custom-handled (e.g. /team-health, /schedule)
             assert "{days}" in tpl, f"{cmd}: has DEFAULT_DAYS but template lacks {{days}}"
 
     def test_arg_commands_use_arg_placeholder(self):
@@ -324,15 +326,6 @@ class TestSystemCommands:
         assert handled is False, f"{cmd}: should NOT be handled internally"
         assert result == cmd, f"{cmd}: result should be cmd verbatim"
         assert agent.prompts == [], f"{cmd}: agent must not be called"
-
-    def test_mwinit_unhandled_for_ui(self):
-        """/mwinit returns (cmd, False) so the TUI/REPL can shell out to `mwinit -o`
-        rather than feeding the literal string to the LLM."""
-        agent = FakeAgent()
-        result, handled = dispatch.dispatch("/mwinit", agent)
-        assert handled is False
-        assert result == "/mwinit"
-        assert agent.prompts == []
 
     def test_models_no_arg_calls_internal_handler(self, monkeypatch):
         """/models is internally handled — patch _handle_models to avoid touching ~/.envoy."""

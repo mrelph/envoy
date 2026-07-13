@@ -168,33 +168,132 @@ class MCPBar(Static):
         self.app.call_from_thread(_done)
 
 
+class FeedPanel(Static):
+    """Ambient activity feed — proactive insights scrolling at the top."""
+
+    _items: list = []
+    _max_visible: int = 4
+
+    def render(self) -> Text:
+        if not self._items:
+            return Text("")
+        t = Text()
+        for item in self._items[-self._max_visible:]:
+            t.append(f"  {item.display}\n", style="#8b949e")
+        return t
+
+    def push(self, item) -> None:
+        """Add a new feed item and refresh."""
+        self._items.append(item)
+        if len(self._items) > 20:
+            self._items = self._items[-20:]
+        self.refresh()
+
+    def on_mount(self) -> None:
+        """Start the feed poll loop."""
+        self._start_feed()
+
+    @work(thread=True)
+    def _start_feed(self) -> None:
+        """Register listener and start the background poll."""
+        import asyncio
+        from agents.feed import on_new_item, start as start_feed, _poll_once
+
+        def _on_item(item):
+            try:
+                self.app.call_from_thread(self.push, item)
+            except Exception:
+                pass
+
+        on_new_item(_on_item)
+
+        # Run the poll loop on the base event loop
+        try:
+            from agents.base import _get_loop
+            loop = _get_loop()
+            asyncio.run_coroutine_threadsafe(_poll_loop_safe(), loop)
+        except Exception:
+            pass
+
+
+async def _poll_loop_safe():
+    """Safe poll loop that runs in the background event loop."""
+    import asyncio
+    from agents import feed
+    feed._running = True
+    await asyncio.sleep(15)  # initial delay
+    # Gate on the live module flag (not a captured value) so feed.stop() halts us.
+    while feed._running:
+        try:
+            await feed._poll_once()
+        except Exception:
+            pass
+        await asyncio.sleep(feed._POLL_INTERVAL)
+
+
 class Spinner(Static):
-    """Animated braille spinner with hint text. Shows during agent work."""
+    """Animated braille spinner with elapsed time, step count, and live tool info."""
 
     _frame: int = 0
     _hint: str = ""
     _flavor_idx: int = 0
     _timer = None
+    _start_time: float = 0
+    _steps: int = 0
+    _tool_history: list = []
 
     def render(self) -> Text:
         if not self._hint:
             return Text("")
+        import time as _time
         char = BRAILLE_FRAMES[self._frame % len(BRAILLE_FRAMES)]
-        flavor = _FLAVOR[self._flavor_idx % len(_FLAVOR)]
+        elapsed = _time.time() - self._start_time if self._start_time else 0
+
         t = Text(f"  {char} ", style="bold #58a6ff")
-        t.append(self._hint, style="#8b949e italic")
-        t.append(f"  ·  {flavor}…", style="#484f58")
+        t.append(self._hint, style="#e6edf3 bold")
+
+        # Elapsed time
+        if elapsed >= 60:
+            t.append(f"  {int(elapsed)}s", style="#d29922")
+        elif elapsed >= 5:
+            t.append(f"  {int(elapsed)}s", style="#8b949e")
+
+        # Step count + trail
+        if self._steps > 0:
+            t.append(f"  ·  step {self._steps}", style="#484f58")
+            # Show last 2 tools as breadcrumb trail
+            if self._tool_history:
+                trail = " → ".join(self._tool_history[-2:])
+                t.append(f"  [{trail}]", style="#484f58 italic")
+        else:
+            # No steps yet — show flavor text while waiting for first tool call
+            flavor = _FLAVOR[self._flavor_idx % len(_FLAVOR)]
+            t.append(f"  ·  {flavor}…", style="#484f58")
+
         return t
 
     def start(self, hint: str) -> None:
-        import random
+        import random, time as _time
         self._hint = hint
         self._frame = 0
+        self._steps = 0
+        self._tool_history = []
+        self._start_time = _time.time()
         self._flavor_idx = random.randint(0, len(_FLAVOR) - 1)
         self.display = True
         self.refresh()
         if self._timer is None:
             self._timer = self.set_interval(0.1, self._tick)
+
+    def update_hint(self, hint: str) -> None:
+        """Update when a new tool fires — tracks steps and tool names."""
+        self._steps += 1
+        # Extract short name from label (strip emoji prefix)
+        short = hint.lstrip("📧💬📅✅📊🔎📁💻👁🧩📬 ")
+        if short:
+            self._tool_history.append(short)
+        self._hint = hint
+        self.refresh()
 
     def stop(self) -> None:
         self._hint = ""
@@ -205,7 +304,7 @@ class Spinner(Static):
 
     def _tick(self) -> None:
         self._frame += 1
-        if self._frame % 20 == 0:  # rotate flavor every ~2s
+        if self._steps == 0 and self._frame % 30 == 0:  # rotate flavor every ~3s (only before first tool)
             self._flavor_idx += 1
         self.refresh()
 
@@ -529,6 +628,7 @@ class EnvoyApp(App):
 
     def compose(self) -> ComposeResult:
         yield MCPBar(id="mcp-bar")
+        yield FeedPanel(id="feed")
         yield RichLog(id="output", highlight=True, markup=True, wrap=True, max_lines=5000, auto_scroll=True)
         yield Spinner(id="spinner")
         with Horizontal(id="input-area"):
@@ -639,9 +739,6 @@ class EnvoyApp(App):
         if cmd == "/status":
             self.action_refresh_mcp()
             return
-        if cmd == "/mwinit":
-            self._run_mwinit()
-            return
         if cmd == "/settings":
             self._run_settings()
             return
@@ -683,6 +780,15 @@ class EnvoyApp(App):
         # Flush on newline boundaries to keep markdown-ish output legible
         if "\n" in chunk or pending_len > 200:
             self.app.call_from_thread(self._flush_stream)
+
+    def _on_step(self, label: str) -> None:
+        """Worker-thread callback: update the spinner hint when a new tool fires."""
+        try:
+            self.app.call_from_thread(
+                self.query_one("#spinner", Spinner).update_hint, label
+            )
+        except Exception:
+            pass
 
     def _flush_stream(self) -> None:
         """UI thread: write accumulated streamed text to the RichLog."""
@@ -727,16 +833,17 @@ class EnvoyApp(App):
         worker = get_current_worker()
         # Always fetch via get_agent() — picks up a fresh instance after
         # reload_agent() (e.g. triggered by /models tier changes).
-        from agent import get_agent, set_stream_consumer
+        from agent import get_agent, set_stream_consumer, set_step_consumer
         self._agent = get_agent()
 
-        # Reset streaming state and register consumer for this turn.
+        # Reset streaming state and register consumers for this turn.
         self._stream_buffer = []
         with self._stream_lock:
             self._stream_pending = ""
         self._stream_started = False
         self._last_text_ts = 0.0
         set_stream_consumer(self._ingest_stream_chunk)
+        set_step_consumer(self._on_step)
 
         error = None
         result = None
@@ -749,6 +856,7 @@ class EnvoyApp(App):
             error = e
         finally:
             set_stream_consumer(None)
+            set_step_consumer(None)
         if worker.is_cancelled:
             self._busy = False
             return
@@ -774,10 +882,6 @@ class EnvoyApp(App):
             pass
 
         def _show():
-            # Drain any trailing streamed text first
-            self._flush_stream()
-
-            # Stop spinner (no-op if streaming already stopped it)
             self.query_one("#spinner", Spinner).stop()
             self._busy = False
 
@@ -842,31 +946,13 @@ class EnvoyApp(App):
 
         self.push_screen(ModelPickerScreen(), callback=_on_dismiss)
 
-    def _run_mwinit(self) -> None:
-        import subprocess
-        out = self.query_one("#output", RichLog)
-        out.write(Text("  Launching mwinit — check your browser…", style="#8b949e"))
-
-        def _do_mwinit():
-            with self.suspend():
-                subprocess.run(["mwinit", "-o"])
-            # Close (not just forget) persistent MCP sessions so their
-            # subprocesses don't leak, then reconnect with fresh creds.
-            from agents.base import _cleanup_persistent
-            _cleanup_persistent()
-            self.action_refresh_mcp()
-            self.notify("✓ Midway refreshed", timeout=3)
-
-        self.call_later(_do_mwinit)
-
     def _run_settings(self) -> None:
         """Run the interactive CLI settings editor under `self.suspend()`.
 
-        Same pattern as `/mwinit` (`_run_mwinit`): `init_cmd.run_settings()`
-        is a synchronous, `input()`-driven console flow, so it needs the
-        TUI's alternate screen suspended rather than a background worker.
-        Settings can change soul/envoy/process files that feed the agent's
-        system prompt, so reload the cached agent afterwards.
+        `init_cmd.run_settings()` is a synchronous, `input()`-driven console
+        flow, so it needs the TUI's alternate screen suspended rather than a
+        background worker. Settings can change soul/envoy/process files that
+        feed the agent's system prompt, so reload the cached agent afterwards.
         """
         out = self.query_one("#output", RichLog)
         out.write(Text("  Opening settings…", style="#8b949e"))

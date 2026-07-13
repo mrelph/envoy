@@ -52,6 +52,39 @@ from agents import skill_builder
 
 from agents.base import current_user as _USER  # call-time alias resolution
 
+# Timeout for workflow tools (commitment_tracker, follow_up, etc.)
+_WORKFLOW_TIMEOUT = 60  # seconds
+
+
+def _with_timeout(fn, *args, **kwargs):
+    """Run a function with a hard timeout. Returns error string on timeout instead of raising."""
+    import concurrent.futures
+    # Emit progress if the function has a recognizable name
+    try:
+        from agent import emit_step
+        name = getattr(fn, '__name__', '')
+        _labels = {
+            "commitment_tracker": "📬 Scanning commitments…",
+            "follow_up_tracker": "📬 Checking follow-ups…",
+            "pto_catchup": "🏖️ Catching up…",
+            "slack_catchup": "💬 Scanning Slack…",
+            "calendar_audit": "📊 Auditing calendar…",
+            "response_time_tracker": "⏱️ Analyzing response times…",
+            "meeting_prep": "🧩 Prepping meeting…",
+            "one_on_one_prep": "🧩 Prepping 1:1…",
+            "yesterbox": "📬 Yesterday's DMs…",
+        }
+        if name in _labels:
+            emit_step(_labels[name])
+    except Exception:
+        pass
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(fn, *args, **kwargs)
+        try:
+            return future.result(timeout=_WORKFLOW_TIMEOUT)
+        except concurrent.futures.TimeoutError:
+            return f"⚠️ Timed out after {_WORKFLOW_TIMEOUT}s. MCP services may be slow or unreachable. Try again later or check connectivity with /doctor."
+
 
 def _outlook_tool(tool_name: str, args: dict) -> str:
     """Direct MCP call to Outlook — used by worker agents."""
@@ -349,7 +382,7 @@ def recommend_responses(days: int = 3) -> str:
     Args:
         days: Number of days to look back (default 3)
     """
-    return wf.recommend_responses(_USER(), days)
+    return _with_timeout(wf.recommend_responses, _USER(), days)
 
 
 @tool
@@ -362,7 +395,7 @@ def learn_response(context: str, response: str, medium: str = "email") -> str:
         response: The actual response text that was sent
         medium: "email" or "slack"
     """
-    return wf.learn_response(context, response, medium)
+    return _with_timeout(wf.learn_response, context, response, medium)
 
 
 @tool
@@ -487,7 +520,7 @@ def pto_catchup(days: int = 5) -> str:
     Args:
         days: Number of days you were out (default 5)
     """
-    return wf.pto_catchup(_USER(), days)
+    return _with_timeout(wf.pto_catchup, _USER(), days)
 
 
 @tool
@@ -498,7 +531,7 @@ def slack_catchup(days: int = 3) -> str:
     Args:
         days: Number of days to look back (default 3)
     """
-    return wf.slack_catchup(_USER(), days)
+    return _with_timeout(wf.slack_catchup, _USER(), days)
 
 
 @tool
@@ -511,7 +544,7 @@ def yesterbox(days: int = 1) -> str:
         days: Number of days to look back (default: 1 for yesterday)
     """
     alias = _USER()
-    return wf.yesterbox(alias, days)
+    return _with_timeout(wf.yesterbox, alias, days)
 
 
 @tool
@@ -522,7 +555,7 @@ def calendar_audit(days: int = 5) -> str:
     Args:
         days: Number of days ahead to analyze (default 5)
     """
-    return wf.calendar_audit(_USER(), days)
+    return _with_timeout(wf.calendar_audit, _USER(), days)
 
 
 @tool
@@ -533,7 +566,7 @@ def response_time_tracker(days: int = 7) -> str:
     Args:
         days: Number of days to analyze (default 7)
     """
-    return wf.response_time_tracker(_USER(), days)
+    return _with_timeout(wf.response_time_tracker, _USER(), days)
 
 
 @tool
@@ -545,7 +578,7 @@ def follow_up_tracker(days: int = 7) -> str:
     Args:
         days: Number of days to look back (default 7)
     """
-    return wf.follow_up_tracker(_USER(), days)
+    return _with_timeout(wf.follow_up_tracker, _USER(), days)
 
 
 @tool
@@ -558,7 +591,7 @@ def one_on_one_prep(person_alias: str) -> str:
     Args:
         person_alias: Amazon login/alias of the person you're meeting with
     """
-    return wf.one_on_one_prep(person_alias, _USER())
+    return _with_timeout(wf.one_on_one_prep, person_alias, _USER())
 
 
 @tool
@@ -570,7 +603,7 @@ def commitment_tracker(days: int = 7) -> str:
     Args:
         days: Number of days to look back (default 7)
     """
-    return wf.commitment_tracker(_USER(), days)
+    return _with_timeout(wf.commitment_tracker, _USER(), days)
 
 
 @tool
@@ -583,7 +616,7 @@ def meeting_prep(meeting_subject: str = "") -> str:
     Args:
         meeting_subject: Meeting title to search for (empty = next upcoming meeting)
     """
-    return wf.meeting_prep(meeting_subject, _USER())
+    return _with_timeout(wf.meeting_prep, meeting_subject, _USER())
 
 
 # --- Utility tools ---
@@ -685,16 +718,30 @@ def _inject_skill_tools(skill_name: str, allowed_tools: str):
 
 
 @tool
-def activate_skill(name: str) -> str:
-    """Activate an Agent Skill by name to load its full instructions.
-    Use when a task matches a skill's description from the available_skills catalog.
+def activate_skill(name: str, request: str = "") -> str:
+    """Activate an Agent Skill by name. For subagent skills (those with declared tools),
+    runs the skill as an independent agent and returns its response. For legacy skills,
+    loads the full instructions into your context.
 
     Args:
         name: Skill name from the catalog
+        request: What you want the skill to do (required for subagent skills, optional for legacy)
     """
+    from agents.skills import run_skill as _run_skill
     skills = get_skills()
     skill = skills.get(name)
-    if skill and skill.get("allowed_tools"):
+    if not skill:
+        available = ", ".join(skills.keys()) if skills else "none"
+        return f"Skill '{name}' not found. Available: {available}"
+
+    # Subagent skill — run as independent agent
+    if skill.get("is_subagent"):
+        if not request:
+            return f"Skill '{name}' is a subagent — provide a request. Example: activate_skill(name='{name}', request='scan last 7 days for commitments')"
+        return _run_skill(name, request)
+
+    # Legacy skill — inject tools + load instructions
+    if skill.get("allowed_tools"):
         _inject_skill_tools(name, skill["allowed_tools"])
     return activate_skill_fn(name, skills)
 
@@ -785,6 +832,32 @@ def recall_memory(query: str = "", limit: int = 20) -> str:
         limit: Max entries to return
     """
     return memory.recall(query, limit)
+
+
+@tool
+def load_steering(name: str) -> str:
+    """Load a steering doc from the vault for contextual guidance on writing, reviews, or decisions.
+
+    Available docs: language-standards, doc-review-standards, leadership-principles,
+    decision-frameworks, business-context, persona.
+
+    Auto-load rules:
+    - Writing/drafting → language-standards
+    - Reviewing documents → doc-review-standards + leadership-principles
+    - Decisions/recommendations → decision-frameworks
+    - Business context needed → business-context
+
+    Args:
+        name: Steering doc name (without .md extension)
+    """
+    from agent import load_steering_doc
+    content = load_steering_doc(name)
+    if not content:
+        available = ", ".join(["language-standards", "doc-review-standards",
+                              "leadership-principles", "decision-frameworks",
+                              "business-context", "persona"])
+        return f"Steering doc '{name}' not found. Available: {available}"
+    return f"## Steering: {name}\n\n{content}"
 
 
 @tool
@@ -915,7 +988,7 @@ def _delegate(worker_name: str, request: str, _retries: int = 1) -> str:
             last_err = e
             print(f"[{worker_name}] attempt {attempt+1} failed: {e}", file=sys.stderr)
             if attempt < _retries:
-                # Clear corrupted session if Bedrock rejects the message history
+                # Only retry on session corruption — NOT on timeouts
                 err_msg = str(e)
                 if "ValidationException" in err_msg and "toolResult" in err_msg:
                     reset_worker_session(worker_name)
@@ -927,6 +1000,9 @@ def _delegate(worker_name: str, request: str, _retries: int = 1) -> str:
                     print(f"[{worker_name}] credentials expired — refreshing and retrying", file=sys.stderr)
                     _refresh_worker_credentials()
                     reset_worker_session(worker_name)
+                else:
+                    # Timeout, connection error, etc — don't waste time retrying
+                    break
     return f"⚠️ {worker_name} worker unavailable: {last_err}. Other sources may still have the information you need."
 
 
@@ -1021,6 +1097,46 @@ def sharepoint_worker(request: str) -> str:
         request: Natural language description of the SharePoint task
     """
     return _delegate("sharepoint", request)
+
+
+@tool
+def vault_write(file_path: str, content: str) -> str:
+    """Write a markdown file to the vault (Knowledge Folder on OneDrive).
+    Handles path resolution automatically — just provide the vault-relative path.
+
+    Args:
+        file_path: Vault-relative path (e.g. "wiki/entities/Databricks.md", "wiki/log.md", "sources/inbox/note.md")
+        content: Full markdown content to write
+    """
+    from agents.export import _configured_folders
+    folder = _configured_folders().get("knowledge", "")
+    if not folder:
+        return "Error: Knowledge Folder not configured in ~/.envoy/envoy.md"
+    # Build the SharePoint write request with explicit path
+    full_folder = f"{folder}/{'/'.join(file_path.split('/')[:-1])}" if '/' in file_path else folder
+    file_name = file_path.split('/')[-1]
+    return _delegate("sharepoint", f"Write file to my personal OneDrive. Library: Documents. Folder: {full_folder}. Filename: {file_name}. Content:\n\n{content}")
+
+
+@tool
+def vault_read(file_path: str) -> str:
+    """Read a markdown file from the vault (Knowledge Folder on OneDrive).
+
+    Args:
+        file_path: Vault-relative path (e.g. "wiki/index.md", "02 - People/John Smith.md")
+    """
+    from agents.export import _configured_folders
+    import os as _os
+    folder = _configured_folders().get("knowledge", "")
+    if not folder:
+        return "Error: Knowledge Folder not configured in ~/.envoy/envoy.md"
+    user = _os.getenv("USER", "")
+    server_url = f"/personal/{user}_amazon_com/Documents/{folder}/{file_path}"
+    return _delegate("sharepoint", f"Read this file inline from my personal OneDrive: {server_url}")
+
+
+_SKILL_TOOLS["vault_write"] = vault_write
+_SKILL_TOOLS["vault_read"] = vault_read
 
 
 @tool
@@ -1166,6 +1282,8 @@ _ALL_TOOLS_RAW = [
     productivity_worker,
     research_worker,
     sharepoint_worker,
+    vault_write,
+    vault_read,
     coding_worker,
     # --- Compound workflows (stay on supervisor for cross-domain orchestration) ---
     pto_catchup,

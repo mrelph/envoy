@@ -22,6 +22,14 @@ _SESSIONS_DIR = _ENVOY_SESSIONS_DIR / "workers"
 _MAX_SESSION_MESSAGES = 30
 _MAX_SESSION_AGE_HOURS = 6
 
+# Universal fail-fast rule appended to every worker's system prompt so a stuck
+# MCP call yields a fast partial answer instead of a full retry chain.
+_FAIL_FAST_RULE = (
+    "\n\nCRITICAL: If a tool call times out or returns a connection error, do NOT "
+    "retry it. Report what happened and return immediately. The user prefers a fast "
+    "partial answer over waiting for retries that will also fail."
+)
+
 # Strands' FileSessionManager writes under base_dir, but in practice the SDK
 # also uses /tmp/strands/sessions. Both are checked when resetting a worker.
 _SESSION_DIRS = [
@@ -150,6 +158,7 @@ def clear_bus():
 # ── Factory — lazy creation, cached instances ───────────────────
 
 _workers = {}
+_worker_locks = {}  # per-worker locks to serialize concurrent calls
 
 WORKER_NAMES = ["email", "comms", "calendar", "productivity", "research", "sharepoint"]
 
@@ -241,6 +250,9 @@ def get_worker(name: str):
     If the on-disk session has accumulated past _MAX_SESSION_MESSAGES or sat
     idle past _MAX_SESSION_AGE_HOURS, wipe it before constructing the worker
     so we don't replay a giant prior conversation on every supervisor call.
+
+    Returns a callable that serializes access via a per-worker lock to prevent
+    "Agent is already processing a request" errors from concurrent tool calls.
     """
     factories = {
         "email": lambda: _import_create("email_worker", name),
@@ -260,7 +272,22 @@ def get_worker(name: str):
 
     if name not in _workers:
         _workers[name] = factory()
-    return _workers[name]
+
+    if name not in _worker_locks:
+        _worker_locks[name] = threading.Lock()
+
+    agent = _workers[name]
+    lock = _worker_locks[name]
+
+    class _LockedWorker:
+        """Serializes calls to a Strands worker agent."""
+        def __call__(self, prompt):
+            with lock:
+                return agent(prompt)
+        def __getattr__(self, attr):
+            return getattr(agent, attr)
+
+    return _LockedWorker()
 
 
 def _import_create(module_name: str, worker_name: str):
@@ -277,11 +304,35 @@ def _import_create(module_name: str, worker_name: str):
     import importlib
     mod = importlib.import_module(f"agents.workers.{module_name}")
     agent = mod.create(session_mgr=_session_manager(worker_name))
+    # Inject delegate_to_worker + workspace tools for cross-worker collaboration.
+    # Tool registration is independent of the prompt text, so do it first; the
+    # sibling guidance it wants to append is folded into the text prompt below,
+    # before any cachePoint wrapping (block form is a list — can't append after).
+    sibling_text = ""
+    if worker_name != "coding":  # coding worker runs in subprocess, delegation not useful
+        try:
+            delegate_tool = make_delegate_tool()
+            agent.tool_registry.process_tools([delegate_tool])
+            # Add workspace tools so workers can post structured findings
+            from agents.workspace import make_workspace_tools
+            ws_tools = make_workspace_tools()
+            agent.tool_registry.process_tools(ws_tools)
+            # Tell this worker about its siblings
+            siblings = {k: v for k, v in WORKER_DESCRIPTIONS.items() if k != worker_name}
+            sibling_list = "\n".join(f"  - {k}: {v}" for k, v in siblings.items())
+            sibling_text = f"\n\nYou can delegate to sibling workers via delegate_to_worker when you need data from another domain:\n{sibling_list}\nUse sparingly — only when the info would materially improve your answer.\n\nIf a shared workspace is active, post key findings via workspace_append (section: findings, action_items, open_questions, or draft:<name>). This helps produce better synthesized output."
+        except Exception:
+            pass
 
     if hasattr(agent, 'system_prompt') and isinstance(agent.system_prompt, str):
-        # Inject relevant process.md rules into the worker's system prompt
+        # Build the full prompt *text* first (base + process.md rules +
+        # universal fail-fast rule + delegation guidance) so cachePoint
+        # wrapping stays the last step.
         rules = _load_process_rules(mod)
         full_prompt = agent.system_prompt + rules if rules else agent.system_prompt
+        # Universal fail-fast rule for all workers
+        full_prompt += _FAIL_FAST_RULE
+        full_prompt += sibling_text
 
         # _model() (called inside mod.create() above) recorded which model_id
         # this worker was built with — use it to decide cache eligibility.
@@ -292,3 +343,70 @@ def _import_create(module_name: str, worker_name: str):
             agent.system_prompt = full_prompt
 
     return agent
+
+
+# ── Worker-to-Worker Delegation ─────────────────────────────────
+
+WORKER_DESCRIPTIONS = {
+    "email": "Email specialist — inbox scan, search, send, reply, draft, cleanup, customer scan, team digest",
+    "comms": "Slack & messaging — scan channels/DMs, send messages, search, reactions, EA delegation",
+    "calendar": "Calendar management — view events, create meetings, find times, book rooms",
+    "productivity": "Tasks & memory — to-do lists, tickets, persistent memory, cron jobs, briefings",
+    "research": "Lookups — Phonetool profiles, Kingpin goals, Wiki, web search, InstructAI, QuickSight",
+    "sharepoint": "Documents — SharePoint/OneDrive search, read, write, lists",
+    "coding": "Development — write code, fix bugs, run tests, refactor, scripts",
+}
+
+# Thread-local depth counter prevents infinite delegation chains
+_delegation_depth = threading.local()
+_MAX_DELEGATION_DEPTH = 1  # workers can delegate once, but the callee cannot delegate further
+
+
+def _get_depth() -> int:
+    return getattr(_delegation_depth, 'depth', 0)
+
+
+def _delegate_to_sibling(worker_name: str, request: str) -> str:
+    """Internal delegation — called by the delegate_to_worker tool."""
+    if worker_name not in WORKER_NAMES:
+        return f"Unknown worker '{worker_name}'. Available: {', '.join(WORKER_NAMES)}"
+
+    current_depth = _get_depth()
+    if current_depth >= _MAX_DELEGATION_DEPTH:
+        return f"Cannot delegate — max depth ({_MAX_DELEGATION_DEPTH}) reached. Answer with what you have."
+
+    _delegation_depth.depth = current_depth + 1
+    try:
+        worker = get_worker(worker_name)
+        result = worker(request)
+        response = str(result.message) if hasattr(result, 'message') else str(result)
+        return response[:3000]  # cap response size to avoid context bloat
+    except Exception as e:
+        return f"⚠️ {worker_name} unavailable: {e}"
+    finally:
+        _delegation_depth.depth = current_depth
+
+
+def make_delegate_tool():
+    """Create the delegate_to_worker @tool instance for injection into workers."""
+    from strands import tool
+
+    @tool
+    def delegate_to_worker(worker_name: str, request: str) -> str:
+        """Ask a sibling worker for help. Use when you need data from another domain.
+
+        Available workers:
+        - email: inbox, search, send, reply, classify
+        - comms: Slack scan, send messages, search
+        - calendar: view events, find times, create meetings
+        - productivity: to-do lists, tickets, memory
+        - research: Phonetool profiles, Kingpin goals, Wiki, web search
+        - sharepoint: documents, files, lists
+
+        Args:
+            worker_name: Which worker to ask (email, comms, calendar, productivity, research, sharepoint)
+            request: Natural language request for that worker
+        """
+        return _delegate_to_sibling(worker_name, request)
+
+    return delegate_to_worker

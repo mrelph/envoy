@@ -29,22 +29,6 @@ if [ ! -f "$VENV_PYTHON" ]; then
     echo ""
 fi
 
-# Ensure Midway auth is fresh (no more than once per hour)
-MWINIT_STAMP="$SCRIPT_DIR/.mwinit_last"
-if command -v mwinit &>/dev/null; then
-    run_mwinit=true
-    if [ -f "$MWINIT_STAMP" ]; then
-        last=$(cat "$MWINIT_STAMP" 2>/dev/null || echo 0)
-        now=$(date +%s)
-        if [ $((now - last)) -lt 3600 ]; then
-            run_mwinit=false
-        fi
-    fi
-    if $run_mwinit; then
-        mwinit -o && date +%s > "$MWINIT_STAMP" || echo "⚠  Midway auth failed — some features may not work"
-    fi
-fi
-
 # Check for new published releases (at most once every 4 hours)
 UPDATE_STAMP="$SCRIPT_DIR/.update_last_check"
 CURRENT_VERSION="$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || echo '0.0.0')"

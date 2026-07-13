@@ -3,7 +3,7 @@
 digest, ai_summary, morning_briefing, eod_summary, todo_review, weekly_review,
 pto_catchup, slack_catchup, calendar_audit, response_time_tracker,
 follow_up_tracker, one_on_one_prep, commitment_tracker, meeting_prep,
-yesterbox, send_to_ea, recommend_responses, learn_response
+yesterbox, send_to_ea, recommend_responses, learn_response, team_health
 """
 
 import asyncio
@@ -16,6 +16,9 @@ from agents.base import invoke_ai, run
 from agents.paths import config_dir
 
 from agents.base import current_user as _USER  # call-time alias resolution
+
+# seconds — fail fast, don't wait for full MCP retry chain
+_WORKER_TIMEOUT = 60
 
 
 def _worker_gather(**tasks) -> dict:
@@ -33,10 +36,17 @@ def _worker_gather(**tasks) -> dict:
             # schedules onto this same shared event loop. Running it inline
             # here would deadlock the loop against itself; asyncio.to_thread
             # moves the blocking call off-loop so it can actually run.
-            result = await asyncio.to_thread(get_worker(worker_name), request)
+            # wait_for bounds it so a stuck worker fails fast rather than
+            # blocking the whole gather on the full MCP retry chain.
+            result = await asyncio.wait_for(
+                asyncio.to_thread(get_worker(worker_name), request),
+                timeout=_WORKER_TIMEOUT,
+            )
             # str(result) uses Strands' AgentResult.__str__ (the response
             # text) — str(result.message) is a raw dict repr.
             return name, str(result)
+        except asyncio.TimeoutError:
+            return name, f"⚠️ {worker_name} timed out after {_WORKER_TIMEOUT}s"
         except Exception as e:
             return name, f"⚠️ {worker_name} unavailable: {e}"
 
@@ -488,6 +498,13 @@ Messages:
         return invoke_ai(prompt, max_tokens=8000, tier="medium")
     except Exception as e:
         return f"Error: {e}"
+
+
+def team_health(alias: str = "", days: int = 7) -> str:
+    """Team health dashboard — per-direct-report rollup across email, tickets, Slack."""
+    alias = alias or _USER()
+    from agents.team_health import team_health as _team_health
+    return _team_health(alias, days)
 
 
 # --- Send to EA ---

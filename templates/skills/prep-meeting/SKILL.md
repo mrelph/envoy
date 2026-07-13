@@ -12,6 +12,15 @@ allowed-tools: research_worker email_worker calendar_worker
 ## When to use
 Use when the user asks to prepare for a meeting, wants context before a meeting, or says "prep for [meeting name]". If no meeting is specified, prep for their next calendar meeting.
 
+## CRITICAL: Resolving which meeting to prep for
+
+If the user does NOT specify a meeting name:
+1. **Check calendar** via calendar_worker — find the next upcoming meeting today (or tomorrow if evening).
+2. If multiple meetings are coming up, present the list and ask the user which one. Do NOT guess.
+3. If no meetings found, ask the user: "Which meeting do you want to prep for?"
+
+**NEVER** proceed with the prep steps below until you have identified a specific meeting. Do NOT look up attendees or search emails without a confirmed meeting target.
+
 ## Steps
 1. **Find the meeting** via calendar_worker — search by subject or get the next upcoming meeting
 2. **Identify attendees** — extract the attendee list from the meeting
@@ -43,3 +52,5 @@ Use when the user asks to prepare for a meeting, wants context before a meeting,
 - If the meeting has > 8 attendees, summarize by team rather than listing individually
 - Flag if any attendee is a VP+ (executive engagement)
 - Note if there's no agenda — suggest the user send one
+- NEVER send messages, emails, or any outbound communication during a prep — this is read-only research
+- If a tool returns 404 or empty, skip that section gracefully — don't retry with guessed inputs

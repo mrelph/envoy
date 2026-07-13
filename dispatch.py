@@ -33,6 +33,7 @@ COMMANDS = {
     "/slack-catchup": ("Focused Slack catch-up",           "Give me a focused Slack catch-up for the last {days} days — unread channels, mentions, and DMs"),
     "/yesterbox":     ("Yesterbox — yesterday's DMs",       "Run yesterbox for the last {days} days of messages"),
     # Analysis
+    "/team-health":    ("Team health dashboard",           None),
     "/cal-audit":      ("Calendar audit",                  "Audit my calendar for the next {days} days — meeting load, focus time, and what to decline"),
     "/response-times": ("Email response time analysis",    "Analyze my email response time patterns for the last {days} days"),
     "/followup":       ("Unanswered sent emails",          "Scan my sent emails for unanswered threads from the last {days} days"),
@@ -45,12 +46,24 @@ COMMANDS = {
     "/ea":        ("Send something to your EA",            "Send this to my EA: {arg}"),
     "/book":      ("Book a meeting room",                  "Find me a room in {arg}"),
     "/findtime":  ("Find available meeting times",         "Find me available meeting times this week"),
+    "/schedule":  ("Smart scheduling — find times, book rooms", None),
     "/search":    ("Search Slack history",                 "Search Slack for: {arg}"),
     "/sharepoint": ("Search or browse SharePoint/OneDrive", "On SharePoint/OneDrive: {arg}"),
     # Reviews
     "/eod":       ("End-of-day summary",                   "Activate the eod skill and generate my end-of-day summary"),
     "/weekly":    ("Weekly review",                        "Activate the weekly skill and generate my weekly review"),
     "/cron":      ("Manage scheduled jobs",                "Show my cron jobs and available presets"),
+    # Vault / Knowledge
+    "/vault":     ("Search your Second Brain vault",       "Activate the brain-query skill and search my vault for: {arg}"),
+    "/synthesize": ("Connect the dots across vault pages", "Activate the brain-synthesize skill and synthesize what I know about: {arg}"),
+    "/pulse":     ("Partner relationship health check",    "Activate the partner-pulse skill and show me the partner pulse"),
+    "/dossier":   ("Build a partner dossier",             "Activate the partner-dossier skill and build a dossier on: {arg}"),
+    "/pre-game":  ("Deep meeting prep (super brief)",     "Activate the pre-game skill and pre-game for: {arg}"),
+    "/daily-note": ("Daily reflection note",              "Activate the daily-note skill and create my daily note"),
+    "/vault-health": ("Vault structural health check",    "Activate the brain-lint skill and lint my vault"),
+    "/ingest":    ("Process vault inbox/sources",         "Activate the brain-ingest skill and ingest my brain inbox"),
+    "/exec-sponsor": ("Executive sponsor intel brief",    "Activate the exec-sponsor-insights skill and build an exec sponsor brief for: {arg}"),
+    "/save-email": ("Save an email to your vault",        "Activate the email-to-vault skill and save that email to my vault: {arg}"),
     # Heartbeat
     "/routine":   ("Add a routine",                        None),
     "/routines":  ("View routines",                        None),
@@ -62,7 +75,7 @@ COMMANDS = {
     # System (handled by UI layer, not dispatch)
     "/help":      ("Show available commands",              None),
     "/status":    ("Refresh MCP server status",            None),
-    "/mwinit":    ("Re-authenticate Midway",               None),
+
     "/models":    ("Show/edit AI model assignments",       None),
     "/settings":  ("Edit personality and config",          None),
     "/mcp":       ("Manage MCP servers (add/remove/list)", None),
@@ -75,13 +88,13 @@ COMMANDS = {
 
 # Commands that need an {arg} and should prompt if missing.
 # Note: /prep-meeting is intentionally NOT here — it defaults to "my next meeting".
-ARG_COMMANDS = {"/prep-1on1", "/reply", "/ea", "/book", "/search", "/sharepoint"}
+ARG_COMMANDS = {"/prep-1on1", "/reply", "/ea", "/book", "/schedule", "/search", "/sharepoint", "/vault", "/synthesize", "/dossier", "/pre-game", "/exec-sponsor", "/save-email"}
 
 # Default days per command
 DEFAULT_DAYS = {
     "/digest": 7, "/customers": 14, "/cleanup": 14, "/catchup": 5,
     "/slack-catchup": 3, "/cal-audit": 5, "/response-times": 7,
-    "/followup": 7, "/commitments": 7, "/yesterbox": 1,
+    "/followup": 7, "/commitments": 7, "/yesterbox": 1, "/team-health": 7,
 }
 
 # Command groups for help display
@@ -89,13 +102,13 @@ COMMAND_GROUPS = [
     ("Briefings", ["/briefing", "/calendar", "/week", "/todo"]),
     ("Digests & Scans", ["/digest", "/boss", "/customers", "/cleanup", "/slack", "/tickets"]),
     ("Catch-up", ["/catchup", "/slack-catchup", "/yesterbox"]),
-    ("Analysis", ["/cal-audit", "/response-times", "/followup", "/commitments"]),
+    ("Analysis", ["/cal-audit", "/response-times", "/followup", "/commitments", "/team-health"]),
     ("Prep", ["/prep-1on1", "/prep-meeting"]),
-    ("Actions", ["/reply", "/ea", "/book", "/findtime", "/search", "/sharepoint"]),
+    ("Actions", ["/reply", "/ea", "/book", "/findtime", "/schedule", "/search", "/sharepoint"]),
     ("Reviews", ["/eod", "/weekly", "/cron"]),
     ("Heartbeat", ["/routine", "/routines", "/heartbeat", "/suggest-routines"]),
     ("Skills", ["/build-skill", "/suggest-skills", "/skills"]),
-    ("System", ["/doctor", "/status", "/mwinit", "/models", "/learn", "/mcp", "/settings", "/backup", "/help", "/exit"]),
+    ("System", ["/doctor", "/status", "/models", "/learn", "/mcp", "/settings", "/backup", "/help", "/exit"]),
 ]
 
 
@@ -246,9 +259,26 @@ def dispatch(raw: str, agent):
         labels = {
             "/prep-1on1": "alias", "/prep-meeting": "meeting subject",
             "/reply": "which email + your reply", "/ea": "message for EA",
-            "/book": "building + time", "/search": "query", "/sharepoint": "query",
+            "/book": "building + time",
+            "/schedule": "request, e.g. 30m with jsmith next week, find room at SEA54",
+            "/search": "query", "/sharepoint": "query",
+            "/vault": "topic to search", "/synthesize": "topic to connect",
+            "/dossier": "partner name", "/pre-game": "meeting or company name",
+            "/exec-sponsor": "account or partner name", "/save-email": "email subject or sender",
         }
         return (f"Usage: {cmd} <{labels.get(cmd, 'argument')}>", True)
+
+    # --- Smart scheduling (multi-step: proposes times, user confirms next turn) ---
+    if cmd == "/schedule":
+        from agents.scheduling import schedule
+        return (schedule(arg), True)
+
+    # --- Team health dashboard ---
+    if cmd == "/team-health":
+        from agents.workflows import team_health
+        days = int(arg) if arg and arg.isdigit() else DEFAULT_DAYS.get("/team-health", 7)
+        alias = arg if arg and not arg.isdigit() else ""
+        return (team_health(alias, days=days), True)
 
     # --- Slash command with template ---
     entry = COMMANDS.get(cmd)
@@ -292,7 +322,7 @@ def dispatch(raw: str, agent):
         return (result, True)
 
     # --- System commands return None — caller handles ---
-    if cmd in ("/help", "/status", "/settings", "/backup", "/exit", "/mwinit"):
+    if cmd in ("/help", "/status", "/settings", "/backup", "/exit"):
         return (cmd, False)  # signal to caller
 
     if cmd == "/mcp":
@@ -304,6 +334,23 @@ def dispatch(raw: str, agent):
         return (f"Unknown command: {cmd}. Type /help to see available commands.", True)
 
     # --- Freeform natural language ---
+    # For complex multi-domain requests, run planner first to gather data,
+    # then feed context to the agent for synthesis.
+    try:
+        from agents.planner import needs_planning, plan_and_execute
+        if needs_planning(stripped):
+            context = plan_and_execute(stripped)
+            if context:
+                # Feed gathered context + original query to the agent
+                augmented = f"""The user asked: "{stripped}"
+
+I've already gathered the following data for you. Synthesize it into a response — do NOT re-fetch this data.
+
+{context}"""
+                return (agent(augmented), True)
+    except Exception:
+        pass  # Planner failed — fall through to direct agent call
+
     return (agent(stripped), True)
 
 

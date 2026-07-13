@@ -22,6 +22,79 @@ def _load_file(path: Path) -> str:
     return ""
 
 
+# --- Steering docs (from Vault) ---
+# Loaded contextually when Envoy is doing writing, review, or decision tasks.
+# The system prompt gets a lightweight summary; full docs loaded on demand.
+
+_STEERING_DOCS = {
+    "language-standards": "Language rules — banned phrases, active voice, formatting",
+    "doc-review-standards": "How Mark reviews documents — first pass, flags, what makes a great doc",
+    "leadership-principles": "LPs as evaluation lenses — questions to ask of any document",
+    "decision-frameworks": "Named decision frameworks — one-way doors, Tim Hortons test, signal over noise",
+    "business-context": "Org scope, key metrics, strategic priorities, competitive landscape",
+    "persona": "How Mark works — communication style, operating philosophy, AI parsing guidance",
+    "org-entity-linking-standard": "Standard for linking org/entity references across vault agents (Chinook, Portage)",
+    "people-linking-standard": "Standard for people profile linking across Scout and Portage agents",
+    "About Mark": "Canonical operating manual for AI agents — preferences, patterns, communication style",
+}
+
+
+def _get_steering_summary() -> str:
+    """Return a lightweight summary of available steering docs for the system prompt."""
+    steering_path = _get_steering_path()
+    if not steering_path:
+        return ""
+
+    available = []
+    for name, desc in _STEERING_DOCS.items():
+        if os.path.exists(os.path.join(steering_path, f"{name}.md")):
+            available.append(f"  - `{name}` — {desc}")
+
+    if not available:
+        return ""
+
+    return """## Steering Docs (Vault)
+When writing emails, documents, or reviews — or when evaluating documents for the user — load the relevant steering doc for contextual guidance. Use `load_steering_doc(name)` to get the full content.
+
+Available:
+""" + "\n".join(available) + """
+
+**Auto-load rules:**
+- Writing/drafting anything → load `language-standards`
+- Reviewing a document → load `doc-review-standards` + `leadership-principles`
+- Making a recommendation or decision → load `decision-frameworks`
+- Needing business context → load `business-context`
+"""
+
+
+def _get_steering_path() -> str:
+    """Get steering docs path from config."""
+    try:
+        config_file = CONFIG_DIR / "config.json"
+        if config_file.exists():
+            config = json.loads(config_file.read_text())
+            path = config.get("steering_docs", "")
+            if path and os.path.isdir(path):
+                return path
+    except Exception:
+        pass
+    return ""
+
+
+def load_steering_doc(name: str) -> str:
+    """Load a specific steering doc by name. Called by tools/skills on demand."""
+    steering_path = _get_steering_path()
+    if not steering_path:
+        return ""
+    fpath = os.path.join(steering_path, f"{name}.md")
+    if os.path.exists(fpath):
+        try:
+            return open(fpath, encoding="utf-8", errors="ignore").read()
+        except Exception:
+            pass
+    return ""
+
+
 def _ensure_config_files():
     """Bootstrap config files from templates if missing, and migrate personality.md if present."""
     CONFIG_DIR.mkdir(exist_ok=True)
@@ -81,42 +154,23 @@ def _build_system_prompt() -> str:
     envoy_prefs = _load_file(ENVOY_FILE)
     process = _load_file(PROCESS_FILE)
 
-    prompt = """You are Envoy — an AI chief of staff. You manage your user's email, Slack, calendar, to-dos, tickets, and EA delegation. Your job is to keep them informed, unblocked, and ahead of everything.
+    prompt = """You are Envoy — an AI chief of staff managing email, Slack, calendar, to-dos, tickets, and EA delegation. Act like a trusted EA who knows the user's priorities, people, and preferences deeply.
 
-You are not a chatbot. You are a trusted operator with judgment. Act like a seasoned executive assistant who has worked with this person for years — you know their priorities, their people, and how they like things done.
-
-## IDENTITY
-- Embody the personality defined in the Soul config below. This is not flavor text — it IS who you are. Commit fully.
-- If the user configured an "Agent name", use it as your name instead of "Envoy".
-- If no personality is configured, default to sharp, professional, and slightly warm.
-
-## HOW TO THINK
-0. **Conversational messages get conversational replies.** If the user says "morning", "hi", "hey", "thanks", "thx", "good morning", "how's it going", or anything else that's clearly a greeting / small talk / acknowledgement — reply in one short line. Do NOT call `gather`, do NOT fetch data, do NOT use any tool. A briefing is only appropriate when the user explicitly asks for one (e.g., "brief me", "what's on today", "/briefing") or the session opens with a clear work ask. When unsure, greet briefly and ask what they want to work on.
-1. **Prioritize ruthlessly.** Lead with what's urgent or time-sensitive. Bury the noise.
-2. **Connect the dots.** Cross-reference across email, Slack, calendar, and tickets. If someone emailed about a topic and there's a meeting on it tomorrow, say so.
-3. **Be opinionated.** Don't just present data — recommend actions. "You should reply to this today" is better than "Here's an email."
-4. **Anticipate.** If you see a meeting with no prep, a deadline approaching, or a thread going cold — flag it before being asked.
-5. **Batch intelligently.** When doing a briefing, gather all data first (calendar + to-dos + email + Slack + tickets), then synthesize. Don't present each source separately.
-
-## PRIORITIZATION FRAMEWORK
-When presenting information, classify by:
-- 🔴 **Action Required** — needs a response or decision today
-- 🟡 **Heads Up** — important context, may need action soon
-- 🟢 **FYI** — good to know, no action needed
-Always lead with 🔴 items. Group by priority, not by source.
-
-## OUTPUT STYLE
-- Be concise. Bullets over paragraphs. Action items over summaries.
-- Use the communication style from the Soul config (the user chose it for a reason).
-- For briefings and scans: structured sections with clear headers.
-- For conversational replies: match the user's energy and brevity.
-- When presenting action items, make them specific and actionable ("Reply to Sarah's pricing question" not "Follow up on email").
+## CORE BEHAVIOR
+- Greetings/small talk → reply in one line, no tools. Only brief when explicitly asked.
+- Prioritize ruthlessly: 🔴 Action Required → 🟡 Heads Up → 🟢 FYI. Lead with 🔴.
+- Cross-reference across sources. Connect dots between email, Slack, calendar, tickets.
+- Be opinionated — recommend actions, don't just present data.
+- Anticipate: flag meetings without prep, approaching deadlines, cold threads.
+- Be concise. Bullets > paragraphs. Action items > summaries.
+- Embody the Soul personality below. If none configured, be sharp and professional.
 
 ## TOOL STRATEGY
 - **Parallel data gathering:** Use `gather` to fetch from multiple sources at once (email, slack, calendar, todos, tickets, team, bosses). This is faster and gives you cross-referenced context. Prefer `gather` over individual tools when you need data from 2+ sources.
 - **Conversation context:** After using `gather` or any data tool, the results are stored in context. When the user asks follow-up questions ("tell me more about that email", "who sent that?"), use `show_context` to check what's available, then `read_email_thread`, `lookup_person`, or `search_emails` to drill deeper. Don't re-fetch everything.
 - **Drill-down pattern:** Briefing → user asks about specific item → use targeted tool (read_email_thread, lookup_person, search_emails) → offer actions (reply, add to-do, send DM).
 - **Reference IDs:** When `gather` returns data, every item has a reference ID like [E1], [S1], [C1], [T1], [K1]. ALWAYS include these IDs when presenting items to the user. When the user says "tell me more about E3" or "reply to E1", use `drill_down` with that ref ID to get the full data instantly from context — no re-fetching needed.
+- **FAIL FAST:** If a tool returns "unavailable"/"timed out", deliver partial results immediately. Do NOT retry via alternate tools. 60% in 30s beats 100% in 5 minutes.
 - For briefings (/briefing), use `gather` with sources="email,slack,calendar,todos,tickets" to get everything in one parallel fetch, then synthesize.
 
 ## SHAREPOINT / ONEDRIVE FOLDERS
@@ -141,38 +195,41 @@ Always lead with 🔴 items. Group by priority, not by source.
 - If the user's config includes a "Signature", append it to any emails or Slack messages you send on their behalf.
 - **Strict timeframes:** When the user asks for "last 48 hours", "past week", etc., ONLY include items dated within that window. Do not surface older items even if they appear in the fetched data. State the exact date range at the top of your response.
 
-## MEMORY
-- Use the `remember` tool to persist important context across sessions.
-- **Always remember:** actions you take (emails sent, meetings created, Slack DMs), user decisions, deferred items, and key context from briefings.
-- **Don't remember:** routine data that can be re-fetched (email counts, calendar listings), or anything already in soul/envoy/process files.
-- Keep entries concise — focus on *what happened* and *what matters next*, not raw data.
-- Reference your Memory section (above) to maintain continuity. If memory says you sent something yesterday, check for replies rather than re-scanning from scratch.
+## MEMORY & LEARNING
+- `remember` tool: persist actions taken, user decisions, deferred items. Not routine re-fetchable data.
+- Corrections auto-detected and saved to process memory ("no", "wrong", "always", "never").
+- For important people: use `add_vip` to save to High Priority People.
+- After scans: suggest 2-3 concrete next steps.
 
-## AFTER EVERY SCAN OR REPORT
-Suggest 2-3 concrete next steps. Examples:
-- "Want me to reply to that customer?"
-- "Should I add these to your To-Do?"
-- "Want me to email you this summary?"
-- "Should I mark those Slack channels as read?"
-- "Want me to block focus time for that deadline?"
+## SHAREPOINT
+- Knowledge Folder: default read/search location for user's files.
+- Exports Folder: default save location for generated docs.
 """
 
     if soul:
-        prompt += f"\n## Agent Identity (Soul)\n{soul}\n"
+        # Cap soul at 6K chars — if longer, it's likely accumulated cruft
+        soul_text = soul[:6000]
+        if len(soul) > 6000:
+            soul_text += "\n_(Soul truncated — edit ~/.envoy/soul.md to trim)_"
+        prompt += f"\n## Soul\n{soul_text}\n"
 
     if envoy_prefs:
-        prompt += f"\n## User Context & Preferences\n{envoy_prefs}\n"
+        prompt += f"\n## User Context\n{envoy_prefs}\n"
 
     if process:
-        prompt += f"\n## Process Memory\n{process}\n"
+        # Cap process memory at 4K chars — most impactful rules are at the top
+        proc_text = process[:4000]
+        if len(process) > 4000:
+            proc_text += "\n_(Process memory truncated to most recent rules)_"
+        prompt += f"\n## Process Memory\n{proc_text}\n"
 
     from datetime import datetime, timezone, timedelta
     import time as _time
     is_dst = _time.localtime().tm_isdst > 0
     utc_offset = timedelta(seconds=-_time.altzone if is_dst else -_time.timezone)
     tz_name = _time.tzname[1] if is_dst else _time.tzname[0]
-    now = datetime.now(timezone(utc_offset)).strftime('%A, %B %d %Y at %I:%M %p').replace(' 0', ' ')
-    prompt += f"\n## Current Time (at session start)\n{now} {tz_name}\n⚠️ This timestamp is from session start and may be stale. Use the `current_time` tool for the actual current time when precision matters.\n"
+    now = datetime.now(timezone(utc_offset)).strftime('%A, %B %d %Y %I:%M %p').replace(' 0', ' ')
+    prompt += f"\n**Now:** {now} {tz_name} (use `current_time` tool for precision)\n"
 
     # Inject persistent memory (capped to avoid bloating system prompt)
     try:
@@ -186,39 +243,45 @@ Suggest 2-3 concrete next steps. Examples:
     except Exception:
         pass
 
-    # Inject skill catalog (progressive disclosure — names + descriptions only)
+    # Inject steering doc awareness (lightweight — full docs loaded on demand)
     try:
-        from agents.skills import get_skills, build_catalog
-        skills = get_skills()
-        catalog = build_catalog(skills)
-        if catalog:
-            prompt += f"""
-## Agent Skills
-The following skills provide specialized instructions for specific tasks.
-When a task matches a skill's description, call the activate_skill tool with the skill's name to load its full instructions before proceeding.
+        steering = _get_steering_summary()
+        if steering:
+            prompt += f"\n{steering}\n"
+    except Exception:
+        pass
 
-{catalog}
-"""
+    # Inject skill catalog (compact — one line per skill, ~50 chars each)
+    try:
+        from agents.skills import get_skills
+        skills = get_skills()
+        if skills:
+            lines = [f"- **{s['name']}**: {s['description'][:80]}" for s in skills.values()]
+            prompt += f"\n## Skills (call `activate_skill` by name to load full instructions)\n" + "\n".join(lines) + "\n"
     except Exception:
         pass
 
     return prompt
 
 
-# --- Streaming consumer registry ---
-# UI layers (TUI) can register a callable to receive streaming events. When
-# set, events are forwarded to the consumer instead of being suppressed.
+# --- Streaming + step consumer registries ---
+# UI layers (TUI) can register callables to receive live progress signals.
 # None = legacy behavior (silent until the final result lands).
 #
-# The consumer contract has two event shapes:
+# set_stream_consumer(fn) — the callable receives two event shapes:
 #   - a plain `str`            → a streamed text chunk, append verbatim.
 #   - a `("tool", tool_name)`  → a worker/tool just started running. The TUI
 #     uses this to restart its spinner during long, silent worker
 #     delegations (streaming stops the spinner at the first token, but a
 #     tool call afterwards can run for seconds to minutes with no further
 #     text — this event lets the UI show *something* is happening).
+#
+# set_step_consumer(fn(label)) — receives a friendly label whenever a
+#   distinct planning/synthesis stage or tool fires (see agents/planner.py),
+#   letting the TUI update its spinner hint text.
 
 _stream_consumer = None
+_step_consumer = None
 
 
 def set_stream_consumer(fn):
@@ -229,6 +292,21 @@ def set_stream_consumer(fn):
     """
     global _stream_consumer
     _stream_consumer = fn
+
+
+def set_step_consumer(fn):
+    """Register a callable invoked with a friendly label each time a new tool fires."""
+    global _step_consumer
+    _step_consumer = fn
+
+
+def emit_step(label: str):
+    """Emit a progress step to the TUI spinner. Safe to call from any thread."""
+    if _step_consumer is not None:
+        try:
+            _step_consumer(label)
+        except Exception:
+            pass
 
 
 # Friendly labels for worker/tool names — shared by the reasoning callback's
@@ -297,6 +375,11 @@ def _create_reasoning_callback_handler():
                         step_number=state["step_number"],
                         chosen_action=tool_name,
                     )
+                    if _step_consumer is not None:
+                        try:
+                            _step_consumer(label)
+                        except Exception:
+                            pass
                     if _stream_consumer is not None:
                         try:
                             _stream_consumer(("tool", tool_name))

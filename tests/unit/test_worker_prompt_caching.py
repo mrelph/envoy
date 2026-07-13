@@ -167,10 +167,12 @@ class TestImportCreatePromptAssembly:
         finally:
             self._cleanup(mod_name)
 
+        from agents.workers import _FAIL_FAST_RULE
         expected_full_prompt = (
             "You are a fake worker."
             "\n\nProcess rules (learned from user corrections):\n"
             "- Always double-check dates"
+            + _FAIL_FAST_RULE
         )
         assert isinstance(agent.system_prompt, list)
         assert len(agent.system_prompt) == 2
@@ -201,10 +203,12 @@ class TestImportCreatePromptAssembly:
         finally:
             self._cleanup(mod_name)
 
+        from agents.workers import _FAIL_FAST_RULE
         assert agent.system_prompt == (
             "You are a fake worker."
             "\n\nProcess rules (learned from user corrections):\n"
             "- Always double-check dates"
+            + _FAIL_FAST_RULE
         )
 
     def test_no_process_rules_still_wraps_base_prompt(
@@ -228,9 +232,10 @@ class TestImportCreatePromptAssembly:
         finally:
             self._cleanup(mod_name)
 
+        from agents.workers import _FAIL_FAST_RULE
         assert isinstance(agent.system_prompt, list)
         calls = SystemContentBlock.call_args_list
-        assert calls[-2].kwargs == {"text": "You are a fake worker."}
+        assert calls[-2].kwargs == {"text": "You are a fake worker." + _FAIL_FAST_RULE}
         assert calls[-1].kwargs == {"cachePoint": {"type": "default"}}
 
 

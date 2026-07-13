@@ -74,6 +74,10 @@ Defaults: days=7
 Prepare a brief for my upcoming meeting: `{meeting}`. Look up attendees on Phonetool, find related email threads, and suggest prep actions and talking points.
 {if no meeting specified} Prep for my next calendar meeting.
 
+## schedule
+
+Smart-schedule a meeting from this request: `{arg}`. Parse out the duration, attendees, timeframe, and any room/building preference. Look up each attendee on Phonetool to get their verified email address — never guess emails. Check everyone's availability with the calendar worker and propose 2-3 open time slots as numbered options, each with full day, date, and start-end times. Do NOT create the event yet — wait for the user to confirm an option (e.g. "book option 2"), then create the event with the verified attendee emails and book a room in the requested building for that slot.
+
 ## yesterbox
 
 Run yesterbox on the last `{days}` days. Show me yesterday's direct messages (email and Slack DMs), prioritized with action items.

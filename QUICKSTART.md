@@ -122,4 +122,3 @@ Or generate one on the fly: `/build-skill summarize my open SIMs at end of day` 
 | `MCP server not found` | Install MCP servers, ensure in PATH |
 | `AWS credentials` | `aws login` or set up `.env` |
 | `Import errors` | Delete `venv/`, re-run |
-| `Midway expired` | `mwinit` |

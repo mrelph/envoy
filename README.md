@@ -422,7 +422,6 @@ envoy/
 | `AWS credentials not configured` | Run `aws login` or set up `.env` |
 | `No direct reports found` | Verify alias and Phonetool access |
 | `Import errors` | Delete `venv/` and re-run — dependencies reinstall |
-| `Midway expired` | Run `mwinit` (auto-refreshed hourly) |
 | `Token limit exceeded` | Document too large for model context — content is auto-truncated |
 | `Cleanup too aggressive` | Classifier reads full email bodies and is conservative; only true junk flagged DELETE |
 | `Worker unavailable` | Worker failed after retry — check MCP connections with `/status` |

@@ -71,7 +71,7 @@ _MCP_PARAM_DEFS = {
     "TeamSnap":   {"command": "node", "args": [os.path.join(_teamsnap_dir, "dist", "wrapper.js")], "env": _teamsnap_env},
     "SharePoint": {"command": "amazon-sharepoint-mcp", "args": [], "env": _node_quiet_env},
     "Kingpin":    {"command": "kingpin-mcp", "args": []},
-    "InstructAI": {"command": "instructai-mcp", "args": []},
+    "InstructAI": {"command": "instructai-mcp-proxy", "args": []},
     "QuickSight": {"command": "amazon-quick-mcp", "args": []},
 }
 
@@ -193,7 +193,7 @@ def __getattr__(name):
 
 # --- MCP context managers ---
 
-MCP_CALL_TIMEOUT = 60  # seconds per MCP tool call
+MCP_CALL_TIMEOUT = 30  # seconds per MCP tool call
 
 
 import re as _re
@@ -294,6 +294,13 @@ class _TimeoutSession:
         self._timeout = timeout
         self.dead = False
 
+    _AUTH_FAIL_PATTERNS = (
+        "unauthorized", "401", "403", "authentication failed",
+        "token expired", "token invalid", "access denied",
+        "cookie expired", "session expired",
+        "not authenticated", "credentials expired",
+    )
+
     async def _call_one(self, tool_name, arguments=None, **kwargs):
         """Single MCP call with timeout and health tracking.
 
@@ -317,6 +324,9 @@ class _TimeoutSession:
             msg = str(e).lower()
             if any(k in msg for k in ("closed", "broken pipe", "transport", "eof")):
                 self.dead = True
+            # Surface auth errors with actionable guidance
+            if any(p in msg for p in self._AUTH_FAIL_PATTERNS):
+                raise type(e)(f"{e}\n\n⚠️ Authentication failure — please refresh your credentials.") from e
             raise
 
     async def _expand_batch(self, old_name, new_name, arguments, **kwargs):
@@ -514,7 +524,7 @@ def run(coro):
             "await the coroutine directly or use asyncio.to_thread"
         )
     future = asyncio.run_coroutine_threadsafe(coro, _get_loop())
-    return future.result(timeout=120)
+    return future.result(timeout=65)  # just above _WORKER_TIMEOUT (60s) to avoid racing
 
 
 # --- Persistent MCP sessions ---
@@ -779,24 +789,22 @@ def check_mcp_connections() -> Dict[str, bool]:
 # --- AI / Bedrock ---
 
 DEFAULT_MODELS = {
-    # "agent" is the supervisor tier — it fires on every prompt, including
-    # trivial routing, so it stays on Sonnet by default (~5x cheaper than
-    # Opus with no perceptible quality loss for routing/synthesis). "heavy"
-    # is the tier workers explicitly opt into for hard reasoning and stays
-    # on Opus. Users' ~/.envoy/models.json overrides this — only fresh
-    # installs are affected by this default.
-    "agent":  "us.anthropic.claude-sonnet-4-6-v1",
-    "heavy":  "us.anthropic.claude-opus-4-7-v1",
-    "medium": "us.anthropic.claude-sonnet-4-6-v1",
-    "light":  "us.amazon.nova-micro-v1:0",
-    "memory": "us.amazon.nova-micro-v1:0",
+    # "agent" is the supervisor tier — fires on every prompt. "heavy" is
+    # the tier workers opt into for hard reasoning. Users' ~/.envoy/models.json
+    # overrides this — only fresh installs are affected by this default.
+    "agent":  "us.anthropic.claude-fable-5",
+    "heavy":  "us.anthropic.claude-fable-5",
+    "medium": "us.anthropic.claude-sonnet-5",
+    "light":  "us.anthropic.claude-sonnet-5",
+    "memory": "us.anthropic.claude-sonnet-5",
 }
 MODEL_CATALOG = [
-    ("us.anthropic.claude-opus-4-7-v1",              "Claude Opus 4.7",   "Best reasoning, highest cost — used for 'heavy' tasks"),
-    ("us.anthropic.claude-opus-4-6-v1",              "Claude Opus 4.6",   "Previous gen Opus, strong reasoning"),
-    ("us.anthropic.claude-sonnet-4-6-v1",            "Claude Sonnet 4.6", "Strong balance of speed & quality — default for 'agent' routing/synthesis"),
-    ("us.anthropic.claude-sonnet-4-20250514-v1:0",   "Claude Sonnet 4",   "Previous gen Sonnet"),
-    ("us.anthropic.claude-3-5-haiku-20241022-v1:0",  "Claude 3.5 Haiku",  "Fast & cheap, good for simple tasks"),
+    ("us.anthropic.claude-fable-5",                  "Claude Fable 5",    "Most capable model — demanding reasoning & long-horizon agentic work"),
+    ("us.anthropic.claude-opus-4-8",                 "Claude Opus 4.8",   "Highly autonomous, state-of-the-art agentic execution & knowledge work"),
+    ("us.anthropic.claude-sonnet-5",                 "Claude Sonnet 5",   "Near-Opus quality on coding/agentic at Sonnet cost — default for workers"),
+    ("us.anthropic.claude-opus-4-7-v1",              "Claude Opus 4.7",   "Previous gen Opus, strong reasoning"),
+    ("us.anthropic.claude-sonnet-4-6-v1",            "Claude Sonnet 4.6", "Previous gen Sonnet, good balance of speed & quality"),
+    ("us.anthropic.claude-haiku-4-5",                "Claude Haiku 4.5",  "Fast & cheap, good for simple tasks"),
     ("us.amazon.nova-pro-v1:0",                      "Nova Pro",          "Best Nova quality, multimodal"),
     ("us.amazon.nova-lite-v1:0",                     "Nova Lite",         "Fast & low-cost multimodal"),
     ("us.amazon.nova-micro-v1:0",                    "Nova Micro",        "Text-only, fastest & cheapest Nova"),

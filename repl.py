@@ -69,17 +69,6 @@ def run_interactive():
             run_backup()
             continue
 
-        if stripped.lower() == "/mwinit":
-            import subprocess
-            print("  Launching mwinit — check your browser…")
-            subprocess.run(["mwinit", "-o"])
-            # Close (not just forget) persistent MCP sessions so their
-            # subprocesses don't leak; they respawn with fresh creds on demand.
-            from agents.base import _cleanup_persistent
-            _cleanup_persistent()
-            print("  ✓ Midway refreshed")
-            continue
-
         # Refresh in case /models (or another path) called reload_agent().
         agent = get_agent()
         try:
