@@ -123,9 +123,18 @@ THEMES = {
 # The default theme
 DEFAULT_THEME = "slate"
 
+# In-memory cache — theme is resolved once per process from config.json,
+# then reused on every render. Avoids disk I/O on each widget refresh and
+# prevents inconsistency during rapid re-renders (e.g. window resize).
+_cached_theme: dict | None = None
+_cached_theme_name: str | None = None
+
 
 def get_theme(name: str = None) -> dict:
-    """Load the active theme. Reads from ~/.envoy/config.json if name not given."""
+    """Return the active theme dict. Cached after first resolution."""
+    global _cached_theme, _cached_theme_name
+    if name is None and _cached_theme is not None:
+        return _cached_theme
     if name is None:
         from agents.paths import config_dir
         config_file = config_dir() / "config.json"
@@ -137,7 +146,17 @@ def get_theme(name: str = None) -> dict:
                 name = DEFAULT_THEME
         else:
             name = DEFAULT_THEME
-    return THEMES.get(name, THEMES[DEFAULT_THEME])
+    result = THEMES.get(name, THEMES[DEFAULT_THEME])
+    _cached_theme = result
+    _cached_theme_name = name
+    return result
+
+
+def invalidate_cache() -> None:
+    """Clear the cached theme — called after set_theme() so next get_theme() re-reads."""
+    global _cached_theme, _cached_theme_name
+    _cached_theme = None
+    _cached_theme_name = None
 
 
 def get_theme_name() -> str:
@@ -170,6 +189,7 @@ def set_theme(name: str) -> bool:
     cfg["theme"] = name
     config_file.parent.mkdir(parents=True, exist_ok=True)
     config_file.write_text(json.dumps(cfg, indent=2))
+    invalidate_cache()
     return True
 
 

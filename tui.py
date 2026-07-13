@@ -362,10 +362,16 @@ class StatusBar(Static):
         # Get session stats from app
         ttft_ms = None
         session_tokens = 0
+        turn_in = 0
+        turn_out = 0
+        active_workers = []
         try:
             app = self.app
             ttft_ms = app._last_ttft_ms
             session_tokens = app._session_tokens
+            turn_in = app._turn_input_tokens
+            turn_out = app._turn_output_tokens
+            active_workers = app._active_workers
         except Exception:
             pass
 
@@ -385,20 +391,33 @@ class StatusBar(Static):
                 t.append(f"{ttft_ms / 1000:.1f}s", style=th['warning'])
             else:
                 t.append(f"{ttft_ms}ms", style=th['success'])
+        # Token counts: show turn breakdown if available, else session total
+        if turn_in or turn_out:
+            t.append(sep, style=th['border'])
+            t.append(f"↑{self._fmt_tokens(turn_in)} ↓{self._fmt_tokens(turn_out)}", style=th['text_dim'])
         if session_tokens > 0:
             t.append(sep, style=th['border'])
-            if session_tokens >= 1_000_000:
-                t.append(f"{session_tokens / 1_000_000:.1f}M tok", style=th['text_faint'])
-            elif session_tokens >= 1_000:
-                t.append(f"{session_tokens / 1_000:.0f}K tok", style=th['text_faint'])
-            else:
-                t.append(f"{session_tokens} tok", style=th['text_faint'])
+            t.append(f"Σ {self._fmt_tokens(session_tokens)}", style=th['text_faint'])
+        # Active workers
+        if active_workers:
+            t.append(sep, style=th['border'])
+            t.append(" ".join(active_workers[:3]), style=th['accent_dim'])
+            if len(active_workers) > 3:
+                t.append(f" +{len(active_workers) - 3}", style=th['text_faint'])
         t.append(sep, style=th['border'])
         t.append("/help", style=th['success'])
         t.append("  ")
-        t.append("^C", style=f"{th['text_dim']} bold")
-        t.append(" quit", style=th['text_faint'])
+        t.append("Esc", style=f"{th['text_dim']} bold")
+        t.append(" cancel", style=th['text_faint'])
         return t
+
+    @staticmethod
+    def _fmt_tokens(n: int) -> str:
+        if n >= 1_000_000:
+            return f"{n / 1_000_000:.1f}M"
+        elif n >= 1_000:
+            return f"{n / 1_000:.0f}K"
+        return str(n)
 
     def on_mount(self) -> None:
         self.set_interval(30, self.refresh)
@@ -683,7 +702,10 @@ class EnvoyApp(App):
         self._history_draft: str = ""          # current typed text, restored when user walks past end
         # Session stats for status bar
         self._session_tokens: int = 0
+        self._turn_input_tokens: int = 0
+        self._turn_output_tokens: int = 0
         self._last_ttft_ms: int | None = None
+        self._active_workers: list[str] = []
         # Streaming state: chunks the agent emits live, written to RichLog as they arrive.
         # The final result is suppressed on render if it matches what we streamed.
         self._stream_buffer: list[str] = []
@@ -706,7 +728,7 @@ class EnvoyApp(App):
         # at max(content_width, min_width) — so on viewports narrower than 78
         # columns, text rendered at 78 wide overflows horizontally instead of
         # wrapping. A tiny min_width lets wrap=True fit the real widget width.
-        yield RichLog(id="output", highlight=True, markup=True, wrap=True, min_width=4, max_lines=5000, auto_scroll=True)
+        yield RichLog(id="output", highlight=False, markup=True, wrap=True, min_width=4, max_lines=5000, auto_scroll=True)
         yield Spinner(id="spinner")
         with Horizontal(id="input-area"):
             yield Label("›", id="prompt-label")
@@ -895,7 +917,7 @@ class EnvoyApp(App):
             out.write(Text())
             self._stream_started = True
         from tui_themes import get_theme
-        text_color = get_theme().get("text", "#e6edf3")
+        text_color = get_theme()['text']
         out.write(Text(pending, style=text_color, overflow="fold", no_wrap=False))
         self._last_text_ts = time.monotonic()
 
@@ -936,10 +958,14 @@ class EnvoyApp(App):
         """
         if not self._busy:
             return
-        if time.monotonic() - self._last_text_ts < 1.0:
-            return
         from agent import _LABELS
         label = _LABELS.get(tool_name, tool_name)
+        # Track active workers for status bar display
+        if label not in self._active_workers:
+            self._active_workers.append(label)
+            self.query_one("#status-bar", StatusBar).refresh()
+        if time.monotonic() - self._last_text_ts < 1.0:
+            return
         self.query_one("#spinner", Spinner).start(label)
 
     @work(thread=True, exclusive=True, group="cmd")
@@ -956,6 +982,9 @@ class EnvoyApp(App):
             self._stream_pending = ""
         self._stream_started = False
         self._last_text_ts = 0.0
+        self._active_workers = []
+        self._turn_input_tokens = 0
+        self._turn_output_tokens = 0
         set_stream_consumer(self._ingest_stream_chunk)
         set_step_consumer(self._on_step)
 
@@ -982,7 +1011,11 @@ class EnvoyApp(App):
                 m = result.metrics
                 inv = m.latest_agent_invocation
                 if inv:
-                    self._session_tokens += inv.usage.get("totalTokens", 0)
+                    usage = inv.usage
+                    total = usage.get("totalTokens", 0)
+                    self._session_tokens += total
+                    self._turn_input_tokens = usage.get("inputTokens", 0)
+                    self._turn_output_tokens = usage.get("outputTokens", 0)
                 # TTFT: use first cycle duration of this invocation
                 if inv and inv.cycles and m.cycle_durations:
                     n_cycles = len(inv.cycles)
@@ -990,7 +1023,6 @@ class EnvoyApp(App):
                     if idx >= 0:
                         self._last_ttft_ms = int(m.cycle_durations[idx] * 1000)
                 elif not error:
-                    # Fallback: wall-clock time for the whole call
                     self._last_ttft_ms = int((_time.time() - _t0) * 1000)
         except Exception:
             pass
@@ -1000,6 +1032,7 @@ class EnvoyApp(App):
             th = get_theme()
             self.query_one("#spinner", Spinner).stop()
             self._busy = False
+            self._active_workers = []
 
             out = self.query_one("#output", RichLog)
             if error is not None:
