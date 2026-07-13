@@ -302,6 +302,11 @@ class _TimeoutSession:
                 self._session.call_tool(tool_name, arguments, **kwargs),
                 timeout=self._timeout,
             )
+            # Detect server-side session death returned as an error result
+            if getattr(result, "isError", False) and result.content:
+                err_text = str(result.content[0].text).lower() if result.content else ""
+                if any(k in err_text for k in ("does not exist", "session not found")):
+                    self.dead = True
             return result
         except asyncio.TimeoutError:
             raise TimeoutError(f"{self._name}/{tool_name} timed out after {self._timeout}s")
@@ -310,7 +315,8 @@ class _TimeoutSession:
             raise
         except Exception as e:
             msg = str(e).lower()
-            if any(k in msg for k in ("closed", "broken pipe", "transport", "eof")):
+            if any(k in msg for k in ("closed", "broken pipe", "transport", "eof",
+                                       "does not exist", "session not found")):
                 self.dead = True
             # Surface auth errors with actionable guidance
             if any(p in msg for p in self._AUTH_FAIL_PATTERNS):
