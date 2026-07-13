@@ -39,20 +39,20 @@ THEMES = {
         "model": "#b8a0d8",
     },
     "paper": {
-        # Warm off-white — daylight/bright environment theme.
-        # Not clinical white; has warmth without being beige-slop.
-        "bg": "#f8f6f2",
-        "bg_surface": "#edeae4",
-        "border": "#d4cfc6",
-        "text": "#2c2c2c",
-        "text_dim": "#6b6560",
-        "text_faint": "#9b9590",
-        "accent": "#2868a0",
-        "accent_dim": "#5a8ab8",
-        "success": "#2a7a4a",
-        "warning": "#8a6420",
-        "error": "#b83a3a",
-        "model": "#6a4a8a",
+        # Muted warm grey — light theme without the glare. Reads like
+        # unbleached paper under soft light, not a white screen at 100%.
+        "bg": "#e4e0d8",
+        "bg_surface": "#d6d1c7",
+        "border": "#b8b2a6",
+        "text": "#2a2a28",
+        "text_dim": "#5c5852",
+        "text_faint": "#8a847c",
+        "accent": "#1e5c8c",
+        "accent_dim": "#4a7ea6",
+        "success": "#236640",
+        "warning": "#7a5518",
+        "error": "#a32e2e",
+        "model": "#5c3f78",
     },
     "slate": {
         # Cool neutral grey — the default. Works in any lighting.
