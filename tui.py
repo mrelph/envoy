@@ -1020,29 +1020,62 @@ class EnvoyApp(App):
             pass
 
     def _flush_stream(self) -> None:
-        """UI thread: write accumulated streamed text to the RichLog."""
+        """UI thread: write only complete lines to the RichLog.
+
+        RichLog.write() starts a new visual line for each call, so we must
+        only write text that ends at a line boundary. Any trailing partial
+        line (text after the last newline) stays in `_stream_pending` and
+        gets picked up by the next flush or the final drain.
+
+        Exception: if the buffer exceeds 500 chars with no newline at all,
+        force-write it so the UI doesn't look frozen during long paragraphs.
+        """
         with self._stream_lock:
             pending = self._stream_pending
-            self._stream_pending = ""
+            last_nl = pending.rfind("\n")
+            if last_nl == -1:
+                if len(pending) < 500:
+                    return
+                # Very long line with no newline — force write for responsiveness
+                self._stream_pending = ""
+            else:
+                self._stream_pending = pending[last_nl + 1:]
+                pending = pending[:last_nl + 1]
         if not pending:
             return
         out = self.query_one("#output", RichLog)
-        # Stop the spinner unconditionally: either the very first spinner
-        # (streaming IS the indicator now) or a tool-activity spinner that
-        # `_on_tool_event` restarted mid-turn — text resuming means the gap
-        # is over. Stop() is a no-op if it's already stopped.
         self.query_one("#spinner", Spinner).stop()
         if not self._stream_started:
-            # Remember where this turn's streamed output begins so `_show()`
-            # can truncate and re-render it as Markdown if warranted. Record
-            # `_start_line` too: if `max_lines` trimming drops early lines
-            # mid-turn, the anchor index shifts down by the trimmed count.
             self._stream_anchor = (len(out.lines), out._start_line)
             out.write(Text())
             self._stream_started = True
         from tui_themes import get_theme
         text_color = get_theme()['text']
-        out.write(Text(pending, style=text_color, overflow="fold", no_wrap=False))
+        # Write each line as a separate RichLog entry — wrapping applies
+        # per-line and never breaks mid-sentence at chunk boundaries.
+        # Drop the trailing empty string from split (artifact of trailing \n).
+        lines = pending.split("\n")
+        if lines and lines[-1] == "":
+            lines = lines[:-1]
+        for line in lines:
+            out.write(Text(line, style=text_color, overflow="fold", no_wrap=False))
+        self._last_text_ts = time.monotonic()
+
+    def _flush_stream_final(self) -> None:
+        """UI thread: drain any remaining partial line at end of turn."""
+        with self._stream_lock:
+            remaining = self._stream_pending
+            self._stream_pending = ""
+        if not remaining:
+            return
+        out = self.query_one("#output", RichLog)
+        if not self._stream_started:
+            self._stream_anchor = (len(out.lines), out._start_line)
+            out.write(Text())
+            self._stream_started = True
+        from tui_themes import get_theme
+        text_color = get_theme()['text']
+        out.write(Text(remaining, style=text_color, overflow="fold", no_wrap=False))
         self._last_text_ts = time.monotonic()
 
     def _truncate_stream_output(self, out: RichLog) -> bool:
@@ -1154,6 +1187,7 @@ class EnvoyApp(App):
         def _show():
             from tui_themes import get_theme
             th = get_theme()
+            self._flush_stream_final()
             self.query_one("#spinner", Spinner).stop()
             self._busy = False
             self._active_workers = []
