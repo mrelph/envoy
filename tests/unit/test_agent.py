@@ -262,3 +262,17 @@ class TestSystemPromptText:
         guardrails = prompt.split("## GUARDRAILS", 1)[1].lower()
         for action in ("sending", "forwarding", "deleting", "running code"):
             assert action in guardrails
+
+    def test_opening_uses_configured_agent_name(self, agent_mod):
+        """The system prompt must open with the name from soul.md, not a
+        hardcoded default — so the persona and the UI banner never disagree."""
+        (agent_mod.SOUL_FILE).write_text("- Agent name: Cedar\n")
+        prompt = agent_mod._build_system_prompt()
+        assert prompt.startswith("You are Cedar —")
+        assert "You are Stanley" not in prompt
+
+    def test_opening_falls_back_to_envoy_without_soul_name(self, agent_mod):
+        """With no configured name, the opening falls back to the default."""
+        (agent_mod.SOUL_FILE).write_text("Some soul with no name line.\n")
+        prompt = agent_mod._build_system_prompt()
+        assert prompt.startswith("You are Envoy —")

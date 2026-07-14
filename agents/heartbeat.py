@@ -12,7 +12,7 @@ import re
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from agents.base import invoke_ai, outlook, MCPConnectionError, run
+from agents.base import invoke_ai, outlook, MCPConnectionError, run, agent_name
 from agents import email, slack_agent, calendar, todo, tickets, people, memory2 as memory
 
 from agents.base import current_user as _USER  # call-time alias resolution
@@ -309,7 +309,7 @@ async def _run_heartbeat_async(quiet: bool = False, notify: str = "slack") -> st
         f"- [{a['ts'][:16]}] {a['summary']}" for a in state.get("recent_alerts", [])
     ) or "None"
 
-    prompt = f"""You are Stanley running autonomously on a schedule. No human is present.
+    prompt = f"""You are {agent_name()} running autonomously on a schedule. No human is present.
 Your job: check routines against current data and report anything that needs attention.
 
 ## Routines

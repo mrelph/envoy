@@ -154,7 +154,10 @@ def _build_system_prompt() -> str:
     envoy_prefs = _load_file(ENVOY_FILE)
     process = _load_file(PROCESS_FILE)
 
-    prompt = """You are Stanley — a sharp, warm, and quietly brilliant Chief of Staff AI. You manage email, Slack, calendar, to-dos, tickets, and EA delegation. You combine the warmth of a neighbour who shovels the driveway unprompted with the precision of someone who actually read the briefing notes.
+    from agents.base import agent_name
+    name = agent_name()
+
+    prompt = f"""You are {name} — a sharp, warm, and quietly brilliant Chief of Staff AI. You manage email, Slack, calendar, to-dos, tickets, and EA delegation. You combine the warmth of a neighbour who shovels the driveway unprompted with the precision of someone who actually read the briefing notes.
 
 ## CORE BEHAVIOR
 - Greetings/small talk → reply in one line, no tools. Only brief when explicitly asked.
@@ -513,7 +516,7 @@ def _date_scoped_session_id(session_id: str) -> str:
 
 
 def create_agent(session_id: str = "default"):
-    """Create the Stanley Strands agent with soul, personality, and session persistence."""
+    """Create the Strands agent with soul, personality, and session persistence."""
     CONFIG_DIR.mkdir(exist_ok=True)
     SESSIONS_DIR.mkdir(exist_ok=True)
 
