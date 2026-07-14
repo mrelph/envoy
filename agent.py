@@ -496,6 +496,22 @@ def _reset_agent_session(session_id: str) -> None:
             shutil.rmtree(sess_dir, ignore_errors=True)
 
 
+def _date_scoped_session_id(session_id: str) -> str:
+    """Append today's date to a session ID so sessions expire daily.
+
+    The supervisor's in-memory drill-down refs ([E1], [S1], ...) and the
+    embedded "Current Time" line become stale after a restart or date change.
+    Date-scoping ensures a new day always starts a fresh session — no replaying
+    yesterday's gather dumps and no dangling ref IDs in the transcript.
+    """
+    from datetime import date
+    today = date.today().isoformat()  # e.g. "2026-07-14"
+    # If the caller already appended a date suffix (idempotency), don't double.
+    if session_id.endswith(today):
+        return session_id
+    return f"{session_id}-{today}"
+
+
 def create_agent(session_id: str = "default"):
     """Create the Stanley Strands agent with soul, personality, and session persistence."""
     CONFIG_DIR.mkdir(exist_ok=True)
@@ -521,13 +537,18 @@ def create_agent(session_id: str = "default"):
         region_name=os.environ.get("AWS_REGION", "us-west-2"),
     )
 
+    # Date-scope the session ID so stale drill-down refs and "Current Time"
+    # expire naturally at midnight. Combined with the bloat guard below, this
+    # ensures the supervisor never replays stale data from prior days/sessions.
+    scoped_id = _date_scoped_session_id(session_id)
+
     # Reset a bloated/stale session before constructing the manager — see the
     # module-level comment above _MAX_AGENT_SESSION_MESSAGES for rationale.
-    if _agent_session_is_bloated(session_id):
-        _reset_agent_session(session_id)
+    if _agent_session_is_bloated(scoped_id):
+        _reset_agent_session(scoped_id)
 
     session_manager = FileSessionManager(
-        session_id=session_id,
+        session_id=scoped_id,
         base_dir=str(SESSIONS_DIR),
     )
 

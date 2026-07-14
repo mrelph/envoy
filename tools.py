@@ -96,19 +96,30 @@ def _outlook_tool(tool_name: str, args: dict) -> str:
 
 
 def _check_replies_combined() -> str:
-    """Check for replies across email and Slack."""
+    """Check for replies across email and Slack (concurrently)."""
+    import asyncio as _asyncio
+
     async def _check():
+        # Run both checks in parallel — they hit different MCP servers
+        email_coro = email.check_replies()
+        slack_coro = slack_agent.check_slack_replies()
+        outcomes = await _asyncio.gather(email_coro, slack_coro, return_exceptions=True)
+
         results = []
-        email_result = await email.check_replies()
+        email_result = outcomes[0]
+        if isinstance(email_result, Exception):
+            email_result = ""
         if email_result and "No sent" not in email_result:
             results.append(email_result)
-        try:
-            slack_result = await slack_agent.check_slack_replies()
-            if slack_result:
-                results.append(slack_result)
-        except Exception:
-            pass
+
+        slack_result = outcomes[1]
+        if isinstance(slack_result, Exception):
+            slack_result = ""
+        if slack_result:
+            results.append(slack_result)
+
         return "\n".join(results) if results else "Checked sent messages — no replies detected yet."
+
     try:
         return run(_check())
     except Exception:
@@ -556,11 +567,10 @@ def _skill_tool_registry() -> dict:
     """Name -> raw tool callable for every tool Envoy knows about.
 
     Combines the skill-gated extras in _SKILL_TOOLS (not registered on the
-    agent by default — originally just the TeamSnap set) with every tool in
-    _ALL_TOOLS_RAW (registered by default). Built data-driven off the actual
-    tool list rather than a hardcoded per-skill mapping, so a skill-builder
-    skill's `allowed-tools` can reference *any* real tool — not just the
-    original 10 TeamSnap ones — instead of silently no-op'ing.
+    agent by default) with every tool in _ALL_TOOLS_RAW (registered by
+    default). Built data-driven off the actual tool list rather than a
+    hardcoded per-skill mapping, so a skill-builder skill's `allowed-tools`
+    can reference *any* real tool instead of silently no-op'ing.
     """
     registry = dict(_SKILL_TOOLS)
     for fn in _ALL_TOOLS_RAW:

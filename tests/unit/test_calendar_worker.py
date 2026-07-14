@@ -98,6 +98,26 @@ class TestUpdateEventAttendeeValidation:
         assert "dave" in result
 
 
+class TestModelTier:
+    """H6 part 2 — the calendar worker has 10 tools, a 22-parameter
+    create_event, strict ISO datetimes, and performs calendar WRITES; it must
+    run on the medium tier, not the weakest 'light' tool-calling tier."""
+
+    def test_calendar_worker_uses_medium_tier(self, monkeypatch):
+        seen_tiers = []
+        monkeypatch.setattr("agents.base.model_for",
+                            lambda tier: seen_tiers.append(tier) or f"model-for-{tier}")
+
+        strands.Agent.reset_mock()
+        calendar_worker.create()
+
+        assert seen_tiers == ["medium"]
+        model = strands.Agent.call_args.kwargs["model"]
+        from strands.models import BedrockModel
+        assert model is BedrockModel.return_value
+        assert BedrockModel.call_args.kwargs["model_id"] == "model-for-medium"
+
+
 class TestAddAttendeeArgsHelper:
     """Exercise _add_attendee_args directly via the module-private closure,
     reached through create_event's ValueError message, to pin the exact

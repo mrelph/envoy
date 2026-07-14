@@ -134,3 +134,119 @@ class TestFetchTodosParallel:
         assert "## Work (1 open)" in out
         assert "Ship feature" in out
         assert "Broken" not in out
+
+
+class TestAddTasksParallel:
+    """add_tasks() creates tasks concurrently with a semaphore."""
+
+    def test_creates_multiple_tasks_in_parallel(self):
+        created = []
+
+        async def _call_tool(tool_name, arguments=None, **kwargs):
+            arguments = arguments or {}
+            if tool_name == "todo_lists":
+                op = arguments.get("operation", "")
+                if op == "list":
+                    return _mcp_result({"value": [
+                        {"id": "list-1", "displayName": "Envoy Action Items"},
+                    ]})
+            if tool_name == "todo_tasks":
+                op = arguments.get("operation", "")
+                if op == "create":
+                    created.append(arguments.get("title", ""))
+                    return _mcp_result({"id": f"task-{len(created)}"})
+            raise AssertionError(f"unexpected: {tool_name} {arguments}")
+
+        session, ctx = _make_mock_session(_call_tool)
+        with patch("agents.todo.outlook", ctx):
+            from agents.base import run
+            from agents.todo import add_tasks
+            items = [
+                {"title": "Task A"},
+                {"title": "Task B"},
+                {"title": "Task C"},
+            ]
+            result = run(add_tasks(items))
+
+        assert result is True
+        assert sorted(created) == ["Task A", "Task B", "Task C"]
+
+    def test_one_failing_task_does_not_sink_batch(self):
+        async def _call_tool(tool_name, arguments=None, **kwargs):
+            arguments = arguments or {}
+            if tool_name == "todo_lists":
+                return _mcp_result({"value": [
+                    {"id": "list-1", "displayName": "Envoy Action Items"},
+                ]})
+            if tool_name == "todo_tasks":
+                if arguments.get("title") == "Bad":
+                    raise RuntimeError("MCP error")
+                return _mcp_result({"id": "ok"})
+            raise AssertionError(f"unexpected: {tool_name}")
+
+        session, ctx = _make_mock_session(_call_tool)
+        with patch("agents.todo.outlook", ctx):
+            from agents.base import run
+            from agents.todo import add_tasks
+            items = [{"title": "Good"}, {"title": "Bad"}, {"title": "Also Good"}]
+            result = run(add_tasks(items))
+
+        # At least one succeeded, so returns True
+        assert result is True
+
+
+class TestAddSubtasksParallel:
+    """add_subtasks() creates checklist items concurrently."""
+
+    def test_creates_subtasks_in_parallel(self):
+        created = []
+
+        async def _call_tool(tool_name, arguments=None, **kwargs):
+            arguments = arguments or {}
+            if tool_name == "todo_lists":
+                return _mcp_result({"value": [
+                    {"id": "list-1", "displayName": "Work"},
+                ]})
+            if tool_name == "todo_tasks":
+                return _mcp_result({"value": [
+                    {"id": "task-1", "title": "Parent Task", "status": "notStarted"},
+                ]})
+            if tool_name == "todo_checklist":
+                created.append(arguments.get("displayName", ""))
+                return _mcp_result({"id": f"sub-{len(created)}"})
+            raise AssertionError(f"unexpected: {tool_name}")
+
+        session, ctx = _make_mock_session(_call_tool)
+        with patch("agents.todo.outlook", ctx):
+            from agents.base import run
+            from agents.todo import add_subtasks
+            result = run(add_subtasks("Work", "Parent Task", ["Sub A", "Sub B", "Sub C"]))
+
+        assert "3 subtasks" in result
+        assert sorted(created) == ["Sub A", "Sub B", "Sub C"]
+
+    def test_partial_failure_reports_count(self):
+        async def _call_tool(tool_name, arguments=None, **kwargs):
+            arguments = arguments or {}
+            if tool_name == "todo_lists":
+                return _mcp_result({"value": [
+                    {"id": "list-1", "displayName": "Work"},
+                ]})
+            if tool_name == "todo_tasks":
+                return _mcp_result({"value": [
+                    {"id": "task-1", "title": "Parent Task", "status": "notStarted"},
+                ]})
+            if tool_name == "todo_checklist":
+                if arguments.get("displayName") == "Fail":
+                    raise RuntimeError("nope")
+                return _mcp_result({"id": "ok"})
+            raise AssertionError(f"unexpected: {tool_name}")
+
+        session, ctx = _make_mock_session(_call_tool)
+        with patch("agents.todo.outlook", ctx):
+            from agents.base import run
+            from agents.todo import add_subtasks
+            result = run(add_subtasks("Work", "Parent Task", ["OK1", "Fail", "OK2"]))
+
+        assert "2/3" in result
+        assert "1 failed" in result

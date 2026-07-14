@@ -2,6 +2,22 @@
 
 Predefined prompts for common workflows. Each command maps a CLI shortcut to an agent instruction.
 
+## briefing
+
+Give me a full briefing — calendar, inbox, and Slack. Cross-reference everything and present by priority: Action Required, Heads Up, FYI.
+
+## calendar
+
+Review my calendar for today. Show meetings, conflicts, and free blocks.
+
+## week
+
+Review my calendar for the week ahead. Highlight key meetings, conflicts, and focus time.
+
+## todo
+
+What action items do I have pending? Show my to-do list prioritized by urgency.
+
 ## digest
 
 Generate a team email digest for `{alias}` covering the last `{days}` days.
@@ -14,11 +30,9 @@ Generate a team email digest for `{alias}` covering the last `{days}` days.
 
 Defaults: alias=$USER, days=14
 
-## cleanup
+## boss
 
-Scan my inbox for non-critical email (last `{days}` days, up to `{limit}` emails). Classify each as DELETE, REVIEW, or KEEP. Show me the results and let me choose what to delete.
-
-Defaults: days=14, limit=100
+Track my management chain's recent emails. Summarize what my bosses are talking about, decisions made, and anything that needs my attention.
 
 ## customers
 
@@ -28,6 +42,20 @@ Scan for external (non-Amazon) customer emails with action items across me and m
 {if slack} Send the report as a Slack DM.
 
 Defaults: alias=$USER, days=14
+
+## cleanup
+
+Scan my inbox for non-critical email (last `{days}` days, up to `{limit}` emails). Classify each as DELETE, REVIEW, or KEEP. Show me the results and let me choose what to delete.
+
+Defaults: days=14, limit=100
+
+## slack
+
+Scan my Slack channels for critical info and actions. Surface: important announcements, decisions made, action items for me, and threads I should weigh in on.
+
+## tickets
+
+Scan my open tickets and SIMs. Show status, priority, staleness, and flag anything that needs immediate attention.
 
 ## catchup
 
@@ -40,6 +68,12 @@ Defaults: days=5
 Catch me up on Slack from the last `{days}` days. Surface: unread DMs needing replies, @mentions I missed, and important channel activity.
 
 Defaults: days=3
+
+## yesterbox
+
+Run yesterbox on the last `{days}` days. Show me yesterday's direct messages (email and Slack DMs), prioritized with action items.
+
+Defaults: days=1
 
 ## cal-audit
 
@@ -65,39 +99,97 @@ Scan my sent emails from the last `{days}` days for unanswered threads — thing
 
 Defaults: days=7
 
-## prep-1on1
-
-Prepare a 1:1 brief for my meeting with `{person}`. Pull their Phonetool profile, find recent email threads between us, surface shared to-do items and upcoming shared meetings, and suggest talking points.
-
 ## commitments
 
 Scan my sent emails and Slack messages from the last `{days}` days for promises and commitments I made. Look for language like "I'll send", "by Friday", "action on me". Categorize as overdue, due this week, open, or likely fulfilled.
 
 Defaults: days=7
 
+## prep-1on1
+
+Prepare a 1:1 brief for my meeting with `{person}`. Pull their Phonetool profile, find recent email threads between us, surface shared to-do items and upcoming shared meetings, and suggest talking points.
+
 ## prep-meeting
 
 Prepare a brief for my upcoming meeting: `{meeting}`. Look up attendees on Phonetool, find related email threads, and suggest prep actions and talking points.
 {if no meeting specified} Prep for my next calendar meeting.
 
+## reply
+
+Reply to the email about {arg}. Draft a response and show it to me for approval before sending.
+
+## ea
+
+Send this to my EA: {arg}
+
+## book
+
+Find me a room in {arg}. Check room availability and book it.
+
+## findtime
+
+Find me available meeting times this week. Check my calendar and suggest open slots.
+
 ## schedule
 
 Smart-schedule a meeting from this request: `{arg}`. Parse out the duration, attendees, timeframe, and any room/building preference. Look up each attendee on Phonetool to get their verified email address — never guess emails. Check everyone's availability with the calendar worker and propose 2-3 open time slots as numbered options, each with full day, date, and start-end times. Do NOT create the event yet — wait for the user to confirm an option (e.g. "book option 2"), then create the event with the verified attendee emails and book a room in the requested building for that slot.
 
-## yesterbox
+## search
 
-Run yesterbox on the last `{days}` days. Show me yesterday's direct messages (email and Slack DMs), prioritized with action items.
+Search Slack for: {arg}
 
-Defaults: days=1
+## sharepoint
 
-## morning-briefing
+On SharePoint/OneDrive: {arg}
 
-Give me a morning briefing. Gather email, Slack, calendar, to-dos, and tickets. Cross-reference everything and present by priority: 🔴 Action Required, 🟡 Heads Up, 🟢 FYI.
+## eod
 
-## eod-summary
+Activate the eod skill and generate my end-of-day summary. Review what happened today — emails sent, meetings attended, to-dos completed, Slack activity. Highlight anything still open or deferred.
 
-End of day summary. Review what happened today — emails sent, meetings attended, to-dos completed, Slack activity. Highlight anything still open or deferred.
+## weekly
 
-## weekly-review
+Activate the weekly skill and generate my weekly review. Summarize the past 7 days: key accomplishments, open items, commitments made, and priorities for next week.
 
-Weekly review. Summarize the past 7 days: key accomplishments, open items, commitments made, and priorities for next week.
+## cron
+
+Show my cron jobs and available presets. List scheduled automation and suggest useful new jobs.
+
+## vault
+
+Activate the brain-query skill and search my vault for: {arg}
+
+## synthesize
+
+Activate the brain-synthesize skill and synthesize what I know about: {arg}
+
+## pulse
+
+Activate the partner-pulse skill and show me the partner pulse. Check relationship health across my key partners.
+
+## dossier
+
+Activate the partner-dossier skill and build a dossier on: {arg}
+
+## pre-game
+
+Activate the pre-game skill and pre-game for: {arg}
+
+## daily-note
+
+Activate the daily-note skill and create my daily note. Reflect on today's activities and capture key thoughts.
+
+## vault-health
+
+Activate the brain-lint skill and lint my vault. Check structural health and flag issues.
+
+## ingest
+
+Activate the brain-ingest skill and ingest my brain inbox. Process new sources and notes.
+
+## exec-sponsor
+
+Activate the exec-sponsor-insights skill and build an exec sponsor brief for: {arg}
+
+## save-email
+
+Activate the email-to-vault skill and save that email to my vault: {arg}

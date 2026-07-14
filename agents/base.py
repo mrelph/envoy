@@ -59,7 +59,7 @@ _MCP_PARAM_DEFS = {
     "Slack_fallback": {"command": "ai-community-slack-mcp", "args": []},
     "SharePoint": {"command": "amazon-sharepoint-mcp", "args": [], "env": _node_quiet_env},
     "Kingpin":    {"command": "kingpin-mcp", "args": []},
-    "InstructAI": {"command": "instructai-mcp-proxy", "args": []},
+    "InstructAI": {"command": "instructai-gamma-mcp", "args": []},
     "QuickSight": {"command": "amazon-quick-mcp", "args": []},
 }
 

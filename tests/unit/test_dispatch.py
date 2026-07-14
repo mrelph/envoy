@@ -162,12 +162,13 @@ class TestDigestAndDaysSubstitution:
         agent = FakeAgent()
         dispatch.dispatch("/briefing 14", agent)
         # Template has no placeholders so format() leaves it untouched.
-        assert agent.last_prompt == "Give me a full briefing — calendar, inbox, and Slack"
+        assert "full briefing" in agent.last_prompt
+        assert "14" not in agent.last_prompt
 
     def test_calendar_no_arg(self):
         agent = FakeAgent()
         dispatch.dispatch("/calendar", agent)
-        assert agent.last_prompt == "Review my calendar for today"
+        assert "calendar for today" in agent.last_prompt
 
     def test_unknown_slash_command_returns_help_hint(self):
         """Unknown slash commands return a 'command not found' message — they do not
@@ -276,7 +277,8 @@ class TestArgCommands:
         agent = FakeAgent()
         dispatch.dispatch("/reply about the budget", agent)
         # parts[1] is everything after the command — full multi-word arg.
-        assert agent.last_prompt == "Reply to the email about about the budget"
+        assert "about the budget" in agent.last_prompt
+        assert "Reply to the email" in agent.last_prompt
 
     def test_reply_no_arg_returns_usage(self):
         agent = FakeAgent()
@@ -293,7 +295,8 @@ class TestArgCommands:
     def test_book_arg_passed_through(self):
         agent = FakeAgent()
         dispatch.dispatch("/book SEA20 at 3pm", agent)
-        assert agent.last_prompt == "Find me a room in SEA20 at 3pm"
+        assert "SEA20 at 3pm" in agent.last_prompt
+        assert "room" in agent.last_prompt
 
     def test_ea_no_arg_returns_usage(self):
         agent = FakeAgent()
@@ -607,11 +610,20 @@ class TestTemplateSourcedPrompts:
         assert agent.last_prompt == expected
         assert "`100`" in agent.last_prompt
 
-    def test_fallback_to_hardcoded_template_when_no_commands_md_section(self):
-        """/briefing has no matching commands.md section — commands.md only has
-        an unrelated 'morning-briefing' entry that no CLI subcommand consumes
-        either — so it falls back to the hardcoded COMMANDS entry unchanged."""
-        assert "briefing" not in dispatch._load_commands()
+    def test_briefing_prompt_comes_from_template(self):
+        """/briefing now has a matching commands.md section — the template is
+        richer than the old hardcoded one-liner."""
+        assert "briefing" in dispatch._load_commands()
+        agent = FakeAgent()
+        dispatch.dispatch("/briefing", agent)
+        assert "full briefing" in agent.last_prompt
+        assert "calendar" in agent.last_prompt
+
+    def test_fallback_when_template_section_removed(self, monkeypatch):
+        """If a user override removes a section, we still fall back gracefully
+        to the hardcoded COMMANDS entry."""
+        # Return a dict missing the 'briefing' key
+        monkeypatch.setattr(dispatch, "_load_commands", lambda: {"digest": "x"})
         agent = FakeAgent()
         dispatch.dispatch("/briefing", agent)
         assert agent.last_prompt == "Give me a full briefing — calendar, inbox, and Slack"
@@ -733,3 +745,120 @@ class TestPendingSummaryHint:
         agent = FakeAgent()
         result, handled = dispatch.dispatch_with_learning("/learn list", agent)
         assert result.count("learned rule") <= 1
+
+
+# =========================================================================
+# 9. Template loading — caching, user overrides, graceful fallbacks
+# =========================================================================
+
+class TestTemplateLoadingMechanics:
+    """Tests for _load_commands() caching, user-override resolution, and
+    _invalidate_commands_cache()."""
+
+    def setup_method(self):
+        """Ensure cache starts clean for every test."""
+        dispatch._invalidate_commands_cache()
+
+    def teardown_method(self):
+        """Reset cache after each test so other test classes see fresh state."""
+        dispatch._invalidate_commands_cache()
+
+    def test_load_commands_returns_dict_with_known_keys(self):
+        cmds = dispatch._load_commands()
+        assert isinstance(cmds, dict)
+        # Spot-check a few sections that definitely exist
+        assert "digest" in cmds
+        assert "cleanup" in cmds
+        assert "catchup" in cmds
+        assert "briefing" in cmds
+        assert "eod" in cmds
+
+    def test_cache_populated_after_first_call(self):
+        assert dispatch._COMMANDS_CACHE is None
+        dispatch._load_commands()
+        assert dispatch._COMMANDS_CACHE is not None
+        assert isinstance(dispatch._COMMANDS_CACHE, dict)
+
+    def test_subsequent_calls_return_cached_dict(self):
+        first = dispatch._load_commands()
+        second = dispatch._load_commands()
+        assert first is second  # exact same object — not re-parsed
+
+    def test_invalidate_cache_clears_it(self):
+        dispatch._load_commands()
+        assert dispatch._COMMANDS_CACHE is not None
+        dispatch._invalidate_commands_cache()
+        assert dispatch._COMMANDS_CACHE is None
+
+    def test_user_override_takes_precedence(self, envoy_home):
+        """~/.envoy/commands.md overrides bundled templates/commands.md."""
+        dispatch._invalidate_commands_cache()
+        user_cmd_file = envoy_home / "commands.md"
+        user_cmd_file.write_text("# Custom\n\n## digest\n\nMy custom digest for {days} days.\n")
+        cmds = dispatch._load_commands()
+        assert "My custom digest" in cmds["digest"]
+        # The user file is smaller — 'cleanup' won't be there
+        assert "cleanup" not in cmds
+
+    def test_user_override_with_dispatch(self, envoy_home, monkeypatch):
+        """End-to-end: user override file changes what /digest sends to agent."""
+        dispatch._invalidate_commands_cache()
+        monkeypatch.setenv("USER", "tester")
+        user_cmd_file = envoy_home / "commands.md"
+        user_cmd_file.write_text(
+            "# Custom\n\n## digest\n\n"
+            "CUSTOM digest prompt for `{alias}` over `{days}` days.\n"
+        )
+        agent = FakeAgent()
+        dispatch.dispatch("/digest 3", agent)
+        assert "CUSTOM digest prompt" in agent.last_prompt
+        assert "`tester`" in agent.last_prompt
+        assert "`3`" in agent.last_prompt
+
+    def test_missing_template_file_returns_empty_dict(self, envoy_home):
+        """If neither bundled nor user file exists, returns {} gracefully."""
+        dispatch._invalidate_commands_cache()
+        # Point the bundled path at a nonexistent location too
+        import unittest.mock
+        with unittest.mock.patch("os.path.join", return_value="/nonexistent/commands.md"):
+            # The user path won't exist either in envoy_home (no commands.md written)
+            # But actually the function checks user_path first, then falls back to
+            # the bundled path. Let's just remove the bundled path from existence.
+            pass
+        # Easier approach: patch the file open to raise
+        def _fake_open(path, *a, **kw):
+            raise FileNotFoundError(f"no such file: {path}")
+        import builtins
+        orig_open = builtins.open
+        # We need to actually test the OSError handling path
+        dispatch._invalidate_commands_cache()
+        import unittest.mock as mock
+        with mock.patch("builtins.open", side_effect=FileNotFoundError("nope")):
+            cmds = dispatch._load_commands()
+        assert cmds == {}
+
+    def test_graceful_fallback_in_dispatch_when_cache_empty(self):
+        """When _load_commands returns empty dict, dispatch falls back to
+        hardcoded template string in COMMANDS dict."""
+        dispatch._invalidate_commands_cache()
+        dispatch._COMMANDS_CACHE = {}  # simulate empty user override
+        agent = FakeAgent()
+        dispatch.dispatch("/slack", agent)
+        # Falls back to the hardcoded template
+        assert "Slack" in agent.last_prompt
+
+    def test_all_templated_commands_have_matching_section(self):
+        """Every command with a non-None template in COMMANDS should have a
+        matching section in templates/commands.md — this is the whole point
+        of fix #11 (no more dual source of truth)."""
+        cmds = dispatch._load_commands()
+        missing = []
+        for cmd, (desc, tpl) in dispatch.COMMANDS.items():
+            if tpl is None:
+                continue
+            name = cmd[1:]  # strip /
+            if name not in cmds:
+                missing.append(cmd)
+        assert missing == [], (
+            f"These commands have hardcoded templates but no commands.md section: {missing}"
+        )

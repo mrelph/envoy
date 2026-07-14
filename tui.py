@@ -168,15 +168,19 @@ class MCPBar(Static):
     def check(self) -> None:
         from ui import _check_mcp_servers
         from tui_themes import get_theme
-        th = get_theme()
-        status = _check_mcp_servers()
-        t = Text(" Envoy  ", style=f"bold {th['accent']}")
-        t.append("│ ", style=th['border'])
-        for name, ok in status.items():
-            t.append("● " if ok else "○ ", style=th['success'] if ok else th['error'])
-            t.append(name, style=th['text'] if ok else th['text_faint'])
-            t.append("  ")
-        self._content = t
+        try:
+            th = get_theme()
+            status = _check_mcp_servers()
+            t = Text(" Envoy  ", style=f"bold {th['accent']}")
+            t.append("│ ", style=th['border'])
+            for name, ok in status.items():
+                t.append("● " if ok else "○ ", style=th['success'] if ok else th['error'])
+                t.append(name, style=th['text'] if ok else th['text_faint'])
+                t.append("  ")
+            self._content = t
+        except Exception:
+            # Even on failure, ensure the spinner stops below.
+            pass
 
         def _done() -> None:
             self.refresh()

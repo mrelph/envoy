@@ -89,13 +89,17 @@ def _system_prompt_for_model(text: str, model_id: str):
 
 
 def _session_manager(worker_name: str):
-    """Create a FileSessionManager for a worker so it retains conversation history."""
-    from strands.session.file_session_manager import FileSessionManager
-    _SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
-    return FileSessionManager(
-        session_id=f"worker-{worker_name}",
-        base_dir=str(_SESSIONS_DIR),
-    )
+    """Return None — workers no longer persist sessions.
+
+    Previously this created a FileSessionManager, but worker sessions were
+    purely cost (up to 30 messages replayed and re-billed each turn) with no
+    benefit: the supervisor passes the full request fresh each call, so
+    cross-day worker memory isn't load-bearing (noted in the module docstring
+    since inception). Returning None means the `session_mgr` kwarg falls
+    through the `**({"session_manager": session_mgr} if session_mgr else {})`
+    pattern in each worker's create(), giving a stateless agent per call.
+    """
+    return None
 
 
 # ── Shared context bus — inter-agent communication ──────────────

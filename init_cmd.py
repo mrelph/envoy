@@ -340,7 +340,11 @@ def run_init():
     name = _ask("Your name", name or alias)
     title = _ask("Your role/title", title)
     manager = _ask("Your manager", manager)
-    agent_name = _ask("Name for your agent (or Enter to keep 'Envoy')", "")
+    # Prefill from the existing soul.md only on a genuine re-run — on a fresh
+    # install soul.md is a just-copied template whose placeholder name should
+    # not masquerade as the user's previous choice.
+    agent_name = _ask("Name for your agent (or Enter to keep 'Envoy')",
+                      _read_field(SOUL_FILE, "Agent name") if is_rerun else "")
     agent_sig = _ask("Signature for agent-sent emails/Slack (or Enter for none)", "")
     priorities = _ask("Top 3 priorities right now (comma-separated)", "")
     vips_raw = _ask("People whose emails should always be flagged high priority (aliases, comma-separated)",
@@ -386,8 +390,10 @@ def run_init():
     console.print()
     console.print("[bold]SharePoint / OneDrive[/bold]")
     console.print("[dim]  Envoy can read from a knowledge folder and save exports to a folder on your OneDrive.[/dim]")
-    knowledge_folder = _ask("Knowledge folder path (e.g., 'Documents/Knowledge' or Enter to skip)", "")
-    exports_folder = _ask("Exports folder path (e.g., 'Documents/Envoy Exports' or Enter to skip)", "")
+    knowledge_folder = _ask("Knowledge folder path (e.g., 'Documents/Knowledge' or Enter to skip)",
+                            _read_field(ENVOY_FILE, "Knowledge Folder"))
+    exports_folder = _ask("Exports folder path (e.g., 'Documents/Envoy Exports' or Enter to skip)",
+                          _read_field(ENVOY_FILE, "Exports Folder"))
 
     console.print()
     console.print("[bold]Executive Assistant[/bold]")

@@ -385,3 +385,62 @@ class TestManageCronUnknown:
     def test_unknown_action(self, cron_recorder):
         out = tools.manage_cron(action="explode")
         assert "Unknown action" in out
+
+
+# ---------------------------------------------------------------------------
+# _check_replies_combined — parallel email + Slack check
+# ---------------------------------------------------------------------------
+
+class TestCheckRepliesCombined:
+    """_check_replies_combined should run email and Slack checks concurrently."""
+
+    def test_combines_email_and_slack_results(self, monkeypatch):
+        import asyncio
+        from agents import email as email_mod, slack_agent as slack_mod
+
+        async def _fake_email_check():
+            return "## Reply Status\n📧 **Reply found** to email"
+
+        async def _fake_slack_check():
+            return "💬 **Reply found** to message"
+
+        monkeypatch.setattr(email_mod, "check_replies", _fake_email_check)
+        monkeypatch.setattr(slack_mod, "check_slack_replies", _fake_slack_check)
+
+        result = tools._check_replies_combined()
+        assert "Reply found" in result
+        assert "email" in result.lower()
+        assert "message" in result.lower()
+
+    def test_slack_failure_does_not_sink_email(self, monkeypatch):
+        import asyncio
+        from agents import email as email_mod, slack_agent as slack_mod
+
+        async def _fake_email_check():
+            return "## Reply Status\n📧 email result"
+
+        async def _fake_slack_check():
+            raise RuntimeError("Slack MCP down")
+
+        monkeypatch.setattr(email_mod, "check_replies", _fake_email_check)
+        monkeypatch.setattr(slack_mod, "check_slack_replies", _fake_slack_check)
+
+        result = tools._check_replies_combined()
+        # Email result still surfaces despite Slack failure
+        assert "email result" in result
+
+    def test_both_empty_returns_no_replies_message(self, monkeypatch):
+        import asyncio
+        from agents import email as email_mod, slack_agent as slack_mod
+
+        async def _fake_email_check():
+            return "No sent messages to check."
+
+        async def _fake_slack_check():
+            return ""
+
+        monkeypatch.setattr(email_mod, "check_replies", _fake_email_check)
+        monkeypatch.setattr(slack_mod, "check_slack_replies", _fake_slack_check)
+
+        result = tools._check_replies_combined()
+        assert "no replies" in result.lower()

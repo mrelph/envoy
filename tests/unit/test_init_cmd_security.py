@@ -88,6 +88,111 @@ class TestBackupBeforeOverwrite:
         assert _mode(backup_path) == 0o600
 
 
+class TestRunInitRerun:
+    """Re-running `envoy init` must not silently wipe config (H9): existing
+    values are offered as prompt defaults and both files are backed up
+    before being overwritten."""
+
+    _OLD_ENVOY = (
+        "# About Me\n\n"
+        "- Name: Alice Example\n"
+        "- Alias: alice\n"
+        "- Role: Principal PM\n"
+        "- Manager: Bob Boss\n\n"
+        "# High Priority People\n\n"
+        "- Bob Jones | bjones | bjones@example.com | Manager\n\n"
+        "# Preferences\n\n## Email\n- Ignore: spam\n\n"
+        "## SharePoint / OneDrive\n"
+        "- Knowledge Folder: Documents/KB\n"
+        "- Exports Folder: Documents/Out\n"
+    )
+    _OLD_SOUL = "# Soul\n\n# Agent Identity\n\n- Agent name: Jeeves\n"
+
+    def _run(self, monkeypatch, envoy_home, tmp_path):
+        _redirect(monkeypatch, envoy_home)
+        # Empty templates dir: no template copies, no bundled-skill installs.
+        empty_templates = tmp_path / "empty_templates"
+        empty_templates.mkdir(exist_ok=True)
+        monkeypatch.setattr(init_cmd, "TEMPLATES_DIR", empty_templates)
+        # Kill all MCP/Phonetool I/O — every lookup site catches exceptions.
+        monkeypatch.setattr(
+            init_cmd, "run",
+            lambda coro: (coro.close(), (_ for _ in ()).throw(RuntimeError("no I/O in tests")))[1],
+        )
+
+        prompts = []  # (prompt, default) pairs, in order
+
+        def fake_ask(prompt, default=""):
+            prompts.append((prompt, default))
+            return default  # user hits Enter everywhere
+
+        monkeypatch.setattr(init_cmd, "_ask", fake_ask)
+        init_cmd.run_init()
+        return prompts
+
+    def test_rerun_prefills_defaults_from_existing_config(
+        self, envoy_home, monkeypatch, tmp_path
+    ):
+        (envoy_home / "envoy.md").write_text(self._OLD_ENVOY)
+        (envoy_home / "soul.md").write_text(self._OLD_SOUL)
+
+        prompts = self._run(monkeypatch, envoy_home, tmp_path)
+
+        defaults = {p: d for p, d in prompts}
+        assert defaults["Your alias"] == "alice"
+        assert defaults["Your name"] == "Alice Example"
+        assert defaults["Your role/title"] == "Principal PM"
+        assert defaults["Your manager"] == "Bob Boss"
+        assert defaults["Name for your agent (or Enter to keep 'Envoy')"] == "Jeeves"
+        assert "bjones" in defaults[
+            "People whose emails should always be flagged high priority "
+            "(aliases, comma-separated)"
+        ]
+        assert defaults[
+            "Knowledge folder path (e.g., 'Documents/Knowledge' or Enter to skip)"
+        ] == "Documents/KB"
+        assert defaults[
+            "Exports folder path (e.g., 'Documents/Envoy Exports' or Enter to skip)"
+        ] == "Documents/Out"
+
+        # Accepting the defaults round-trips the old values into the new file.
+        new_envoy = (envoy_home / "envoy.md").read_text()
+        assert "- Name: Alice Example" in new_envoy
+        assert "- Alias: alice" in new_envoy
+        assert "bjones" in new_envoy
+        assert "- Knowledge Folder: Documents/KB" in new_envoy
+
+    def test_rerun_backs_up_both_files_before_overwrite(
+        self, envoy_home, monkeypatch, tmp_path
+    ):
+        (envoy_home / "envoy.md").write_text(self._OLD_ENVOY)
+        (envoy_home / "soul.md").write_text(self._OLD_SOUL)
+
+        self._run(monkeypatch, envoy_home, tmp_path)
+
+        envoy_baks = list(envoy_home.glob("envoy.md.bak-*"))
+        soul_baks = list(envoy_home.glob("soul.md.bak-*"))
+        assert len(envoy_baks) == 1, "envoy.md was overwritten without a backup"
+        assert len(soul_baks) == 1, "soul.md was overwritten without a backup"
+        assert envoy_baks[0].read_text() == self._OLD_ENVOY
+        assert soul_baks[0].read_text() == self._OLD_SOUL
+
+    def test_fresh_run_has_no_stale_prefill(self, envoy_home, monkeypatch, tmp_path):
+        # soul.md exists as a template placeholder; envoy.md does not exist,
+        # so this is a fresh run (is_rerun is False).
+        (envoy_home / "soul.md").write_text("# Soul\n\n- Agent name: Stanley\n")
+
+        prompts = self._run(monkeypatch, envoy_home, tmp_path)
+
+        defaults = {p: d for p, d in prompts}
+        # A template's placeholder agent name must not pose as a prior choice.
+        assert defaults["Name for your agent (or Enter to keep 'Envoy')"] == ""
+        # Nothing to back up for a never-written envoy.md. (soul.md may still
+        # be backed up — any non-empty file is, which is the safe default.)
+        assert not list(envoy_home.glob("envoy.md.bak-*"))
+        assert (envoy_home / "envoy.md").exists()
+
+
 class TestReadVipAliases:
     def test_no_file_returns_empty(self, envoy_home, monkeypatch):
         _redirect(monkeypatch, envoy_home)

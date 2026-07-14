@@ -92,6 +92,7 @@ async def fetch_todos_full() -> str:
 
 async def add_tasks(action_items: List[Dict[str, str]], list_name: str = None) -> bool:
     """Add action items as tasks to Microsoft To-Do with due dates and importance."""
+    import asyncio
     list_name = list_name or "Envoy Action Items"
     try:
         async with outlook() as session:
@@ -110,22 +111,33 @@ async def add_tasks(action_items: List[Dict[str, str]], list_name: str = None) -
                 list_id = create_data.get("id")
             if not list_id:
                 return False
-            for item in action_items:
-                args = {
-                    "operation": "create", "listId": list_id,
-                    "title": item.get("title", "Action item"),
-                }
-                if item.get("body") or item.get("owner"):
-                    args["body"] = item.get("body") or item.get("owner", "")
-                if item.get("due_date"):
-                    args["dueDateTime"] = item["due_date"]
-                if item.get("importance"):
-                    args["importance"] = item["importance"]
-                if item.get("reminder"):
-                    args["isReminderOn"] = True
-                    args["reminderDateTime"] = item["reminder"]
-                await session.call_tool("todo_tasks", arguments=args)
-            return True
+
+            sem = asyncio.Semaphore(8)
+
+            async def _create_one(item):
+                async with sem:
+                    args = {
+                        "operation": "create", "listId": list_id,
+                        "title": item.get("title", "Action item"),
+                    }
+                    if item.get("body") or item.get("owner"):
+                        args["body"] = item.get("body") or item.get("owner", "")
+                    if item.get("due_date"):
+                        args["dueDateTime"] = item["due_date"]
+                    if item.get("importance"):
+                        args["importance"] = item["importance"]
+                    if item.get("reminder"):
+                        args["isReminderOn"] = True
+                        args["reminderDateTime"] = item["reminder"]
+                    try:
+                        await session.call_tool("todo_tasks", arguments=args)
+                        return True
+                    except Exception:
+                        return False
+
+            outcomes = await asyncio.gather(*[_create_one(item) for item in action_items])
+            # Return True if at least one task was created successfully
+            return any(outcomes)
     except Exception:
         return False
 
@@ -208,6 +220,7 @@ async def _find_task(session, list_name: str, task_title: str) -> tuple:
 
 
 async def add_subtasks(list_name: str, task_title: str, subtasks: List[str]) -> str:
+    import asyncio
     try:
         async with outlook() as session:
             lists_result = await session.call_tool("todo_lists", arguments={"operation": "list"})
@@ -230,11 +243,24 @@ async def add_subtasks(list_name: str, task_title: str, subtasks: List[str]) -> 
                     break
             if not task_id:
                 return f"Task '{task_title}' not found in '{list_name}'."
-            for sub in subtasks:
-                await session.call_tool("todo_checklist", arguments={
-                    "operation": "create", "listId": list_id,
-                    "taskId": task_id, "displayName": sub
-                })
-            return f"✅ Added {len(subtasks)} subtasks to '{task_title}'."
+
+            sem = asyncio.Semaphore(8)
+
+            async def _create_sub(sub):
+                async with sem:
+                    try:
+                        await session.call_tool("todo_checklist", arguments={
+                            "operation": "create", "listId": list_id,
+                            "taskId": task_id, "displayName": sub
+                        })
+                        return True
+                    except Exception:
+                        return False
+
+            outcomes = await asyncio.gather(*[_create_sub(sub) for sub in subtasks])
+            created = sum(1 for ok in outcomes if ok)
+            if created == len(subtasks):
+                return f"✅ Added {created} subtasks to '{task_title}'."
+            return f"✅ Added {created}/{len(subtasks)} subtasks to '{task_title}' ({len(subtasks) - created} failed)."
     except Exception as e:
         return f"Error adding subtasks: {e}"

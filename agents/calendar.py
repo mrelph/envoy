@@ -93,13 +93,27 @@ def events(start_date: str = "", days: int = 1, search: str = "") -> str:
     return raw
 
 
+def _invalid_attendees(attendees: List[str]) -> List[str]:
+    """Return attendee tokens that are not full email addresses.
+
+    Never fabricate an address from a bare alias — "sarah" could resolve to
+    the wrong sarah@amazon.com entirely. Callers must resolve aliases first
+    (e.g. via Phonetool lookup_person).
+    """
+    return [a for a in (attendees or []) if "@" not in a]
+
+
 async def find_available_times(attendees: List[str], duration_minutes: int = 30, days_ahead: int = 5) -> str:
+    bad = _invalid_attendees(attendees)
+    if bad:
+        return (f"⚠️ Invalid attendee(s): {', '.join(bad)} — provide full email "
+                f"addresses (use lookup_person to verify aliases first).")
     start = datetime.now().strftime('%Y-%m-%d')
     end = (datetime.now() + timedelta(days=days_ahead)).strftime('%Y-%m-%d')
     try:
         async with outlook() as session:
             result = await session.call_tool("calendar_availability", arguments={
-                "users": [f"{a}@amazon.com" for a in attendees],
+                "users": attendees,
                 "startDate": start, "endDate": end
             })
             return str(result.content[0].text) if result.content else "No availability data."
@@ -131,9 +145,17 @@ async def create_meeting(subject: str, start: str, end: str,
         async with outlook() as session:
             args = {"operation": "create", "subject": subject, "start": start, "end": end}
             if attendees:
-                args["attendees"] = [f"{a}@amazon.com" if "@" not in a else a for a in attendees]
+                bad = _invalid_attendees(attendees)
+                if bad:
+                    return (f"⚠️ Invalid attendee(s): {', '.join(bad)} — provide full "
+                            f"email addresses (use lookup_person to verify aliases first).")
+                args["attendees"] = attendees
             if optional_attendees:
-                args["optionalAttendees"] = [f"{a}@amazon.com" if "@" not in a else a for a in optional_attendees]
+                bad = _invalid_attendees(optional_attendees)
+                if bad:
+                    return (f"⚠️ Invalid optional attendee(s): {', '.join(bad)} — provide "
+                            f"full email addresses (use lookup_person to verify aliases first).")
+                args["optionalAttendees"] = optional_attendees
             if resources:
                 args["resources"] = resources
             if location:

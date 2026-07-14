@@ -107,8 +107,10 @@ class TestAgentSessionBloatGuard:
 
 class TestCreateAgentResetsBloat:
     def test_create_agent_wipes_bloated_session_before_building(self, agent_mod, monkeypatch):
-        _make_session_messages(agent_mod.SESSIONS_DIR, "default", n_messages=50)
-        session_path = agent_mod.SESSIONS_DIR / "session_default"
+        from datetime import date
+        scoped_id = f"default-{date.today().isoformat()}"
+        _make_session_messages(agent_mod.SESSIONS_DIR, scoped_id, n_messages=50)
+        session_path = agent_mod.SESSIONS_DIR / f"session_{scoped_id}"
         assert session_path.exists()
 
         agent_mod.create_agent("default")
@@ -118,8 +120,10 @@ class TestCreateAgentResetsBloat:
         assert not session_path.exists()
 
     def test_create_agent_leaves_healthy_session_alone(self, agent_mod):
-        _make_session_messages(agent_mod.SESSIONS_DIR, "default", n_messages=5)
-        session_path = agent_mod.SESSIONS_DIR / "session_default"
+        from datetime import date
+        scoped_id = f"default-{date.today().isoformat()}"
+        _make_session_messages(agent_mod.SESSIONS_DIR, scoped_id, n_messages=5)
+        session_path = agent_mod.SESSIONS_DIR / f"session_{scoped_id}"
         assert session_path.exists()
 
         agent_mod.create_agent("default")

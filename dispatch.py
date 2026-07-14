@@ -121,20 +121,33 @@ COMMAND_GROUPS = [
 # commands and CLI subcommands never drift apart. Commands with no matching section
 # below fall back to the short hardcoded template strings in COMMANDS above.
 
+_COMMANDS_CACHE = None  # module-level cache; populated once per process
+
+
 def _load_commands() -> dict:
-    """Parse commands.md into {name: template} dict.
+    """Parse commands.md into {name: template} dict (cached after first call).
 
     User overrides at ~/.envoy/commands.md take precedence over the bundled
-    templates/commands.md if present.
+    templates/commands.md if present.  The result is cached for the lifetime of
+    the process (avoids re-reading on every dispatch call while still picking up
+    any changes on restart).
     """
+    global _COMMANDS_CACHE
+    if _COMMANDS_CACHE is not None:
+        return _COMMANDS_CACHE
+
     import re
     from agents.paths import commands_file
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates', 'commands.md')
     user_path = str(commands_file())
     if os.path.exists(user_path):
         path = user_path
-    with open(path) as f:
-        text = f.read()
+    try:
+        with open(path) as f:
+            text = f.read()
+    except (OSError, IOError):
+        _COMMANDS_CACHE = {}
+        return _COMMANDS_CACHE
     commands = {}
     for block in re.split(r'\n## ', text):
         lines = block.strip().splitlines()
@@ -144,7 +157,14 @@ def _load_commands() -> dict:
         body = '\n'.join(lines[1:]).strip()
         if body:
             commands[name] = body
-    return commands
+    _COMMANDS_CACHE = commands
+    return _COMMANDS_CACHE
+
+
+def _invalidate_commands_cache():
+    """Reset the cached templates (useful for tests or after config changes)."""
+    global _COMMANDS_CACHE
+    _COMMANDS_CACHE = None
 
 
 def _build_prompt(template: str, **kwargs) -> str:
@@ -172,7 +192,7 @@ def _template_kwargs(cmd: str, days: int, arg: str) -> dict:
     equivalents for optional extras (--vip, --team, --email, ...), so those
     simply stay unset — their {if ...} lines in the template drop out.
     """
-    kwargs = {"days": days, "alias": os.environ.get("USER", "")}
+    kwargs = {"days": days, "arg": arg, "alias": os.environ.get("USER", "")}
     if cmd == "/cleanup":
         kwargs["limit"] = 100
     elif cmd == "/prep-1on1":

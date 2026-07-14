@@ -349,6 +349,28 @@ def test_tool_event_skipped_while_text_actively_streaming(monkeypatch):
     asyncio.run(scenario())
 
 
+def test_mcp_check_exception_still_stops_spinner(monkeypatch):
+    """Fix 3: if MCPBar.check's _check_mcp_servers raises, the spinner must
+    not spin forever — the `_done` callback should still fire."""
+    app = _make_app(monkeypatch)
+
+    import ui
+    monkeypatch.setattr(ui, "_check_mcp_servers", lambda: (_ for _ in ()).throw(RuntimeError("network down")))
+
+    async def scenario():
+        async with app.run_test():
+            spinner = app.query_one("#spinner", tui.Spinner)
+            spinner.start("Refreshing MCP")
+            assert spinner._hint != ""
+            # Trigger MCPBar check — it will raise inside the worker
+            app.query_one(tui.MCPBar).check()
+            await app.workers.wait_for_complete()
+            # The spinner should have been stopped despite the exception
+            assert spinner._hint == ""
+
+    asyncio.run(scenario())
+
+
 def test_settings_command_intercepted_in_tui(monkeypatch):
     """Medium item: `/settings` should run the CLI settings flow under
     `self.suspend()`, not punt with a static 'use the CLI' message."""
