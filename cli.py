@@ -393,6 +393,19 @@ def yesterbox(days):
 
 
 @cli.command()
+@click.option('--days', '-d', default=1, type=int, help='Days to look back')
+@click.option('--output', '-o', default=None, help='Output file')
+@click.option('--email', '-e', is_flag=True, help='Email the queue to yourself')
+@click.option('--slack', is_flag=True, help='Send the queue as a Slack DM to yourself')
+@click.option('--todo', '-t', is_flag=True, help='Add the urgent items to To-Do')
+def triage(days, output, email, slack, todo):
+    """Unified triage queue — email, Slack, tickets, and to-dos merged into one ranked list."""
+    prompt = _build_prompt(_cmds()['triage'], days=days,
+                           email=email, slack=slack, todo=todo)
+    _run_agent_command(prompt, output=output)
+
+
+@cli.command()
 @click.option('--days', '-d', default=5, type=int, help='Days ahead to analyze')
 def cal_audit(days):
     """Audit your calendar — meeting load, focus time, optimization."""

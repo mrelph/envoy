@@ -32,6 +32,7 @@ COMMANDS = {
     "/catchup":   ("PTO catch-up report",                  "I was out of office for {days} days, give me a full catch-up"),
     "/slack-catchup": ("Focused Slack catch-up",           "Give me a focused Slack catch-up for the last {days} days — unread channels, mentions, and DMs"),
     "/yesterbox":     ("Yesterbox — yesterday's DMs",       "Run yesterbox for the last {days} days of messages"),
+    "/triage":        ("Unified triage queue — one ranked list", "Build my unified triage queue for the last {days} days"),
     # Analysis
     "/team-health":    ("Team health dashboard",           None),
     "/cal-audit":      ("Calendar audit",                  "Audit my calendar for the next {days} days — meeting load, focus time, and what to decline"),
@@ -96,13 +97,14 @@ DEFAULT_DAYS = {
     "/digest": 7, "/customers": 14, "/cleanup": 14, "/catchup": 5,
     "/slack-catchup": 3, "/cal-audit": 5, "/response-times": 7,
     "/followup": 7, "/commitments": 7, "/yesterbox": 1, "/team-health": 7,
+    "/triage": 1,
 }
 
 # Command groups for help display
 COMMAND_GROUPS = [
     ("Briefings", ["/briefing", "/calendar", "/week", "/todo"]),
     ("Digests & Scans", ["/digest", "/boss", "/customers", "/cleanup", "/slack", "/tickets"]),
-    ("Catch-up", ["/catchup", "/slack-catchup", "/yesterbox"]),
+    ("Catch-up", ["/catchup", "/slack-catchup", "/yesterbox", "/triage"]),
     ("Analysis", ["/cal-audit", "/response-times", "/followup", "/commitments", "/team-health"]),
     ("Prep", ["/prep-1on1", "/prep-meeting"]),
     ("Actions", ["/reply", "/ea", "/book", "/findtime", "/schedule", "/search", "/sharepoint"]),

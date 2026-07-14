@@ -157,6 +157,16 @@ class TestDigestAndDaysSubstitution:
         dispatch.dispatch("/catchup", agent)
         assert "`5`" in agent.last_prompt
 
+    def test_triage_no_arg_uses_default_1(self):
+        agent = FakeAgent()
+        dispatch.dispatch("/triage", agent)
+        assert "`1`" in agent.last_prompt
+
+    def test_triage_with_explicit_days(self):
+        agent = FakeAgent()
+        dispatch.dispatch("/triage 7", agent)
+        assert "`7`" in agent.last_prompt
+
     def test_briefing_ignores_extra_numeric_arg(self):
         """/briefing has no {days} placeholder — numeric arg shouldn't appear in prompt."""
         agent = FakeAgent()

@@ -75,6 +75,26 @@ Run yesterbox on the last `{days}` days. Show me yesterday's direct messages (em
 
 Defaults: days=1
 
+## triage
+
+Build my unified triage queue for the last `{days}` days. Use the `gather` tool to pull email, Slack, tickets, and to-dos in one parallel pass, then merge everything into a SINGLE ranked list of "what actually needs me right now" — not one section per source.
+
+Ranking rules, applied in order:
+1. **Deduplicate across sources.** If the same thread, person, or topic shows up in more than one place (use the CROSS-REFERENCES the gather returns), collapse it into one item and note where it appeared, e.g. "(email + Slack)".
+2. **Score each item** on: does it need a reply or decision *from me* (highest), is someone blocked waiting on me, is it time-sensitive (deadline, meeting today, sev-2+ ticket, aging thread), and who it's from (boss/management chain and external customers rank above internal FYIs).
+3. **Sort into three tiers**, most urgent first inside each:
+   - 🔴 **Needs me now** — direct asks, blockers, decisions, anything due today or overdue.
+   - 🟡 **Should handle soon** — replies expected, follow-ups, aging items not yet critical.
+   - 🔵 **FYI / can wait** — awareness only, no action required.
+4. Keep each item to one line: the ref ID, a plain-language summary of what's needed, who from, and a suggested next action ("reply", "prep", "delegate", "close"). Preserve the `[E1]`/`[S3]`/`[K2]`/`[T1]` ref IDs so I can drill into any item.
+
+End with a one-line count per tier so I know the size of the day. Don't pad — if a tier is empty, say so and move on.
+{if email} Email me the triage queue when done.
+{if slack} Send me the triage queue as a Slack DM.
+{if todo} Add the 🔴 items to my To-Do list.
+
+Defaults: days=1
+
 ## cal-audit
 
 Audit my calendar for the next `{days}` days. Calculate meeting load percentage, identify back-to-backs and conflicts, suggest meetings to decline, and find/protect focus time blocks.
