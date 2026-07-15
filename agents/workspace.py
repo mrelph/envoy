@@ -198,7 +198,7 @@ Rules:
 - Surface open questions at the end
 - Be concise — the user wants signal, not noise
 - Include draft sections as coherent prose (not raw bullets)
-- Keep reference IDs like [E1], [S1] if present
+- Do NOT print internal reference IDs like [E1], [S1] — refer to items by description; they're tracked silently for drill-down
 
 Workspace contents:
 {raw[:12000]}"""

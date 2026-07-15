@@ -86,7 +86,7 @@ Ranking rules, applied in order:
    - 🔴 **Needs me now** — direct asks, blockers, decisions, anything due today or overdue.
    - 🟡 **Should handle soon** — replies expected, follow-ups, aging items not yet critical.
    - 🔵 **FYI / can wait** — awareness only, no action required.
-4. Keep each item to one line: the ref ID, a plain-language summary of what's needed, who from, and a suggested next action ("reply", "prep", "delegate", "close"). Preserve the `[E1]`/`[S3]`/`[K2]`/`[T1]` ref IDs so I can drill into any item.
+4. Keep each item to one line: a plain-language summary of what's needed, who from, and a suggested next action ("reply", "prep", "delegate", "close"). Do NOT print the internal ref IDs — refer to items by their description; when I ask about one in plain language, drill in using the ref internally.
 
 End with a one-line count per tier so I know the size of the day. Don't pad — if a tier is empty, say so and move on.
 {if email} Email me the triage queue when done.

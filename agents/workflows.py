@@ -91,7 +91,7 @@ def pto_catchup(alias: str = "", days: int = 5) -> str:
     prompt = f"""You are briefing {alias} who has been out of office for {days} days.
 
 In Slack data: "[you]" = sent by {alias}, "⚡@you" = {alias} was @mentioned. Prioritize unanswered DMs and @mentions.
-IMPORTANT: Preserve reference IDs like [E1], [S3], [C2] in your output so the user can drill into specific items.
+IMPORTANT: Do NOT print internal reference IDs like [E1], [S3], [C2] in your output — they're hard to read. Refer to items by their natural description (who from, what about); the IDs are tracked silently for drill-down.
 
 # 🏖️ PTO Catch-Up — Last {days} Days
 ## 🔴 Needs Your Attention NOW
@@ -120,7 +120,7 @@ def slack_catchup(alias: str = "", days: int = 3) -> str:
     prompt = f"""Focused Slack catch-up for {alias} — last {days} days.
 
 Key markers: "[you]" = sent by {alias}, "⚡@you" = {alias} was @mentioned. Skip conversations {alias} already replied to.
-IMPORTANT: Preserve reference IDs like [S1], [S2] in your output so the user can drill into specific items.
+IMPORTANT: Do NOT print internal reference IDs like [S1], [S2] in your output — they're hard to read. Refer to items by their natural description (who from, what about); the IDs are tracked silently for drill-down.
 
 # Slack Catch-Up
 ## 🔴 Unread DMs Needing Reply
@@ -394,7 +394,7 @@ def yesterbox(alias: str = "", days: int = 1) -> str:
     end_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
 
     prompt = f"""Yesterbox triage for {alias} — emails from {start_date} to {end_date}.
-IMPORTANT: Preserve reference IDs like [E1], [S3] in your output so the user can drill into specific items.
+IMPORTANT: Do NOT print internal reference IDs like [E1], [S3] in your output — they're hard to read. Refer to items by their natural description (who from, what about); the IDs are tracked silently for drill-down.
 
 # Yesterbox
 
