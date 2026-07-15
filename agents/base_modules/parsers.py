@@ -8,13 +8,18 @@ import json
 from typing import List, Dict
 from envoy_logger import get_logger
 
+# Import the canonical wrapper stripper so both parser copies stay in sync.
+from agents.base import strip_mcp_wrapper
+
 
 def parse_email_search_result(result, extra_fields=None) -> List[Dict]:
     """Parse email search MCP response into list of email dicts."""
     emails = []
     if not result.content:
         return emails
-    content = str(result.content[0].text)
+    # Strip the MCP untrusted-content wrapper before json.loads (see
+    # agents/base.py parse_email_search_result for the full rationale).
+    content = strip_mcp_wrapper(str(result.content[0].text))
     try:
         data = json.loads(content)
         if data.get('success') and isinstance(data.get('content'), dict):
@@ -37,7 +42,7 @@ def parse_todo_response(result) -> dict:
     """Parse to-do MCP response into dict."""
     if not result.content:
         return {}
-    raw = str(result.content[0].text)
+    raw = strip_mcp_wrapper(str(result.content[0].text))
     try:
         data = json.loads(raw)
         if isinstance(data.get('content'), dict):

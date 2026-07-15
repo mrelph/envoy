@@ -217,6 +217,24 @@ def strip_mcp_wrapper(text: str) -> str:
     return text
 
 
+def loads_mcp(text):
+    """json.loads() on an MCP tool result, stripping the safety wrapper first.
+
+    Since _call_one stopped stripping the <untrusted_content>/[CONTENT SAFETY
+    DIRECTIVE] wrapper (it's a prompt-injection defense that must reach the
+    model), any internal code that json.loads() a raw MCP payload chokes on the
+    leading '<' tag and silently returns nothing. Every internal parse site
+    must go through this helper instead of json.loads() directly.
+
+    A non-str payload (some transports hand back an already-decoded object) is
+    returned unchanged, matching the `json.loads(x) if isinstance(x, str) else x`
+    idiom the call sites previously used.
+    """
+    if not isinstance(text, str):
+        return text
+    return json.loads(strip_mcp_wrapper(text))
+
+
 class _TimeoutSession:
     """Wraps an MCP ClientSession to add a timeout to every call_tool invocation.
     
@@ -351,7 +369,7 @@ class _TimeoutSession:
                     try:
                         r = await self._call_one(new_name, {"channel": cid}, **kwargs)
                         text = r.content[0].text if r.content else "{}"
-                        return {"channelId": cid, "result": _json.loads(text) if isinstance(text, str) else text}, None
+                        return {"channelId": cid, "result": loads_mcp(text)}, None
                     except Exception as e:
                         return {"channelId": cid, "result": {"name": cid}}, (cid, e)
 
@@ -367,7 +385,7 @@ class _TimeoutSession:
                     try:
                         r = await self._call_one(new_name, {"query": uid}, **kwargs)
                         text = r.content[0].text if r.content else "{}"
-                        data = _json.loads(text) if isinstance(text, str) else text
+                        data = loads_mcp(text)
                         return {"userId": uid, "result": data if isinstance(data, dict) else {"name": uid}}, None
                     except Exception as e:
                         return {"userId": uid, "result": {"name": uid}}, (uid, e)
@@ -402,7 +420,7 @@ class _TimeoutSession:
             try:
                 r = await self._call_one("list_my_channels", {"compactOutput": False}, **kwargs)
                 text = r.content[0].text if r.content else "{}"
-                data = _json.loads(text) if isinstance(text, str) else text
+                data = loads_mcp(text)
                 # list_my_channels returns sections with channels — flatten
                 channels = []
                 if isinstance(data, dict):
@@ -1124,7 +1142,11 @@ def parse_email_search_result(result, extra_fields=None) -> List[Dict]:
     emails = []
     if not result.content:
         return emails
-    content = str(result.content[0].text)
+    # Strip the MCP untrusted-content wrapper before parsing. _call_one
+    # deliberately leaves it on the response (it's a prompt-injection defense
+    # for content that reaches the model), but this internal parser needs the
+    # bare JSON — otherwise json.loads() fails on the leading '<' tag.
+    content = strip_mcp_wrapper(str(result.content[0].text))
     try:
         data = json.loads(content)
         # Direct format: {"success": true, "content": {"emails": [...]}}
@@ -1151,7 +1173,9 @@ def parse_email_search_result(result, extra_fields=None) -> List[Dict]:
 def parse_todo_response(result) -> dict:
     if not result.content:
         return {}
-    raw = str(result.content[0].text)
+    # Strip the MCP untrusted-content wrapper before parsing (see
+    # parse_email_search_result for why the wrapper is left on upstream).
+    raw = strip_mcp_wrapper(str(result.content[0].text))
     try:
         data = json.loads(raw)
         # Direct format: {"success": true, "content": {...}}

@@ -68,6 +68,32 @@ class TestStripMcpWrapper:
 
 
 # ---------------------------------------------------------------------------
+# loads_mcp — the canonical "json.loads on an MCP payload" helper
+# ---------------------------------------------------------------------------
+
+class TestLoadsMcp:
+    def test_wrapped_object_parses(self):
+        """Regression: internal json.loads() sites (Slack scan_raw, email
+        contacts, etc.) choked on the <untrusted_content> wrapper and silently
+        returned empty. loads_mcp strips it first."""
+        inner = json.dumps({"channels": [{"id": "C1", "name": "general"}]})
+        wrapped = f"<untrusted_content_abc>\n{inner}"
+        assert base.loads_mcp(wrapped) == {"channels": [{"id": "C1", "name": "general"}]}
+
+    def test_wrapped_list_parses(self):
+        inner = json.dumps([{"channelId": "C1", "result": {"messages": []}}])
+        wrapped = f"<untrusted_content_x>\n{inner}\n</untrusted_content_x>"
+        assert base.loads_mcp(wrapped) == [{"channelId": "C1", "result": {"messages": []}}]
+
+    def test_plain_json_still_parses(self):
+        assert base.loads_mcp('{"a": 1}') == {"a": 1}
+
+    def test_non_str_passthrough(self):
+        # Some transports hand back an already-decoded object.
+        assert base.loads_mcp({"a": 1}) == {"a": 1}
+
+
+# ---------------------------------------------------------------------------
 # _TimeoutSession._call_one no longer strips untrusted-content wrappers (C4)
 # ---------------------------------------------------------------------------
 
@@ -281,6 +307,44 @@ class TestParseEmailSearchResult:
         result = fake_mcp_result({"success": True})
         assert base.parse_email_search_result(result) == []
 
+    def test_untrusted_content_wrapped_payload_parsed(self, fake_mcp_result):
+        """Regression: the Outlook MCP wraps every response in
+        <untrusted_content_HASH>...</untrusted_content_HASH>. Since _call_one
+        stopped stripping that wrapper (it's a prompt-injection defense that
+        must reach the model), json.loads() saw a leading '<' and failed at
+        char 0 — silently returning [] even though emails were fetched.
+        The parser must strip the wrapper before parsing."""
+        inner = json.dumps({
+            "success": True,
+            "content": {"emails": [{
+                "conversationId": "c1",
+                "senders": ["alice@example.com"],
+                "recipients": ["bob@example.com"],
+                "topic": "Hello",
+                "lastDeliveryTime": "2026-07-14T10:00:00Z",
+                "preview": "Snippet",
+            }]},
+        })
+        wrapped = f"<untrusted_content_4459775ac8b15232>\n{inner}"
+        emails = base.parse_email_search_result(fake_mcp_result(wrapped))
+        assert len(emails) == 1
+        assert emails[0]["from"] == "alice@example.com"
+        assert emails[0]["subject"] == "Hello"
+
+    def test_untrusted_content_wrapped_with_closing_tag_parsed(self, fake_mcp_result):
+        inner = json.dumps({
+            "success": True,
+            "content": {"emails": [{
+                "conversationId": "c9", "senders": ["z@example.com"],
+                "recipients": [], "topic": "Wrapped both ends",
+                "lastDeliveryTime": "", "preview": "",
+            }]},
+        })
+        wrapped = f"<untrusted_content_x>\n{inner}\n</untrusted_content_x>"
+        emails = base.parse_email_search_result(fake_mcp_result(wrapped))
+        assert len(emails) == 1
+        assert emails[0]["subject"] == "Wrapped both ends"
+
 
 # ---------------------------------------------------------------------------
 # parse_todo_response
@@ -307,6 +371,19 @@ class TestParseTodoResponse:
         class _R:
             content = []
         assert base.parse_todo_response(_R()) == {}
+
+    def test_untrusted_content_wrapped_payload_parsed(self, fake_mcp_result):
+        """Regression: same <untrusted_content> wrapper bug as the email
+        parser — to-do refresh silently returned {} because json.loads()
+        choked on the leading wrapper tag."""
+        inner = json.dumps({
+            "success": True,
+            "content": {"message": "Found 4 task list(s)", "lists": [{"id": "L1"}]},
+        })
+        wrapped = f"<untrusted_content_636bcd7c754cb787>\n{inner}"
+        out = base.parse_todo_response(fake_mcp_result(wrapped))
+        assert out.get("message") == "Found 4 task list(s)"
+        assert out.get("lists") == [{"id": "L1"}]
 
 
 # ---------------------------------------------------------------------------

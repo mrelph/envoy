@@ -8,7 +8,7 @@ from typing import List, Dict
 from envoy_logger import get_logger
 from agents.base import (
     outlook, invoke_ai, agent_name, make_tag, log_sent,
-    parse_email_search_result,
+    parse_email_search_result, loads_mcp,
 )
 
 
@@ -85,7 +85,7 @@ async def get_categories() -> List[str]:
     try:
         async with outlook() as session:
             result = await session.call_tool("email_categories", arguments={})
-            return json.loads(result.content[0].text) if result.content else []
+            return loads_mcp(result.content[0].text) if result.content else []
     except Exception:
         return []
 
@@ -257,7 +257,7 @@ async def reply_to_email(conversation_id: str, body: str, reply_all: bool = Fals
             read_result = await session.call_tool("email_read", arguments={
                 "conversationId": conversation_id, "format": "text"
             })
-            read_data = json.loads(read_result.content[0].text) if read_result.content else {}
+            read_data = loads_mcp(read_result.content[0].text) if read_result.content else {}
             items = []
             if isinstance(read_data, dict):
                 content = read_data.get("content", read_data)
@@ -297,7 +297,7 @@ async def email_digest(digest: str, manager_alias: str, days: int, include_summa
                 read_result = await session.call_tool("email_read", arguments={
                     "conversationId": existing[0]['conversationId'], "format": "text"
                 })
-                read_data = json.loads(read_result.content[0].text) if read_result.content else {}
+                read_data = loads_mcp(read_result.content[0].text) if read_result.content else {}
                 content = read_data.get("content", read_data) if isinstance(read_data, dict) else {}
                 items = content.get("items", content.get("emails", [])) if isinstance(content, dict) else []
                 if not items and isinstance(content, dict) and "itemId" in content:
