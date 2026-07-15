@@ -754,7 +754,7 @@ def _handle_models(arg: str) -> str:
         lines.append(f"  `{i:>3}` **{name}** — {short}  \n       `{mid}`")
     lines.append("")
     lines.append("**Change a tier:** `/models <tier#|name> <model#|id>`")
-    lines.append("**Examples:** `/models 3 5`  ·  `/models light us.amazon.nova-micro-v1:0`")
+    lines.append("**Examples:** `/models 3 5`  ·  `/models light zai.glm-4.7-flash`")
     lines.append("**Refresh from Bedrock:** `/models refresh`")
     lines.append("")
     lines.append("*Tip: run `/models <tier#|name> <model#|id>` again anytime to change a tier — "
