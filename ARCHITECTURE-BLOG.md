@@ -2,7 +2,7 @@
 
 If you manage a team at a large company, your mornings probably look something like this: scan 80 emails to find the 5 that matter, check Slack for anything you missed overnight, review your calendar for back-to-backs you need to prep for, chase down action items from last week, and figure out which customer thread your directs need help with — all before your first meeting at 9am.
 
-Envoy was built to do that job for you. It's an AI chief of staff that runs from your terminal — a single agent that connects to your email, Slack, calendar, to-dos, tickets, and internal tools, cross-references everything, and tells you what actually needs your attention. Ask it to brief you and it pulls from all sources in parallel, prioritizes by urgency, connects related threads across systems, and recommends specific actions. Ask it to catch you up after PTO and it reconstructs the week you missed. It can draft replies, track commitments you've made, audit your calendar for focus time, and run autonomously on a schedule to flag things before they become problems.
+Envoy was built to do that job for you. It's an AI chief of staff that runs from your terminal — a single agent that connects to your email, Slack, calendar, to-dos, and internal tools, cross-references everything, and tells you what actually needs your attention. Ask it to brief you and it pulls from all sources in parallel, prioritizes by urgency, connects related threads across systems, and recommends specific actions. Ask it to catch you up after PTO and it reconstructs the week you missed. It can draft replies, track commitments you've made, audit your calendar for focus time, and run autonomously on a schedule to flag things before they become problems.
 
 It's built on Amazon Bedrock (Claude) and the Model Context Protocol (MCP), and it's designed around a simple premise: the highest-leverage thing an AI can do for a busy manager isn't answer questions — it's triage the firehose and surface what matters.
 
@@ -17,7 +17,7 @@ User → Supervisor Agent (Claude Opus)
          ├── Email Worker (Claude Sonnet)
          ├── Comms Worker (Slack + EA delegation)
          ├── Calendar Worker
-         ├── Productivity Worker (to-dos, tickets, memory)
+         ├── Productivity Worker (to-dos, memory)
          ├── Research Worker (Phonetool, Kingpin, Wiki)
          └── SharePoint Worker
 ```
@@ -45,11 +45,11 @@ This cuts the overhead from ~0.9s per call to near-zero for cached connections. 
 The most important supervisor tool is `gather`. When you ask for a briefing, Envoy doesn't fetch email, then Slack, then calendar sequentially. It fires all of them in parallel:
 
 ```python
-sources = "email,slack,calendar,todos,tickets"
+sources = "email,slack,calendar,todos"
 # Each source runs concurrently via asyncio.gather()
 ```
 
-After all sources return, Envoy does something that makes it more than a dashboard: **entity extraction and cross-referencing**. It scans all results for people, projects, and ticket IDs, then identifies overlaps. If Alice emailed you about a project and there's a meeting with her tomorrow, the briefing surfaces that connection explicitly.
+After all sources return, Envoy does something that makes it more than a dashboard: **entity extraction and cross-referencing**. It scans all results for people and projects, then identifies overlaps. If Alice emailed you about a project and there's a meeting with her tomorrow, the briefing surfaces that connection explicitly.
 
 Every item gets a reference ID (E1, S1, C1, T1) that persists in conversation context. When you say "tell me more about E3," the supervisor pulls the cached data instantly — no re-fetching.
 
@@ -99,7 +99,7 @@ Tiers are configurable via `/models` in the TUI. The email classifier runs on Ha
 
 ## Heartbeat and Autonomous Operation
 
-Envoy can run autonomously via `envoy heartbeat`, checking user-defined routines and alerting when something needs attention. Routines are natural language rules like "Alert me if any sev-2 tickets go stale" or "Flag emails from the VP that I haven't replied to within 4 hours."
+Envoy can run autonomously via `envoy heartbeat`, checking user-defined routines and alerting when something needs attention. Routines are natural language rules like "Flag emails from the VP that I haven't replied to within 4 hours" or "Tell me if a Slack DM has been waiting on me for more than a day."
 
 Combined with the built-in cron manager, this turns Envoy from an interactive tool into a background operator that watches your work streams and surfaces what matters.
 
@@ -111,4 +111,4 @@ Combined with the built-in cron manager, this turns Envoy from an interactive to
 
 **Progressive disclosure scales.** Loading full skill instructions into every system prompt would blow the context window. Loading just names and activating on demand keeps the base prompt under 4K tokens while supporting dozens of skills.
 
-**Cross-referencing is the killer feature.** Any tool can show you your inbox. The value of an AI assistant is connecting your inbox to your calendar to your Slack to your tickets and telling you what actually matters right now.
+**Cross-referencing is the killer feature.** Any tool can show you your inbox. The value of an AI assistant is connecting your inbox to your calendar to your Slack and telling you what actually matters right now.

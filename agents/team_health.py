@@ -1,9 +1,8 @@
-"""Team health dashboard — per-direct-report rollup across email, tickets, Slack.
+"""Team health dashboard — per-direct-report rollup across email and Slack.
 
 For each direct report (via Phonetool), gathers in parallel:
   - email sent count   (Outlook email_search from:{alias})
   - email received count (Outlook email_search to:{alias})
-  - open tickets       (builder-mcp TicketingReadActions search-tickets)
   - Slack recency      (slack-mcp search from:@{alias})
 
 Calendar/meeting load needs shared-calendar access we don't have — reported
@@ -39,33 +38,6 @@ async def _fetch_email_count(sem, direction: str, p_alias: str, start: str, end:
             return None
 
 
-async def _fetch_tickets(sem, p_alias: str):
-    """Open tickets assigned to p_alias — raw listing text. None = unavailable."""
-    from agents.base import builder
-    async with sem:
-        try:
-            async with builder() as s:
-                result = await asyncio.wait_for(
-                    s.call_tool("TicketingReadActions", arguments={
-                        "action": "search-tickets",
-                        "input": {
-                            "assignedTo": p_alias,
-                            "status": ["Assigned", "Researching", "Work In Progress"],
-                            "sort": "lastUpdatedDate desc",
-                            "rows": 20,
-                            "responseFields": ["id", "title", "status",
-                                               "extensions.tt.impact",
-                                               "createDate", "lastUpdatedDate"],
-                        },
-                    }),
-                    timeout=_FETCH_TIMEOUT,
-                )
-                raw = str(result.content[0].text) if result.content else ""
-                return raw[:2000] or None
-        except Exception:
-            return None
-
-
 async def _fetch_slack_recency(sem, p_alias: str):
     """Recent Slack messages from p_alias — raw search text with timestamps. None = unavailable."""
     from agents.base import slack
@@ -86,10 +58,9 @@ async def _gather_person(person: dict, days: int, sem) -> dict:
     p_alias = person.get("alias", "")
     start = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
     end = datetime.now().strftime("%Y-%m-%d")
-    sent, received, tickets, slack_raw = await asyncio.gather(
+    sent, received, slack_raw = await asyncio.gather(
         _fetch_email_count(sem, "from", p_alias, start, end),
         _fetch_email_count(sem, "to", p_alias, start, end),
-        _fetch_tickets(sem, p_alias),
         _fetch_slack_recency(sem, p_alias),
     )
     return {
@@ -97,7 +68,6 @@ async def _gather_person(person: dict, days: int, sem) -> dict:
         "name": person.get("name", p_alias),
         "email_sent": sent,
         "email_received": received,
-        "tickets": tickets,
         "slack": slack_raw,
     }
 
@@ -127,7 +97,6 @@ def _person_block(p: dict) -> str:
         f"### {p['name']} ({p['alias']})",
         f"- Emails sent: {_num(p['email_sent'])}",
         f"- Emails received: {_num(p['email_received'])}",
-        f"- Open tickets: {p['tickets'] or 'unavail'}",
         f"- Recent Slack activity: {p['slack'] or 'unavail'}",
     ]
     return "\n".join(lines)
@@ -139,8 +108,7 @@ def synthesize(data: dict, days: int) -> str:
     blocks = "\n\n".join(_person_block(p) for p in data.get("people", []))
     prompt = f"""You are building a team health dashboard for {manager}'s direct reports over the last {days} days.
 
-Raw per-person data is below. Ticket data is raw JSON/text — count open tickets, flag sev-2+
-(impact 1 or 2) and stale tickets (no update in 7+ days). Slack data is raw search results —
+Raw per-person data is below. Slack data is raw search results —
 use message timestamps to judge recency; silent for 3+ days = flag. Low email sent volume
 (vs. peers) = possibly blocked, disengaged, or on PTO. Meeting load data is unavailable —
 show "unavail" in that column. "unavail" for any signal means the data source failed; do not
@@ -150,12 +118,12 @@ Format exactly like this:
 
 ## Team Health — {manager}'s directs ({days} days)
 
-| Name | 📧 Sent | 📧 Recv | 🎫 Open | 🔴 Sev2+ | 📅 Mtg% | ⚠️ Flags |
-|------|---------|---------|---------|----------|---------|----------|
-(one row per person; flags like "🎫 stale ticket", "📧 low send volume", "💬 slack silent")
+| Name | 📧 Sent | 📧 Recv | 📅 Mtg% | ⚠️ Flags |
+|------|---------|---------|---------|----------|
+(one row per person; flags like "📧 low send volume", "💬 slack silent")
 
 ### 🔴 Needs Attention
-(bullet per person with a concern — cite specifics like ticket IDs and day counts)
+(bullet per person with a concern — cite specifics like day counts and volume numbers)
 
 ### 🟢 Looking Good
 (bullet per person with healthy signals)

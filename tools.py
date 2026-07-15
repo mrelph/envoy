@@ -4,7 +4,7 @@ import re
 from strands import tool
 from envoy_logger import logged_tool, get_logger
 from agents.base import outlook, builder, invoke_ai, check_mcp_connections, _load_models, MODEL_CATALOG, MODELS_FILE, get_token_usage, format_token_usage, reset_token_usage, run
-from agents import email, slack_agent, calendar, todo, tickets, memory2 as memory, people, internal, export
+from agents import email, slack_agent, calendar, todo, memory2 as memory, people, internal, export
 from agents.paths import CONFIG_JSON_FILE as _CONFIG_FILE, soul_file, envoy_file, process_file, env_file
 
 # --- Filesystem allow-list config ---
@@ -959,8 +959,8 @@ def calendar_worker(request: str) -> str:
 
 @tool
 def productivity_worker(request: str) -> str:
-    """Delegate productivity tasks: to-do list, tickets, memory, cron jobs, briefings
-    (morning/eod/weekly). Use for task management, ticket scanning, or briefing requests.
+    """Delegate productivity tasks: to-do list, memory, cron jobs, briefings
+    (morning/eod/weekly). Use for task management or briefing requests.
 
     Args:
         request: Natural language description of the productivity task

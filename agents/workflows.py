@@ -84,14 +84,14 @@ async def _read_bodies_parallel(session, emails, limit=15):
 def pto_catchup(alias: str = "", days: int = 5) -> str:
     alias = alias or _USER()
     from supervisor import gather_data
-    gathered = gather_data(sources="email,slack,calendar,todos,tickets", days=days, alias=alias)
+    gathered = gather_data(sources="email,slack,calendar,todos", days=days, alias=alias)
     if not gathered or gathered == "No data gathered from any source.":
         return "Couldn't gather any data for your catch-up. Check MCP connections."
 
     prompt = f"""You are briefing {alias} who has been out of office for {days} days.
 
 In Slack data: "[you]" = sent by {alias}, "⚡@you" = {alias} was @mentioned. Prioritize unanswered DMs and @mentions.
-IMPORTANT: Preserve reference IDs like [E1], [S3], [C2] in your output so the user can drill into specific items.
+IMPORTANT: Do NOT print internal reference IDs like [E1], [S3], [C2] in your output — they're hard to read. Refer to items by their natural description (who from, what about); the IDs are tracked silently for drill-down.
 
 # 🏖️ PTO Catch-Up — Last {days} Days
 ## 🔴 Needs Your Attention NOW
@@ -120,7 +120,7 @@ def slack_catchup(alias: str = "", days: int = 3) -> str:
     prompt = f"""Focused Slack catch-up for {alias} — last {days} days.
 
 Key markers: "[you]" = sent by {alias}, "⚡@you" = {alias} was @mentioned. Skip conversations {alias} already replied to.
-IMPORTANT: Preserve reference IDs like [S1], [S2] in your output so the user can drill into specific items.
+IMPORTANT: Do NOT print internal reference IDs like [S1], [S2] in your output — they're hard to read. Refer to items by their natural description (who from, what about); the IDs are tracked silently for drill-down.
 
 # Slack Catch-Up
 ## 🔴 Unread DMs Needing Reply
@@ -394,7 +394,7 @@ def yesterbox(alias: str = "", days: int = 1) -> str:
     end_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
 
     prompt = f"""Yesterbox triage for {alias} — emails from {start_date} to {end_date}.
-IMPORTANT: Preserve reference IDs like [E1], [S3] in your output so the user can drill into specific items.
+IMPORTANT: Do NOT print internal reference IDs like [E1], [S3] in your output — they're hard to read. Refer to items by their natural description (who from, what about); the IDs are tracked silently for drill-down.
 
 # Yesterbox
 
@@ -501,7 +501,7 @@ Messages:
 
 
 def team_health(alias: str = "", days: int = 7) -> str:
-    """Team health dashboard — per-direct-report rollup across email, tickets, Slack."""
+    """Team health dashboard — per-direct-report rollup across email and Slack."""
     alias = alias or _USER()
     from agents.team_health import team_health as _team_health
     return _team_health(alias, days)

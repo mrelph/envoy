@@ -75,7 +75,6 @@ Falls back to a plain text REPL if Textual is unavailable. Type `/help` for comm
 | — | `/eod` | End-of-day summary |
 | — | `/weekly` | Weekly review |
 | — | `/todo` | Show pending action items |
-| — | `/tickets` | Scan open tickets |
 | — | `/slack` | Scan Slack channels for critical info and actions |
 
 ### Agent Skills (extensible)
@@ -151,7 +150,7 @@ envoy slack-catchup --days 3
 envoy yesterbox --days 1
 envoy heartbeat --notify slack
 envoy routine list
-envoy routine add --order "Alert me if any sev-2 tickets go stale"
+envoy routine add --order "Flag emails from my VP I haven't replied to within 4 hours"
 envoy routine suggest
 envoy --help
 ```
@@ -258,7 +257,7 @@ The supervisor agent routes requests to specialized workers, each with focused t
 | Email | Medium | inbox, read, search, send (with CC/BCC), reply (threaded), forward, manage (move/flag/categorize), cleanup, digest, contacts, attachments | Email operations |
 | Comms | Medium | Slack scan (with user resolution + thread context), send messages (DMs, channels, threaded replies), search, mark read, reactions, drafts, file downloads, Slack Lists, EA delegation | Slack messaging |
 | Calendar | Medium | view, create (recurring, optional attendees, room resources), find times, book rooms, shared calendars — rejects bare attendee names, requires full email addresses | Calendar management |
-| Productivity | Medium | to-dos (list, add with due dates/importance, complete, update, delete), tickets, memory, cron, briefings | Task management |
+| Productivity | Medium | to-dos (list, add with due dates/importance, complete, update, delete), memory, cron, briefings | Task management |
 | Research | Medium | Phonetool, Kingpin, Wiki, Taskei, Broadcast, web search (Brave), InstructAI (revenue/pipeline/partners), QuickSight Q (dashboards/topics) | Internal & external lookups |
 | SharePoint | Medium | search, files, read, write, lists, analyze | SharePoint/OneDrive |
 | Coding | Medium | Delegate to Claude Code or Kiro as an autonomous subprocess — read-only plan mode by default (`allow_edits` must be explicitly granted), and `working_directory` is restricted to allow-listed directories | Coding/dev task delegation |
@@ -279,7 +278,7 @@ The supervisor layer provides cross-domain capabilities:
 
 ### Cross-Reference Intelligence
 
-When gathering data from multiple sources, Envoy automatically extracts entities (people, projects, ticket IDs) and identifies overlaps. If Alice is mentioned in both an email and a Slack message, or a SIM ticket appears in email and your to-do list, the briefing surfaces these connections explicitly.
+When gathering data from multiple sources, Envoy automatically extracts entities (people, projects) and identifies overlaps. If Alice is mentioned in both an email and a Slack message, or a project appears in email and your to-do list, the briefing surfaces these connections explicitly.
 
 ### MCP Servers
 
@@ -378,7 +377,7 @@ envoy/
 │   │   ├── email_worker.py  # Email operations worker
 │   │   ├── comms_worker.py  # Slack + EA delegation worker
 │   │   ├── calendar_worker.py   # Calendar management worker
-│   │   ├── productivity_worker.py  # To-dos, tickets, memory, cron
+│   │   ├── productivity_worker.py  # To-dos, memory, cron
 │   │   ├── research_worker.py     # Phonetool, Kingpin, Wiki, web search, InstructAI, QuickSight
 │   │   ├── sharepoint_worker.py   # SharePoint/OneDrive worker
 │   │   ├── coding_worker.py       # Coding delegation worker (Claude Code / Kiro, read-only by default)
@@ -395,7 +394,6 @@ envoy/
 │   ├── todo.py              # To-Do: list, add, complete, update, delete
 │   ├── people.py            # Phonetool domain agent
 │   ├── sharepoint_agent.py  # SharePoint/OneDrive domain agent
-│   ├── tickets.py           # Tickets domain agent
 │   ├── memory2.py           # Entity-aware persistent memory
 │   ├── observer.py          # Backward-compat shim — redirects to memory2.remember()
 │   ├── internal.py          # Internal websites (Kingpin, Wiki, Taskei)

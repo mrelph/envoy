@@ -27,7 +27,6 @@ COMMANDS = {
     "/customers": ("Customer email scan",                  "Scan for external customer emails with action items from the last {days} days"),
     "/cleanup":   ("Inbox cleanup scan",                   "Scan my inbox for junk to clean up, last {days} days"),
     "/slack":     ("Slack scan",                           "Scan my Slack channels for critical info and actions"),
-    "/tickets":   ("Scan open tickets",                    "Scan my open tickets and SIMs"),
     # Catch-up
     "/catchup":   ("PTO catch-up report",                  "I was out of office for {days} days, give me a full catch-up"),
     "/slack-catchup": ("Focused Slack catch-up",           "Give me a focused Slack catch-up for the last {days} days — unread channels, mentions, and DMs"),
@@ -103,7 +102,7 @@ DEFAULT_DAYS = {
 # Command groups for help display
 COMMAND_GROUPS = [
     ("Briefings", ["/briefing", "/calendar", "/week", "/todo"]),
-    ("Digests & Scans", ["/digest", "/boss", "/customers", "/cleanup", "/slack", "/tickets"]),
+    ("Digests & Scans", ["/digest", "/boss", "/customers", "/cleanup", "/slack"]),
     ("Catch-up", ["/catchup", "/slack-catchup", "/yesterbox", "/triage"]),
     ("Analysis", ["/cal-audit", "/response-times", "/followup", "/commitments", "/team-health"]),
     ("Prep", ["/prep-1on1", "/prep-meeting"]),

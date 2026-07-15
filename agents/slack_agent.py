@@ -7,6 +7,7 @@ from typing import List, Dict
 
 from agents.base import (
     slack, MCPConnectionError, invoke_ai, make_tag, log_sent, load_sent,
+    loads_mcp,
 )
 
 
@@ -19,7 +20,7 @@ async def resolve_user_ids(user_ids: List[str], session=None) -> Dict[str, str]:
         async def _resolve(s):
             result = await s.call_tool("batch_get_user_info", arguments={"users": unique})
             raw = result.content[0].text if result.content else "[]"
-            data = json.loads(raw) if isinstance(raw, str) else raw
+            data = loads_mcp(raw)
             mapping = {}
             # Handle both list and dict response shapes
             items = data if isinstance(data, list) else data.get('users', data.get('results', []))
@@ -71,7 +72,7 @@ async def get_thread_replies(channel_id: str, thread_ts: str, session=None) -> L
             result = await s.call_tool("batch_get_thread_replies", arguments={
                 "threads": [{"channelId": channel_id, "threadTs": thread_ts}]
             })
-            data = json.loads(result.content[0].text) if result.content else []
+            data = loads_mcp(result.content[0].text) if result.content else []
             if data and 'result' in data[0]:
                 return data[0]['result'].get('messages', [])
             return []
@@ -163,7 +164,7 @@ async def scan_raw(channels: List[str] = None, days: int = 7, alias: str = "") -
                             "list_channels",
                             arguments={"channelTypes": [ch_type], "unreadOnly": True, "limit": 20}
                         )
-                        ch_data = json.loads(result.content[0].text) if result.content else {}
+                        ch_data = loads_mcp(result.content[0].text) if result.content else {}
                         for c in ch_data.get('channels', []):
                             lr = c.get('last_read', '')
                             channel_ids.append((c['id'], c.get('name', c['id']), ch_type, lr or oldest_fallback))
@@ -174,7 +175,7 @@ async def scan_raw(channels: List[str] = None, days: int = 7, alias: str = "") -
                         "list_channels",
                         arguments={"channelTypes": ["public_and_private"], "unreadOnly": True, "limit": 20}
                     )
-                    ch_data = json.loads(result.content[0].text) if result.content else {}
+                    ch_data = loads_mcp(result.content[0].text) if result.content else {}
                     for c in ch_data.get('channels', []):
                         lr = c.get('last_read', '')
                         channel_ids.append((c['id'], c.get('name', c['id']), "channel", lr or oldest_fallback))
@@ -188,7 +189,7 @@ async def scan_raw(channels: List[str] = None, days: int = 7, alias: str = "") -
             name_map = {}
             if ch_only:
                 info_result = await session.call_tool("batch_get_channel_info", arguments={"channelIds": ch_only})
-                for item in (json.loads(info_result.content[0].text) if info_result.content else []):
+                for item in (loads_mcp(info_result.content[0].text) if info_result.content else []):
                     if 'result' in item:
                         name_map[item['channelId']] = item['result'].get('name', item['channelId'])
 
@@ -201,7 +202,8 @@ async def scan_raw(channels: List[str] = None, days: int = 7, alias: str = "") -
                 result = await session.call_tool("batch_get_conversation_history", arguments={"channels": chunk})
                 text = result.content[0].text if result.content else "[]"
                 try:
-                    raw.extend(json.loads(text) if isinstance(json.loads(text), list) else [])
+                    parsed = loads_mcp(text)
+                    raw.extend(parsed if isinstance(parsed, list) else [])
                 except (json.JSONDecodeError, TypeError):
                     pass
 
@@ -256,7 +258,7 @@ async def scan_raw(channels: List[str] = None, days: int = 7, alias: str = "") -
                 try:
                     thread_batch = [{"channelId": cid, "threadTs": ts} for cid, ts in threaded_msgs[:10]]
                     result = await session.call_tool("batch_get_thread_replies", arguments={"threads": thread_batch})
-                    thread_data = json.loads(result.content[0].text) if result.content else []
+                    thread_data = loads_mcp(result.content[0].text) if result.content else []
                     for i, item in enumerate(thread_data):
                         if i < len(threaded_msgs):
                             cid, ts = threaded_msgs[i]
@@ -388,7 +390,7 @@ async def send_dm(recipient: str, message: str, thread_ts: str = "") -> str:
             else:
                 users = [u.strip() for u in recipient.split(",") if u.strip()]
                 dm_result = await session.call_tool("open_conversation", arguments={"users": users})
-                dm_data = json.loads(dm_result.content[0].text) if dm_result.content else {}
+                dm_data = loads_mcp(dm_result.content[0].text) if dm_result.content else {}
                 # slack-mcp open_dm_channel returns {"id": "D..."} or {"channel": {"id": "D..."}}
                 channel_id = (dm_data.get("channelId")
                               or dm_data.get("id")
@@ -415,7 +417,7 @@ async def mark_read(channel_ids: List[str] = None) -> str:
                 result = await session.call_tool("list_channels", arguments={
                     "channelTypes": ["public_and_private"], "unreadOnly": True, "limit": 50
                 })
-                data = json.loads(result.content[0].text) if result.content else {}
+                data = loads_mcp(result.content[0].text) if result.content else {}
                 channel_ids = [c['id'] for c in data.get('channels', [])]
             if not channel_ids:
                 return "No unread channels to mark."

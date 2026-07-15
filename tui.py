@@ -52,7 +52,7 @@ SPINNER_HINTS = {
     "slack": "💬 Slack", "channel": "💬 Slack", "catchup": "💬 Slack",
     "calendar": "📅 Calendar", "meeting": "📅 Calendar", "schedule": "📅 Calendar",
     "book": "📅 Calendar", "findtime": "📅 Calendar",
-    "todo": "✅ Productivity", "ticket": "✅ Productivity",
+    "todo": "✅ Productivity",
     "briefing": "📊 Briefing", "eod": "📊 Briefing", "weekly": "📊 Briefing",
     "phonetool": "🔎 Research", "kingpin": "🔎 Research", "wiki": "🔎 Research",
     "sharepoint": "📁 SharePoint", "onedrive": "📁 SharePoint",

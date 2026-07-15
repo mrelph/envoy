@@ -269,7 +269,7 @@ def spawn_skill_agent(skill: dict):
     # Resolve model
     models = _load_models()
     tier = skill.get("model", "medium")
-    model_id = models.get(tier, models.get("medium", "us.anthropic.claude-sonnet-4-6-v1"))
+    model_id = models.get(tier, models.get("medium", "us.anthropic.claude-sonnet-5"))
 
     model = BedrockModel(
         model_id=model_id,

@@ -5,14 +5,14 @@
 - **Worker retry + graceful degradation** — `_delegate` in `tools.py` retries on failure with fallback handling
 - **Context carryover between turns** — `supervisor.py` retains source data; supervisor tools (`read_email_thread`, `show_context`) drill into cached results
 - **Attachment handling** — `get_attachment` supervisor tool downloads, previews, and summarizes email attachments
-- **Cross-reference intelligence** — `gather` extracts entities (people, projects, tickets) and surfaces overlaps across sources in synthesis
+- **Cross-reference intelligence** — `gather` extracts entities (people, projects) and surfaces overlaps across sources in synthesis
 - **Active learning loop** — `agents/learning.py` reflects after each interaction, detects corrections, and runs weekly self-analysis
 - **Skill builder** — `/build-skill` and `/suggest-skills` generate new Agent Skills on demand
 - **MCP management** — `/mcp` command + `~/.envoy/mcp.json` user overrides
 - **InstructAI + QuickSight** — wired into research worker for revenue/pipeline/dashboard queries
 - **Bedrock credential auto-refresh** — `invoke_ai` retries once on `ExpiredTokenException`
 - **Live `/models` editor** — interactive model picker against the live Bedrock catalog with `reload_agent()`
-- **Team health dashboard** — persistent "team health" view: who's overloaded, who has stale tickets, who hasn't sent a status update. See `TEAM-HEALTH-SPEC.md`.
+- **Team health dashboard** — persistent "team health" view: who's overloaded, who hasn't sent a status update, who's gone quiet on Slack. See `TEAM-HEALTH-SPEC.md`.
 - **Smart scheduling** — "Schedule a 1:1 with jsmith next week, 30 min, find a room at SEA54" as a single natural language command: check availability → propose times → book room → send invite
 - **Multi-turn drill-down** — numbered reference IDs across turns + `drill_down` supervisor tool ("Show me my inbox" → "Reply to the third one" → "CC Bob on that")
 - **Proactive notifications** *(partially done)* — activity feed surfaces ambient insights in the TUI and `envoy watch` exists; a webhook/push path (e.g. Slack bot listener on @mention or DM) is still open

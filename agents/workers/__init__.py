@@ -355,7 +355,7 @@ WORKER_DESCRIPTIONS = {
     "email": "Email specialist — inbox scan, search, send, reply, draft, cleanup, customer scan, team digest",
     "comms": "Slack & messaging — scan channels/DMs, send messages, search, reactions, EA delegation",
     "calendar": "Calendar management — view events, create meetings, find times, book rooms",
-    "productivity": "Tasks & memory — to-do lists, tickets, persistent memory, cron jobs, briefings",
+    "productivity": "Tasks & memory — to-do lists, persistent memory, cron jobs, briefings",
     "research": "Lookups — Phonetool profiles, Kingpin goals, Wiki, web search, InstructAI, QuickSight",
     "sharepoint": "Documents — SharePoint/OneDrive search, read, write, lists",
     "coding": "Development — write code, fix bugs, run tests, refactor, scripts",
@@ -403,7 +403,7 @@ def make_delegate_tool():
         - email: inbox, search, send, reply, classify
         - comms: Slack scan, send messages, search
         - calendar: view events, find times, create meetings
-        - productivity: to-do lists, tickets, memory
+        - productivity: to-do lists, memory
         - research: Phonetool profiles, Kingpin goals, Wiki, web search
         - sharepoint: documents, files, lists
 

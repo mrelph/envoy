@@ -100,7 +100,7 @@ def gather(sources: str = "email,slack,calendar,todos", days: int = 1, alias: st
     Each item gets a ref like [E1], [S1], [C1] that the user can reference in follow-ups.
 
     Args:
-        sources: Comma-separated list of: email, slack, calendar, todos, tickets, team, bosses, vault
+        sources: Comma-separated list of: email, slack, calendar, todos, team, bosses, vault
         days: Number of days to look back
         alias: User alias (defaults to $USER)
     """
@@ -122,7 +122,7 @@ def gather_data(sources: str = "email,slack,calendar,todos", days: int = 1, alia
             # _ITEM_STALE_AFTER so refs from the previous turn don't masquerade
             # as fresh.
             prefix_map = {"email": "E", "slack": "S", "calendar": "C",
-                          "todos": "T", "tickets": "K", "team": "P", "bosses": "B",
+                          "todos": "T", "team": "P", "bosses": "B",
                           "vault": "V"}
             refetch_prefixes = {prefix_map[s] for s in source_list if s in prefix_map}
             cutoff = _time.monotonic() - _ITEM_STALE_AFTER
@@ -237,8 +237,6 @@ async def _gather_async(sources: list, days: int, alias: str) -> dict:
         tasks["calendar"] = _wrap(fetch.fetch_calendar(days=days))
     if "todos" in sources:
         tasks["todos"] = fetch.fetch_todos()
-    if "tickets" in sources:
-        tasks["tickets"] = fetch.fetch_tickets(alias)
     if "team" in sources:
         tasks["team"] = fetch.fetch_people(alias, mode="team")
     if "bosses" in sources:
@@ -324,16 +322,6 @@ async def _gather_async(sources: list, days: int, alias: str) -> dict:
                     line = line.strip()
                     if line and line.startswith(("- ", "* ", "☐", "☑", "✅")):
                         ref = _store_item("T", line[:200], type="todo", raw=line)
-                        lines.append(f"[{ref}] {line}")
-                    elif line:
-                        lines.append(line)
-                results[name] = "\n".join(lines)
-            elif name == "tickets" and text:
-                lines = []
-                for line in text.splitlines():
-                    line = line.strip()
-                    if line and line.startswith("- "):
-                        ref = _store_item("K", line[:200], type="ticket", raw=line)
                         lines.append(f"[{ref}] {line}")
                     elif line:
                         lines.append(line)
@@ -481,7 +469,7 @@ def drill_down(ref: str) -> str:
     For emails, automatically fetches the full thread body.
 
     Args:
-        ref: Reference ID like E1, S3, C2, T1, K1
+        ref: Reference ID like E1, S3, C2, T1
     """
     _check_ttl()
     ref = ref.upper().strip()

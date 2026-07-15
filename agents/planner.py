@@ -33,7 +33,7 @@ _AVAILABLE_WORKERS = {k: v for k, v in WORKER_DESCRIPTIONS.items() if k != "codi
 
 # Tools that run on the supervisor (not workers)
 _SUPERVISOR_TOOLS = {
-    "gather": "Parallel multi-source data fetch (email, slack, calendar, todos, tickets, team, bosses)",
+    "gather": "Parallel multi-source data fetch (email, slack, calendar, todos, team, bosses)",
     "commitment_tracker": "Scan sent emails/Slack for promises and commitments you made",
     "follow_up_tracker": "Find sent emails that haven't received replies",
     "calendar_audit": "Analyze meeting load and focus time",
@@ -282,7 +282,6 @@ def _infer_gather_sources(request: str) -> str:
         "slack": ["slack", "message", "dm", "channel"],
         "calendar": ["calendar", "meeting", "schedule", "event"],
         "todos": ["todo", "task", "to-do", "action"],
-        "tickets": ["ticket", "sim", "issue"],
     }
     for source, keywords in mapping.items():
         if any(k in request_lower for k in keywords):

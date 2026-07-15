@@ -53,10 +53,6 @@ Defaults: days=14, limit=100
 
 Scan my Slack channels for critical info and actions. Surface: important announcements, decisions made, action items for me, and threads I should weigh in on.
 
-## tickets
-
-Scan my open tickets and SIMs. Show status, priority, staleness, and flag anything that needs immediate attention.
-
 ## catchup
 
 I was out for `{days}` days. Give me a comprehensive catch-up combining: team digest, boss tracker, Slack, customer emails, and to-dos. Prioritize into a "first day back" plan — what needs immediate attention vs FYI.
@@ -77,16 +73,16 @@ Defaults: days=1
 
 ## triage
 
-Build my unified triage queue for the last `{days}` days. Use the `gather` tool to pull email, Slack, tickets, and to-dos in one parallel pass, then merge everything into a SINGLE ranked list of "what actually needs me right now" — not one section per source.
+Build my unified triage queue for the last `{days}` days. Use the `gather` tool to pull email, Slack, and to-dos in one parallel pass, then merge everything into a SINGLE ranked list of "what actually needs me right now" — not one section per source.
 
 Ranking rules, applied in order:
 1. **Deduplicate across sources.** If the same thread, person, or topic shows up in more than one place (use the CROSS-REFERENCES the gather returns), collapse it into one item and note where it appeared, e.g. "(email + Slack)".
-2. **Score each item** on: does it need a reply or decision *from me* (highest), is someone blocked waiting on me, is it time-sensitive (deadline, meeting today, sev-2+ ticket, aging thread), and who it's from (boss/management chain and external customers rank above internal FYIs).
+2. **Score each item** on: does it need a reply or decision *from me* (highest), is someone blocked waiting on me, is it time-sensitive (deadline, meeting today, aging thread), and who it's from (boss/management chain and external customers rank above internal FYIs).
 3. **Sort into three tiers**, most urgent first inside each:
    - 🔴 **Needs me now** — direct asks, blockers, decisions, anything due today or overdue.
    - 🟡 **Should handle soon** — replies expected, follow-ups, aging items not yet critical.
    - 🔵 **FYI / can wait** — awareness only, no action required.
-4. Keep each item to one line: the ref ID, a plain-language summary of what's needed, who from, and a suggested next action ("reply", "prep", "delegate", "close"). Preserve the `[E1]`/`[S3]`/`[K2]`/`[T1]` ref IDs so I can drill into any item.
+4. Keep each item to one line: a plain-language summary of what's needed, who from, and a suggested next action ("reply", "prep", "delegate", "close"). Do NOT print the internal ref IDs — refer to items by their description; when I ask about one in plain language, drill in using the ref internally.
 
 End with a one-line count per tier so I know the size of the day. Don't pad — if a tier is empty, say so and move on.
 {if email} Email me the triage queue when done.
@@ -103,7 +99,7 @@ Defaults: days=5
 
 ## team-health
 
-Build a team health dashboard for `{alias}`'s direct reports over the last `{days}` days. For each person, roll up email sent/received volume, open tickets (flag sev-2+ and stale ones with no update in 7+ days), and Slack recency (silent 3+ days = flag). Present a per-person markdown table, then "Needs Attention" and "Looking Good" sections.
+Build a team health dashboard for `{alias}`'s direct reports over the last `{days}` days. For each person, roll up email sent/received volume and Slack recency (silent 3+ days = flag). Present a per-person markdown table, then "Needs Attention" and "Looking Good" sections.
 
 Defaults: alias=$USER, days=7
 
