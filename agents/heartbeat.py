@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from agents.base import invoke_ai, outlook, MCPConnectionError, run, agent_name
-from agents import email, slack_agent, calendar, todo, tickets, people, memory2 as memory
+from agents import email, slack_agent, calendar, todo, people, memory2 as memory
 
 from agents.base import current_user as _USER  # call-time alias resolution
 from agents.paths import config_dir
@@ -255,11 +255,6 @@ async def _gather_context(days: int = 1) -> str:
         _safe("calendar", calendar.get_events_raw(view="day", days_ahead=1)),
         _safe("slack_dms", slack_agent.scan_raw(days=1)),
     ]
-
-    try:
-        tasks.append(_safe("tickets", tickets.scan_tickets(_USER())))
-    except Exception:
-        pass
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
 

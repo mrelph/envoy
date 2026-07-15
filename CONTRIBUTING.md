@@ -43,7 +43,7 @@ envoy/
 │   │   ├── email_worker.py  # Email operations worker
 │   │   ├── comms_worker.py  # Slack + EA delegation worker
 │   │   ├── calendar_worker.py   # Calendar management worker
-│   │   ├── productivity_worker.py  # To-dos, tickets, memory, cron
+│   │   ├── productivity_worker.py  # To-dos, memory, cron
 │   │   ├── research_worker.py     # Phonetool, Kingpin, Wiki, web search, InstructAI, QuickSight
 │   │   ├── sharepoint_worker.py   # SharePoint/OneDrive worker
 │   │   ├── coding_worker.py       # Coding delegation (Claude Code/Kiro) — read-only by default, dir allow-list
@@ -60,7 +60,6 @@ envoy/
 │   ├── todo.py              # To-Do: list, add (due dates/importance/reminders), complete, update, delete
 │   ├── people.py            # Phonetool domain agent
 │   ├── sharepoint_agent.py  # SharePoint/OneDrive domain agent
-│   ├── tickets.py           # Tickets domain agent
 │   ├── memory2.py           # Entity-aware persistent memory
 │   ├── observer.py          # Backward-compat shim — redirects to memory2.remember()
 │   ├── internal.py          # Internal websites (Kingpin, Wiki, Taskei)
@@ -85,7 +84,7 @@ envoy/
 | Email | Medium | inbox, read full threads, search, send (CC/BCC), reply, forward, draft, move, flag/categorize/importance, cleanup, digest, contacts, attachments | Email operations |
 | Comms | Medium | Slack scan (user ID resolution + thread replies), send (DM/channel/threaded), search, mark read, reactions, drafts, file downloads, Slack Lists, EA delegation | Slack messaging |
 | Calendar | Medium | view, create (recurring, optional attendees, room resources, reminders, showAs, all-day — rejects bare attendee names), find times, book rooms, shared calendars | Calendar management |
-| Productivity | Medium | to-dos (list, add with due dates/importance/reminders, complete, update, delete), tickets, memory, cron, briefings | Task management |
+| Productivity | Medium | to-dos (list, add with due dates/importance/reminders, complete, update, delete), memory, cron, briefings | Task management |
 | Research | Medium | Phonetool, Kingpin, Wiki, Taskei, Broadcast, web search (Brave), InstructAI, QuickSight Q | Internal & external lookups |
 | SharePoint | Medium | search, files, read, write, lists, analyze | SharePoint/OneDrive |
 | Coding | Medium | Delegate to Claude Code/Kiro as a subprocess — read-only plan mode by default, `allow_edits` opt-in, `working_directory` restricted to allow-listed directories | Coding/dev task delegation |

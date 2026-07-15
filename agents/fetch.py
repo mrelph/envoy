@@ -36,12 +36,6 @@ async def fetch_todos() -> str:
     return await fetch_todos_full()
 
 
-async def fetch_tickets(alias: str = "") -> str:
-    """Fetch open tickets. Returns formatted text."""
-    from agents.tickets import scan_tickets
-    return await scan_tickets(alias)
-
-
 async def fetch_people(alias: str = "", mode: str = "team") -> list:
     """Fetch people (directs or bosses). Returns list of person dicts."""
     from agents.people import get_direct_reports, get_management_chain

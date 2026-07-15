@@ -1,14 +1,14 @@
-"""Productivity worker — todos, tickets, memory, cron."""
+"""Productivity worker — todos, memory, cron."""
 
 from strands import Agent, tool
 from agents.base import run
 from agents.workers import _USER, _model
 
-RELEVANT_SECTIONS = ["Tickets", "General", "Safety & Confirmations"]
+RELEVANT_SECTIONS = ["General", "Safety & Confirmations"]
 
 
 def create(session_mgr=None):
-    from agents import todo as todo_mod, tickets as tix_mod, memory2 as mem_mod
+    from agents import todo as todo_mod, memory2 as mem_mod
     from agents import workflows as wf
 
     @tool
@@ -61,14 +61,6 @@ def create(session_mgr=None):
         return run(todo_mod.fetch_todos())
 
     @tool
-    def tickets(alias: str = "") -> str:
-        """Scan open tickets assigned to you or your team.
-        Args:
-            alias: Your alias (default: $USER)
-        """
-        return run(tix_mod.scan_tickets(alias or _USER()))
-
-    @tool
     def remember_item(text: str, entry_type: str = "action") -> str:
         """Save something to persistent memory.
         Args:
@@ -105,8 +97,8 @@ def create(session_mgr=None):
 
     return Agent(
         model=_model("medium"),
-        system_prompt="You are a productivity specialist. You manage to-dos (list, add with due dates/importance, complete, update, delete), scan tickets, maintain memory, and manage cron jobs. For briefings, EOD summaries, and weekly reviews, tell the user to use /briefing, /eod, or /weekly commands. Be action-oriented. Use shared_context to post important findings for other workers.",
-        tools=[todo_items, tickets, remember_item, cron_jobs, shared_context],
+        system_prompt="You are a productivity specialist. You manage to-dos (list, add with due dates/importance, complete, update, delete), maintain memory, and manage cron jobs. For briefings, EOD summaries, and weekly reviews, tell the user to use /briefing, /eod, or /weekly commands. Be action-oriented. Use shared_context to post important findings for other workers.",
+        tools=[todo_items, remember_item, cron_jobs, shared_context],
         callback_handler=None,
         **({"session_manager": session_mgr} if session_mgr else {}),
     )

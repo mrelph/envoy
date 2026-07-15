@@ -84,7 +84,7 @@ async def _read_bodies_parallel(session, emails, limit=15):
 def pto_catchup(alias: str = "", days: int = 5) -> str:
     alias = alias or _USER()
     from supervisor import gather_data
-    gathered = gather_data(sources="email,slack,calendar,todos,tickets", days=days, alias=alias)
+    gathered = gather_data(sources="email,slack,calendar,todos", days=days, alias=alias)
     if not gathered or gathered == "No data gathered from any source.":
         return "Couldn't gather any data for your catch-up. Check MCP connections."
 
@@ -501,7 +501,7 @@ Messages:
 
 
 def team_health(alias: str = "", days: int = 7) -> str:
-    """Team health dashboard — per-direct-report rollup across email, tickets, Slack."""
+    """Team health dashboard — per-direct-report rollup across email and Slack."""
     alias = alias or _USER()
     from agents.team_health import team_health as _team_health
     return _team_health(alias, days)

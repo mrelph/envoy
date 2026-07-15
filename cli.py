@@ -399,7 +399,7 @@ def yesterbox(days):
 @click.option('--slack', is_flag=True, help='Send the queue as a Slack DM to yourself')
 @click.option('--todo', '-t', is_flag=True, help='Add the urgent items to To-Do')
 def triage(days, output, email, slack, todo):
-    """Unified triage queue — email, Slack, tickets, and to-dos merged into one ranked list."""
+    """Unified triage queue — email, Slack, and to-dos merged into one ranked list."""
     prompt = _build_prompt(_cmds()['triage'], days=days,
                            email=email, slack=slack, todo=todo)
     _run_agent_command(prompt, output=output)

@@ -153,7 +153,7 @@ def _classify_domain(command: str) -> str:
         return "comms"
     if any(k in cmd for k in ("calendar", "meeting", "book", "findtime", "week")):
         return "calendar"
-    if any(k in cmd for k in ("todo", "ticket", "task", "action")):
+    if any(k in cmd for k in ("todo", "task", "action")):
         return "tasks"
     if any(k in cmd for k in ("search", "lookup", "phonetool", "wiki", "kingpin")):
         return "research"
@@ -210,7 +210,7 @@ def detect_correction(user_input: str, prev_response: str = "") -> str | None:
             section = section.strip().title()
             rule_text = rule_text.strip()
             if section not in ("Email", "Meetings", "Cleanup", "Slack", "Calendar", "General",
-                               "Briefings", "Tickets", "Safety & Confirmations"):
+                               "Briefings", "Safety & Confirmations"):
                 section = "General"
             return f"[{section}] {rule_text}"
     except Exception:
