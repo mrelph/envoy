@@ -827,33 +827,44 @@ DEFAULT_MODELS = {
     "light":  "us.anthropic.claude-sonnet-5",
     "memory": "us.anthropic.claude-sonnet-5",
 }
+# Curated catalog — a narrow, current set rather than the full live Bedrock
+# list. Every ID here is verified against the live `bedrock` catalog and is
+# invocable through the boto3 `bedrock-runtime.converse()` path Envoy uses.
+# `/models refresh` still fetches the full live list when you need something
+# outside this set; this is just the static fallback + default menu.
+#
+# NOTE: OpenAI GPT-5.6 Sol (openai.gpt-5.6-sol) is intentionally omitted — it
+# is only served on the bedrock-mantle Responses API, not bedrock-runtime /
+# converse(), so it can't be invoked through the current path. Add it once a
+# Mantle/Responses backend exists.
 MODEL_CATALOG = [
-    # --- Claude via Bedrock cross-region inference profiles (us.anthropic.*) ---
-    # These are what DEFAULT_MODELS uses and what the boto3 converse() path invokes.
-    ("us.anthropic.claude-fable-5",                  "Claude Fable 5",    "Most capable model — demanding reasoning & long-horizon agentic work"),
-    ("us.anthropic.claude-opus-4-8",                 "Claude Opus 4.8",   "Highly autonomous, state-of-the-art agentic execution & knowledge work"),
-    ("us.anthropic.claude-opus-4-7",                 "Claude Opus 4.7",   "Previous gen Opus, strong long-horizon reasoning"),
-    ("us.anthropic.claude-sonnet-5",                 "Claude Sonnet 5",   "Near-Opus quality on coding/agentic at Sonnet cost — default for workers"),
-    ("us.anthropic.claude-sonnet-4-6",               "Claude Sonnet 4.6", "Previous gen Sonnet, good balance of speed & quality"),
-    ("us.anthropic.claude-haiku-4-5",                "Claude Haiku 4.5",  "Fast & cheap, good for simple tasks"),
-    # --- Claude via Mantle (bare anthropic.* Messages-API model IDs) ---
-    # Select these if the deployment routes Claude through the Mantle endpoint
-    # rather than Bedrock cross-region inference profiles.
-    ("anthropic.claude-fable-5",                     "Claude Fable 5 (Mantle)",    "Fable 5 via the Mantle Messages-API endpoint"),
-    ("anthropic.claude-opus-4-8",                    "Claude Opus 4.8 (Mantle)",   "Opus 4.8 via the Mantle Messages-API endpoint"),
-    ("anthropic.claude-opus-4-7",                    "Claude Opus 4.7 (Mantle)",   "Opus 4.7 via the Mantle Messages-API endpoint"),
-    ("anthropic.claude-sonnet-5",                    "Claude Sonnet 5 (Mantle)",   "Sonnet 5 via the Mantle Messages-API endpoint"),
-    ("anthropic.claude-sonnet-4-6",                  "Claude Sonnet 4.6 (Mantle)", "Sonnet 4.6 via the Mantle Messages-API endpoint"),
-    ("anthropic.claude-haiku-4-5",                   "Claude Haiku 4.5 (Mantle)",  "Haiku 4.5 via the Mantle Messages-API endpoint"),
-    # --- Amazon Nova (Bedrock cross-region inference profiles) ---
-    ("us.amazon.nova-pro-v1:0",                      "Nova Pro",          "Best Nova quality, multimodal"),
-    ("us.amazon.nova-lite-v1:0",                     "Nova Lite",         "Fast & low-cost multimodal"),
-    ("us.amazon.nova-micro-v1:0",                    "Nova Micro",        "Text-only, fastest & cheapest Nova"),
-    ("us.amazon.nova-premier-v1:0",                  "Nova Premier",      "Most capable Nova, complex tasks"),
-    # --- Other Bedrock models ---
-    ("moonshot.kimi-k2-thinking",                    "Kimi K2 Thinking",  "Strong coding & reasoning"),
+    # --- Anthropic Claude (current gen) — cross-region inference profiles ---
+    # Both us.* (regional) and global.* (global) profiles are listed so either
+    # can be selected via /models. DEFAULT_MODELS uses the us.* variants.
+    ("us.anthropic.claude-fable-5",                       "Claude Fable 5",           "Most capable model — demanding reasoning & long-horizon agentic work"),
+    ("global.anthropic.claude-fable-5",                   "Claude Fable 5 (global)",  "Fable 5 on the global cross-region profile"),
+    ("us.anthropic.claude-opus-4-8",                      "Claude Opus 4.8",          "Highly autonomous, state-of-the-art agentic execution & knowledge work"),
+    ("global.anthropic.claude-opus-4-8",                  "Claude Opus 4.8 (global)", "Opus 4.8 on the global cross-region profile"),
+    ("us.anthropic.claude-opus-4-7",                      "Claude Opus 4.7",          "Previous gen Opus, strong long-horizon reasoning"),
+    ("global.anthropic.claude-opus-4-7",                  "Claude Opus 4.7 (global)", "Opus 4.7 on the global cross-region profile"),
+    ("us.anthropic.claude-sonnet-5",                      "Claude Sonnet 5",          "Near-Opus quality on coding/agentic at Sonnet cost — default for workers"),
+    ("global.anthropic.claude-sonnet-5",                  "Claude Sonnet 5 (global)", "Sonnet 5 on the global cross-region profile"),
+    ("us.anthropic.claude-sonnet-4-6",                    "Claude Sonnet 4.6",          "Previous gen Sonnet, good balance of speed & quality"),
+    ("global.anthropic.claude-sonnet-4-6",                "Claude Sonnet 4.6 (global)", "Sonnet 4.6 on the global cross-region profile"),
+    ("us.anthropic.claude-haiku-4-5-20251001-v1:0",       "Claude Haiku 4.5",          "Fast & cheap, good for simple tasks"),
+    ("global.anthropic.claude-haiku-4-5-20251001-v1:0",   "Claude Haiku 4.5 (global)", "Haiku 4.5 on the global cross-region profile"),
+    # --- NVIDIA Nemotron (open-source) ---
+    ("nvidia.nemotron-super-3-120b",                 "Nemotron Super 3 120B", "NVIDIA's largest open Nemotron — strong reasoning"),
+    ("nvidia.nemotron-nano-3-30b",                   "Nemotron Nano 3 30B",   "Mid-size open Nemotron, good balance"),
+    ("nvidia.nemotron-nano-12b-v2",                  "Nemotron Nano 12B v2",  "Small open Nemotron, fast"),
+    ("nvidia.nemotron-nano-9b-v2",                   "Nemotron Nano 9B v2",   "Smallest open Nemotron, fastest & cheapest"),
+    # --- Moonshot Kimi ---
+    ("moonshot.kimi-k2-thinking",                    "Kimi K2 Thinking",  "Strong coding & reasoning, thinking model"),
     ("moonshotai.kimi-k2.5",                         "Kimi K2.5",         "Latest Kimi, multimodal"),
-    ("deepseek.r1-v1:0",                             "DeepSeek R1",       "Strong reasoning, thinking model"),
+    # --- Zhipu GLM ---
+    ("zai.glm-5",                                    "GLM-5",         "Latest GLM — strong general & agentic"),
+    ("zai.glm-4.7",                                  "GLM-4.7",       "Previous gen GLM"),
+    ("zai.glm-4.7-flash",                            "GLM-4.7 Flash", "Fast, low-cost GLM"),
 ]
 
 
