@@ -828,16 +828,29 @@ DEFAULT_MODELS = {
     "memory": "us.anthropic.claude-sonnet-5",
 }
 MODEL_CATALOG = [
+    # --- Claude via Bedrock cross-region inference profiles (us.anthropic.*) ---
+    # These are what DEFAULT_MODELS uses and what the boto3 converse() path invokes.
     ("us.anthropic.claude-fable-5",                  "Claude Fable 5",    "Most capable model — demanding reasoning & long-horizon agentic work"),
     ("us.anthropic.claude-opus-4-8",                 "Claude Opus 4.8",   "Highly autonomous, state-of-the-art agentic execution & knowledge work"),
+    ("us.anthropic.claude-opus-4-7",                 "Claude Opus 4.7",   "Previous gen Opus, strong long-horizon reasoning"),
     ("us.anthropic.claude-sonnet-5",                 "Claude Sonnet 5",   "Near-Opus quality on coding/agentic at Sonnet cost — default for workers"),
-    ("us.anthropic.claude-opus-4-7-v1",              "Claude Opus 4.7",   "Previous gen Opus, strong reasoning"),
-    ("us.anthropic.claude-sonnet-4-6-v1",            "Claude Sonnet 4.6", "Previous gen Sonnet, good balance of speed & quality"),
+    ("us.anthropic.claude-sonnet-4-6",               "Claude Sonnet 4.6", "Previous gen Sonnet, good balance of speed & quality"),
     ("us.anthropic.claude-haiku-4-5",                "Claude Haiku 4.5",  "Fast & cheap, good for simple tasks"),
+    # --- Claude via Mantle (bare anthropic.* Messages-API model IDs) ---
+    # Select these if the deployment routes Claude through the Mantle endpoint
+    # rather than Bedrock cross-region inference profiles.
+    ("anthropic.claude-fable-5",                     "Claude Fable 5 (Mantle)",    "Fable 5 via the Mantle Messages-API endpoint"),
+    ("anthropic.claude-opus-4-8",                    "Claude Opus 4.8 (Mantle)",   "Opus 4.8 via the Mantle Messages-API endpoint"),
+    ("anthropic.claude-opus-4-7",                    "Claude Opus 4.7 (Mantle)",   "Opus 4.7 via the Mantle Messages-API endpoint"),
+    ("anthropic.claude-sonnet-5",                    "Claude Sonnet 5 (Mantle)",   "Sonnet 5 via the Mantle Messages-API endpoint"),
+    ("anthropic.claude-sonnet-4-6",                  "Claude Sonnet 4.6 (Mantle)", "Sonnet 4.6 via the Mantle Messages-API endpoint"),
+    ("anthropic.claude-haiku-4-5",                   "Claude Haiku 4.5 (Mantle)",  "Haiku 4.5 via the Mantle Messages-API endpoint"),
+    # --- Amazon Nova (Bedrock cross-region inference profiles) ---
     ("us.amazon.nova-pro-v1:0",                      "Nova Pro",          "Best Nova quality, multimodal"),
     ("us.amazon.nova-lite-v1:0",                     "Nova Lite",         "Fast & low-cost multimodal"),
     ("us.amazon.nova-micro-v1:0",                    "Nova Micro",        "Text-only, fastest & cheapest Nova"),
     ("us.amazon.nova-premier-v1:0",                  "Nova Premier",      "Most capable Nova, complex tasks"),
+    # --- Other Bedrock models ---
     ("moonshot.kimi-k2-thinking",                    "Kimi K2 Thinking",  "Strong coding & reasoning"),
     ("moonshotai.kimi-k2.5",                         "Kimi K2.5",         "Latest Kimi, multimodal"),
     ("deepseek.r1-v1:0",                             "DeepSeek R1",       "Strong reasoning, thinking model"),
